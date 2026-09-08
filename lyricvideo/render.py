@@ -8,15 +8,10 @@ from .layout import Scene, SceneLine
 
 FRAME_SIZE = (1920, 1080)
 
-CURRENT_LINE_UNSUNG_COLOR = (255, 255, 255)  # white -- current line, not sung yet
-WORD_HIGHLIGHT_BG_COLOR = (46, 204, 113)  # bright green -- box behind already-sung words
-WORD_HIGHLIGHT_TEXT_COLOR = (255, 255, 255)  # white text on top of the highlight box
+CURRENT_LINE_COLOR = (46, 204, 113)  # bright green
 NEXT_LINE_COLOR = (255, 255, 255)  # white
-CHORD_ACTIVE_COLOR = (255, 215, 0)  # gold -- steady color once a chord has settled
-CHORD_FLASH_COLOR = (255, 255, 255)  # white -- peak brightness the instant a chord hits
+CHORD_ACTIVE_COLOR = (255, 215, 0)  # gold -- highlighted the moment it's hit
 CHORD_PENDING_COLOR = (170, 170, 170)  # dim -- shown ahead of time, not yet hit
-TEXT_STROKE_COLOR = (0, 0, 0)  # black outline so text reads over any background
-TEXT_STROKE_WIDTH = 3
 
 # (start_x, start_y, end_x, end_y, zoom_start, zoom_end) -- x/y are 0..1
 # fractions of the available pan range (0.5 = centered). Covers side-to-side,
@@ -65,13 +60,6 @@ def apply_ken_burns(
     return img.crop((x, y, x + w, y + h))
 
 
-def _lerp_color(
-    color_a: tuple[int, int, int], color_b: tuple[int, int, int], t: float
-) -> tuple[int, int, int]:
-    t = min(max(t, 0.0), 1.0)
-    return tuple(int(a + (b - a) * t) for a, b in zip(color_a, color_b))
-
-
 def _draw_line_with_chords(draw, y, scene_line: SceneLine, font, chord_font, is_current: bool):
     words = scene_line.words
     if not words:
@@ -80,53 +68,22 @@ def _draw_line_with_chords(draw, y, scene_line: SceneLine, font, chord_font, is_
     widths = [draw.textlength(w.text, font=font) for w in words]
     total_w = sum(widths) + space_w * max(len(words) - 1, 0)
     x = (FRAME_SIZE[0] - total_w) / 2
-    ascent, descent = font.getmetrics()
-    text_height = ascent + descent
-
+    fill = CURRENT_LINE_COLOR if is_current else NEXT_LINE_COLOR
     for word, w_width in zip(words, widths):
         if word.chord:
-            chord_color = (
-                _lerp_color(CHORD_ACTIVE_COLOR, CHORD_FLASH_COLOR, word.chord_flash)
-                if word.chord_active
-                else CHORD_PENDING_COLOR
-            )
+            chord_color = CHORD_ACTIVE_COLOR if word.chord_active else CHORD_PENDING_COLOR
             chord_w = draw.textlength(word.chord, font=chord_font)
             chord_x = x + (w_width - chord_w) / 2
-            draw.text(
-                (chord_x, y - chord_font.size - 10), word.chord, font=chord_font, fill=chord_color,
-                stroke_width=TEXT_STROKE_WIDTH, stroke_fill=TEXT_STROKE_COLOR,
-            )
-
-        # Karaoke-style sweep: a highlight box appears behind each word the
-        # instant it's actually sung (real per-word timing, same data the
-        # chord reveal above already uses), moving left to right through the
-        # line in sync with the vocals -- not yet-sung words stay plain.
-        if is_current and word.word_active:
-            pad_x, pad_y = 6, 4
-            draw.rectangle(
-                [x - pad_x, y - pad_y, x + w_width + pad_x, y + text_height + pad_y],
-                fill=WORD_HIGHLIGHT_BG_COLOR,
-            )
-            text_fill = WORD_HIGHLIGHT_TEXT_COLOR
-        else:
-            text_fill = CURRENT_LINE_UNSUNG_COLOR if is_current else NEXT_LINE_COLOR
-
-        draw.text(
-            (x, y), word.text, font=font, fill=text_fill,
-            stroke_width=TEXT_STROKE_WIDTH, stroke_fill=TEXT_STROKE_COLOR,
-        )
+            draw.text((chord_x, y - chord_font.size - 10), word.chord, font=chord_font, fill=chord_color)
+        draw.text((x, y), word.text, font=font, fill=fill)
         x += w_width + space_w
 
 
-def _draw_instrumental_chord(draw, chord: str, chord_font, flash: float):
-    color = _lerp_color(CHORD_ACTIVE_COLOR, CHORD_FLASH_COLOR, flash)
+def _draw_instrumental_chord(draw, chord: str, chord_font):
     chord_w = draw.textlength(chord, font=chord_font)
     x = (FRAME_SIZE[0] - chord_w) / 2
     y = FRAME_SIZE[1] // 2 - chord_font.size // 2
-    draw.text(
-        (x, y), chord, font=chord_font, fill=color,
-        stroke_width=TEXT_STROKE_WIDTH, stroke_fill=TEXT_STROKE_COLOR,
-    )
+    draw.text((x, y), chord, font=chord_font, fill=CHORD_ACTIVE_COLOR)
 
 
 def draw_scene(
@@ -146,16 +103,11 @@ def draw_scene(
         # No line is being sung right now -- show the instrumental chord large and
         # centered instead of the (stale) current/next lyric lines.
         instrumental_font = ImageFont.truetype(font_path, instrumental_chord_font_size)
-        _draw_instrumental_chord(draw, scene.instrumental_chord, instrumental_font, scene.instrumental_chord_flash)
+        _draw_instrumental_chord(draw, scene.instrumental_chord, instrumental_font)
         return frame
 
     center_y = FRAME_SIZE[1] // 2
-    # Enough room for a line's own word text PLUS the next line's chord label
-    # floating above it (chord_font_size + its 10px gap, from
-    # _draw_line_with_chords) plus a clear buffer -- otherwise the next
-    # line's chords overlap the current line's word descenders/highlight box.
-    ascent, descent = font.getmetrics()
-    line_height = (ascent + descent) + (chord_font_size + 10) + 20
+    line_height = font_size + 40
 
     for sl in scene.lines:
         # Continuous position, not a fixed per-line step: every line drifts

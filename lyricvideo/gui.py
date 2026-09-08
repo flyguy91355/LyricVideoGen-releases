@@ -15,40 +15,18 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 import httpx
 from dotenv import load_dotenv
 
-from .pipeline import run_pipeline, slugify as _slugify
+from .pipeline import run_pipeline
 from .update.apply import copy_updatable_files, extract_release_archive, requirements_changed
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 
-_CR_LF_RE = re.compile(r"[\r\n]")
-
-
-def _split_log_text(pending: str, text: str) -> tuple[str, str]:
-    """Terminal-style \\r/\\n handling for the log widget: \\n commits the
-    current line permanently, \\r discards it and starts the line over (this
-    is what tqdm-style progress bars send on every update). Returns
-    (new_pending_line, text_to_commit) -- text_to_commit is zero or more
-    complete newline-terminated lines safe to insert verbatim; new_pending
-    is the trailing not-yet-terminated content that should currently be
-    showing as the widget's last, still-changeable line.
-    """
-    if not text:
-        return pending, ""
-    committed: list[str] = []
-    current = pending
-    start = 0
-    for m in _CR_LF_RE.finditer(text):
-        idx = m.start()
-        current += text[start:idx]
-        if m.group() == "\n":
-            committed.append(current + "\n")
-        current = ""
-        start = idx + 1
-    current += text[start:]
-    return current, "".join(committed)
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
+
+
+def _slugify(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
+    return slug or "untitled-song"
 
 
 class _QueueWriter:
@@ -80,8 +58,6 @@ class LyricVideoGUI:
         self._current_version = current_version
         self._available_update: dict | None = None
         self._running = False
-        self._log_pending = ""
-        self._log_has_uncommitted_line = False
 
         self.title_var = tk.StringVar()
         self.audio_var = tk.StringVar()
@@ -425,47 +401,28 @@ class LyricVideoGUI:
             sys.stdout, sys.stderr = old_stdout, old_stderr
 
     def _poll_queue(self) -> None:
-        # Drain everything queued since the last tick up front, rather than
-        # handling each item with its own widget update -- moviepy/tqdm can
-        # write dozens of progress-bar chunks within a single 100ms tick, and
-        # one insert+see() per chunk against a growing Text widget is what
-        # made the log pane (and the whole GUI) grind to a crawl.
-        items: list[tuple[str, str]] = []
         try:
             while True:
-                items.append(self._queue.get_nowait())
+                kind, payload = self._queue.get_nowait()
+                if kind == "log":
+                    self._append_log(payload)
+                elif kind == "stage":
+                    self.status_var.set(f"Stage: {payload}")
+                elif kind == "done":
+                    self.status_var.set("Done")
+                    self._running = False
+                    self.generate_button.state(["!disabled"])
+                    messagebox.showinfo("Video ready", f"Wrote {payload}")
+                    return
+                elif kind == "error":
+                    self.status_var.set("Failed")
+                    self._running = False
+                    self.generate_button.state(["!disabled"])
+                    self._append_log(f"\nERROR:\n{payload}\n")
+                    messagebox.showerror("Generation failed", payload.splitlines()[0])
+                    return
         except queue.Empty:
             pass
-
-        log_chunks: list[str] = []
-
-        def flush_log() -> None:
-            if log_chunks:
-                self._append_log("".join(log_chunks))
-                log_chunks.clear()
-
-        for kind, payload in items:
-            if kind == "log":
-                log_chunks.append(payload)
-                continue
-            flush_log()
-            if kind == "stage":
-                self.status_var.set(f"Stage: {payload}")
-            elif kind == "done":
-                self.status_var.set("Done")
-                self._running = False
-                self.generate_button.state(["!disabled"])
-                messagebox.showinfo("Video ready", f"Wrote {payload}")
-                return
-            elif kind == "error":
-                self.status_var.set("Failed")
-                self._running = False
-                self.generate_button.state(["!disabled"])
-                self._append_log(f"\nERROR:\n{payload}\n")
-                messagebox.showerror("Generation failed", payload.splitlines()[0])
-                return
-        flush_log()
-
         if self._running:
             self.root.after(100, self._poll_queue)
 
@@ -473,26 +430,12 @@ class LyricVideoGUI:
         self.log_widget.configure(state="normal")
         self.log_widget.delete("1.0", "end")
         self.log_widget.configure(state="disabled")
-        self._log_pending = ""
-        self._log_has_uncommitted_line = False
 
     def _append_log(self, text: str) -> None:
-        self._log_pending, to_commit = _split_log_text(self._log_pending, text)
-
         self.log_widget.configure(state="normal")
-        if self._log_has_uncommitted_line:
-            # The widget's current last line was left showing a still-in-
-            # progress update (e.g. a tqdm percentage) -- replace it rather
-            # than appending, so a burst of \r updates collapses into one
-            # line instead of piling up a new permanent line per update.
-            self.log_widget.delete("end-1c linestart", "end-1c")
-        if to_commit:
-            self.log_widget.insert("end", to_commit)
-        if self._log_pending:
-            self.log_widget.insert("end", self._log_pending)
+        self.log_widget.insert("end", text)
         self.log_widget.see("end")
         self.log_widget.configure(state="disabled")
-        self._log_has_uncommitted_line = bool(self._log_pending)
 
 
 def main() -> None:

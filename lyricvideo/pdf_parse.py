@@ -30,12 +30,12 @@ def is_chord_token(token: str) -> bool:
     return bool(CHORD_RE.match(token.strip()))
 
 
-def _cluster_words_into_lines(words: list[dict], y_tolerance: float = Y_TOLERANCE) -> list[list[dict]]:
+def _cluster_words_into_lines(words: list[dict]) -> list[list[dict]]:
     lines: list[list[dict]] = []
     for word in sorted(words, key=lambda w: (w["top"], w["x0"])):
         placed = False
         for line in lines:
-            if abs(line[0]["top"] - word["top"]) <= y_tolerance:
+            if abs(line[0]["top"] - word["top"]) <= Y_TOLERANCE:
                 line.append(word)
                 placed = True
                 break
@@ -70,16 +70,18 @@ def _pair_chord_to_words(chord_line: list[dict], lyric_line: list[dict]) -> list
     return result
 
 
-def _assemble_from_words(
-    all_words: list[dict], y_tolerance: float, source_desc: str
-) -> tuple[list[LyricLine], list[InstrumentalBlock]]:
-    """Shared line-clustering/chord-pairing assembly, driven by a generic word
-    dict list ({"text", "x0", "x1", "top"}) -- used both by the real-text-layer
-    path (pdfplumber word coordinates, PDF point units) and the OCR fallback
-    path (pytesseract word coordinates, pixel units), which is why the caller
-    supplies its own y_tolerance rather than this function assuming PDF points.
-    """
-    lines = _cluster_words_into_lines(all_words, y_tolerance)
+def parse_tab_pdf(pdf_path: Path) -> tuple[list[LyricLine], list[InstrumentalBlock]]:
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        all_words: list[dict] = []
+        for page in pdf.pages:
+            all_words.extend(page.extract_words())
+
+    if not all_words:
+        raise NoTextLayerError(
+            f"{pdf_path} has no extractable text layer (scanned/image-only PDF?)"
+        )
+
+    lines = _cluster_words_into_lines(all_words)
     classified = [(line, _classify_line(line)) for line in lines]
 
     result: list[LyricLine] = []
@@ -112,22 +114,8 @@ def _assemble_from_words(
 
     if not result:
         raise NoChordLyricPairsError(
-            f"{source_desc} has a text layer but no chord-over-lyric line pairs "
+            f"{pdf_path} has a text layer but no chord-over-lyric line pairs "
             "or plain lyric lines were found"
         )
 
     return result, instrumental_blocks
-
-
-def parse_tab_pdf(pdf_path: Path) -> tuple[list[LyricLine], list[InstrumentalBlock]]:
-    with pdfplumber.open(str(pdf_path)) as pdf:
-        all_words: list[dict] = []
-        for page in pdf.pages:
-            all_words.extend(page.extract_words())
-
-    if not all_words:
-        raise NoTextLayerError(
-            f"{pdf_path} has no extractable text layer (scanned/image-only PDF?)"
-        )
-
-    return _assemble_from_words(all_words, Y_TOLERANCE, str(pdf_path))

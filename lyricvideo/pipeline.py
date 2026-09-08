@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 from typing import Callable
 
@@ -25,18 +24,12 @@ from .models import (
     load_song,
     save_song,
 )
-from .ocr_parse import parse_tab_pdf_via_ocr
-from .pdf_parse import NoChordLyricPairsError, NoTextLayerError, parse_tab_pdf
+from .pdf_parse import NoTextLayerError, parse_tab_pdf
 from .plaintext_chords import parse_plaintext_chords
 from .separate import separate_vocals
 from .vision_parse import map_chords_with_vision, split_lyrics_text
 
 STAGES = ["separate", "parse", "align", "images", "render"]
-
-
-def slugify(title: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
-    return slug or "untitled-song"
 
 
 def line_to_dict(line: LyricLine) -> dict:
@@ -137,7 +130,7 @@ def run_pipeline(
     parsed_path = work_dir / "parsed_tab.json"
     timed_path = work_dir / "lyrics_timed.json"
     images_dir = work_dir / "images"
-    final_path = work_dir / f"{slugify(title)}.mp4"
+    final_path = work_dir / "final.mp4"
 
     start_idx = STAGES.index(start_stage)
 

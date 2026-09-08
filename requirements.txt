@@ -1,5 +1,4 @@
 pdfplumber>=0.10
-pytesseract>=0.3
 torch>=2.1
 torchaudio>=2.1
 torchcodec>=0.1
