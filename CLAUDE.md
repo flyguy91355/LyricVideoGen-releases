@@ -346,10 +346,20 @@ nothing ever posts without that explicit click. A "Check Now" button plus
 a 20-minute `root.after` timer (only while the app is open) scan every
 song with a `youtube_state.json` for new comments, scoped to only videos
 this app uploaded; one Claude call per new comment drafts a reply and
-flags likely error reports. No automated "corrected video"
-re-upload/relinking mechanism exists anywhere in this feature -- a
-correction is always the owner's own manual call via the upload button
-above.
+flags likely error reports. That same 20-minute tick
+(`_youtube_periodic_tick`, on a background thread -- both
+`load_credentials()`'s token refresh and `get_channel_title()` can make a
+real network call, never safe on the GUI thread) also refreshes the
+connect-status label, so a token that expires mid-session shows "not
+connected" within 20 minutes instead of only at next launch. This matters
+because a personal single-user OAuth app always stays in Google's
+"Testing" publishing status (real published-app verification is 2-6 weeks
+and pointless for personal use) -- Testing-mode refresh tokens hard-expire
+after exactly 7 days regardless of use, so reconnecting periodically via
+the "Connect to YouTube" button is expected, normal behavior, not a bug.
+No automated "corrected video" re-upload/relinking mechanism exists
+anywhere in this feature -- a correction is always the owner's own manual
+call via the upload button above.
 
 This whole feature (11 tasks) is now complete and tested (363 tests
 passing). What's NOT yet verified: the interactive OAuth `connect()` flow

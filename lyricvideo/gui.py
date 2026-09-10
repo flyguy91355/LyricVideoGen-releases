@@ -924,9 +924,28 @@ class LyricVideoGUI:
         self.root.after(0, self._render_pending_replies)
 
     def _schedule_youtube_comment_check(self) -> None:
-        if youtube_auth.load_credentials() is not None:
-            threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()
+        threading.Thread(target=self._youtube_periodic_tick, daemon=True).start()
         self.root.after(20 * 60 * 1000, self._schedule_youtube_comment_check)
+
+    def _youtube_periodic_tick(self) -> None:
+        """Runs every 20 minutes on a background thread (never the GUI thread,
+        since both load_credentials()'s token refresh and get_channel_title()
+        can make a real network call). Keeps the connection status label
+        current even across a long-running session -- otherwise a token that
+        expires mid-session (Google's own 7-day limit on an unverified/
+        Testing-mode app, which this one always is for personal use) would
+        only be noticed at next app launch."""
+        credentials = youtube_auth.load_credentials()
+        if credentials is None:
+            self.root.after(0, lambda: self.youtube_status_var.set("YouTube: not connected"))
+            return
+        try:
+            channel = youtube_auth.get_channel_title(credentials)
+            status_text = f"YouTube: connected as {channel}"
+        except Exception:
+            status_text = "YouTube: connected (channel name unavailable)"
+        self.root.after(0, lambda: self.youtube_status_var.set(status_text))
+        self._check_youtube_comments_worker()
 
     def _run_worker(
         self,
