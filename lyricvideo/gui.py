@@ -16,7 +16,7 @@ import customtkinter as ctk
 import httpx
 from dotenv import load_dotenv
 
-from .batch import find_audio_files, resolve_batch_items
+from .batch import find_audio_files, resolve_batch_items, resolve_existing_folder
 from .identify import extract_metadata
 from .pipeline import (
     STAGES,
@@ -529,6 +529,7 @@ class LyricVideoGUI:
 
     def _resolve_batch_worker(self, folder: Path) -> None:
         try:
+            folder = resolve_existing_folder(folder)
             files = find_audio_files(folder)
             items = resolve_batch_items(files, PROJECT_ROOT / "work")
             self._queue.put(("batch_resolved", items))

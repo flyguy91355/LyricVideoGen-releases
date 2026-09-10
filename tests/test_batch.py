@@ -1,6 +1,41 @@
 from pathlib import Path
 
-from lyricvideo.batch import BatchItem, find_audio_files, resolve_batch_items
+from lyricvideo.batch import BatchItem, find_audio_files, resolve_batch_items, resolve_existing_folder
+
+
+def test_resolve_existing_folder_returns_real_dir_unchanged(tmp_path):
+    real = tmp_path / "songs"
+    real.mkdir()
+
+    assert resolve_existing_folder(real) == real
+
+
+def test_resolve_existing_folder_recovers_dropped_trailing_space(tmp_path):
+    (tmp_path / "batch music ").mkdir()
+    dialog_returned = tmp_path / "batch music"  # trailing space missing
+
+    assert resolve_existing_folder(dialog_returned) == tmp_path / "batch music "
+
+
+def test_resolve_existing_folder_recovers_dropped_leading_space(tmp_path):
+    (tmp_path / " batch music").mkdir()
+    dialog_returned = tmp_path / "batch music"
+
+    assert resolve_existing_folder(dialog_returned) == tmp_path / " batch music"
+
+
+def test_resolve_existing_folder_leaves_genuinely_missing_folder_alone(tmp_path):
+    missing = tmp_path / "nope"
+
+    assert resolve_existing_folder(missing) == missing
+
+
+def test_resolve_existing_folder_no_match_when_ambiguous(tmp_path):
+    (tmp_path / "batch music ").mkdir()
+    (tmp_path / " batch music").mkdir()
+    dialog_returned = tmp_path / "batch music"
+
+    assert resolve_existing_folder(dialog_returned) == dialog_returned
 
 
 def test_find_audio_files_filters_by_extension(tmp_path):

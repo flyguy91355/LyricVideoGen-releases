@@ -35,12 +35,17 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   one up-front confirmation decides whether already-done songs are skipped or
   regenerated (backing up each one first, like Redo) for the whole batch; a
   file that errors is logged and skipped, never aborting the rest. The chosen
-  folder's path is never `.strip()`'d (real bug found live, 2026-09-10: a
-  folder literally named "batch music " with a trailing space had that space
-  silently stripped, so the app looked for a folder that didn't exist) --
-  unlike the typed title/audio/work-dir fields, this value comes verbatim from
-  the OS file dialog, and a real folder name can legitimately have leading or
-  trailing whitespace. Built with
+  folder's path is never `.strip()`'d -- unlike the typed title/audio/work-dir
+  fields, this value comes verbatim from the OS file dialog, and a real folder
+  name can legitimately have leading or trailing whitespace. That alone wasn't
+  enough (real bug found live, 2026-09-10: a folder literally named
+  "batch music " with a trailing space still 404'd after removing the
+  `.strip()`, because the native folder-picker dialog itself drops the
+  trailing space before the path ever reaches this app's code) -- fixed with
+  `resolve_existing_folder()` in `lyricvideo/batch.py`, which falls back to
+  matching a sibling directory by whitespace-insensitive name when the exact
+  path the dialog returned doesn't exist, so the owner never has to rename a
+  folder to work around it. Built with
   CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
   Redo/log console/generation progress bar, right = the scrollable Settings panel

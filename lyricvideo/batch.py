@@ -14,6 +14,27 @@ from .pipeline import slugify
 _AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac"}
 
 
+def resolve_existing_folder(folder: Path) -> Path:
+    """Returns `folder` unchanged if it exists. Otherwise, looks for a sibling
+    in its parent whose name matches once leading/trailing whitespace is
+    stripped from both sides -- confirmed live 2026-09-10: the OS folder-picker
+    dialog silently drops a trailing space from a real folder named
+    "batch music ", so the path handed to this app no longer matches the real
+    directory on disk even though the user picked it correctly. If exactly one
+    sibling matches, that real path is returned; otherwise `folder` is returned
+    unchanged so the original FileNotFoundError still surfaces normally."""
+    if folder.is_dir():
+        return folder
+    target = folder.name.strip()
+    try:
+        candidates = [p for p in folder.parent.iterdir() if p.is_dir() and p.name.strip() == target]
+    except OSError:
+        return folder
+    if len(candidates) == 1:
+        return candidates[0]
+    return folder
+
+
 def find_audio_files(folder: Path) -> list[Path]:
     """Immediate audio files in `folder` (no subfolder recursion), sorted
     alphabetically by name -- same extension filter as the single-file
