@@ -40,15 +40,54 @@ def find_current_line_index(lines: list[LyricLine], t: float) -> int:
     return idx
 
 
+def _plausible_sung_intervals(
+    line: LyricLine, max_word_duration: float = 3.0, max_gap: float = 5.0,
+) -> list[tuple[float, float]]:
+    """The real singing window(s) within a line, discounting alignment
+    artifacts -- NOT just the line's own raw (start_time, end_time) envelope.
+    Real bug found live, 2026-09-09: forced alignment gave a single word a
+    105-second duration while the rest of that same line's words were
+    tightly and plausibly clustered together 8 seconds later, so the whole
+    116-second span (trusting the line's raw end_time) read as 'still
+    singing' and suppressed the instrumental per-chord image-follow and Ken
+    Burns pacing for nearly two minutes. Any single word's duration is capped
+    at max_word_duration (generous even for a long held note), and a gap
+    between consecutive (capped) words wider than max_gap starts a new
+    interval. A line with no per-word timing at all falls back to its own
+    (start_time, end_time) as a single interval unchanged -- there's no
+    word-level data to sanity-check against, so there's nothing to cap.
+    Returns [] only when there's neither word timing nor a line-level window."""
+    words = [w for w in line.words if w.start_time is not None and w.end_time is not None]
+    if not words:
+        if line.start_time is not None and line.end_time is not None:
+            return [(line.start_time, line.end_time)]
+        return []
+    intervals: list[list[float]] = [
+        [words[0].start_time, min(words[0].end_time, words[0].start_time + max_word_duration)]
+    ]
+    for w in words[1:]:
+        capped_end = min(w.end_time, w.start_time + max_word_duration)
+        if w.start_time - intervals[-1][1] > max_gap:
+            intervals.append([w.start_time, capped_end])
+        else:
+            intervals[-1][1] = capped_end
+    return [(start, end) for start, end in intervals]
+
+
 def _in_a_line(lines: list[LyricLine], t: float) -> bool:
-    """True if t falls within some line's own [start_time, end_time) singing
-    window -- False during an intro, an instrumental gap between two lines, or
-    after the last line has finished. Used to decide whether the background image
-    should follow the lyric text or the active chord (2026-09-09 owner request:
-    the image used to freeze on the last-sung line for the whole instrumental gap)."""
+    """True if t falls within some line's own real, plausible singing
+    window(s) -- False during an intro, an instrumental gap between two lines,
+    or after the last line has finished. Used to decide whether the background
+    image should follow the lyric text or the active chord (2026-09-09 owner
+    request: the image used to freeze on the last-sung line for the whole
+    instrumental gap). Uses _plausible_sung_intervals rather than a line's raw
+    start_time/end_time envelope, since a single misaligned word can otherwise
+    make the rest of that line falsely read as 'still singing' for a long time
+    (real bug, 2026-09-09)."""
     return any(
-        l.start_time is not None and l.end_time is not None and l.start_time <= t < l.end_time
-        for l in lines
+        start <= t < end
+        for line in lines
+        for start, end in _plausible_sung_intervals(line)
     )
 
 
@@ -88,6 +127,8 @@ def build_scene(
     # Ken Burns progress spans the image's REAL on-screen duration -- until the
     # next line begins, or the song ends for the last line -- not just the
     # current line's own singing window (unchanged from before this merge).
+    # This baseline is what still governs a normal instrumental gap with no
+    # chord data to further distinguish it.
     kb_start = current.start_time or 0.0
     if idx + 1 < len(lines) and lines[idx + 1].start_time is not None:
         kb_end = lines[idx + 1].start_time
@@ -97,6 +138,20 @@ def build_scene(
         kb_end = None
     if kb_end is None or kb_end <= kb_start:
         kb_end = current.end_time if (current.end_time and current.end_time > kb_start) else kb_start + 1.0
+
+    in_a_line = _in_a_line(lines, t)
+
+    if not in_a_line and chord_track is not None:
+        # Instrumental with real chord data: pace the pan to the ACTIVE
+        # chord's own duration instead of the baseline current-to-next-line
+        # span, which can be far longer than what's actually being shown
+        # right now (real bug, 2026-09-09: a mistimed line's raw end_time
+        # stretched that span to ~2 minutes, making the pan read as frozen
+        # even after _in_a_line correctly started following the chord).
+        chord = current_chord_at(chord_track, t)
+        if chord is not None:
+            kb_start, kb_end = chord.start, max(chord.end, chord.start + 1.0)
+
     ken_burns_progress = min(max((t - kb_start) / (kb_end - kb_start), 0.0), 1.0)
 
     scroll_start = current.start_time or 0.0
@@ -105,7 +160,7 @@ def build_scene(
     )
     scroll_progress = min(max((t - scroll_start) / (scroll_end - scroll_start), 0.0), 1.0)
 
-    if _in_a_line(lines, t):
+    if in_a_line:
         image_key = line_hash(current.text)
     else:
         image_key = _instrumental_image_key(chord_track or ChordTrack(), t)

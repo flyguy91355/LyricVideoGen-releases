@@ -93,6 +93,8 @@ def apply_ken_burns(
 
 _MAX_LINE_WIDTH_FRAC = 0.92  # a lyric line may use at most this fraction of the frame width
 _ROW_GAP = 4                 # extra pixels between wrapped rows of one long lyric line
+_LINE_SPACING_PAD = 20       # extra breathing room between the current/next line slots
+                              # (matches the original single-row line_height's "+20")
 
 
 def _split_line_into_rows(words: list, draw, font, max_width: float) -> list:
@@ -151,19 +153,37 @@ def _split_line_into_rows(words: list, draw, font, max_width: float) -> list:
     return rows
 
 
+def _rows_and_block_height(words: list, draw, font, max_width: float) -> tuple:
+    """Wraps `words` (see _split_line_into_rows) and reports the total pixel
+    height that block of rows will occupy once drawn. Shared by
+    _draw_line_words (to center its stacked rows) and draw_scene (to space
+    the current/next line slots far enough apart that a wrapped line's extra
+    rows can never collide with the line below it -- real bug, 2026-09-09:
+    the lyric-wrap fix let a long line take multiple rows without ever
+    widening the fixed single-row gap between it and the next line preview,
+    so the two rendered on top of each other)."""
+    if not words:
+        return [], 0.0
+    rows = _split_line_into_rows(words, draw, font, max_width)
+    ascent, descent = font.getmetrics()
+    text_height = ascent + descent
+    row_height = text_height + _ROW_GAP
+    total_height = row_height * len(rows) - _ROW_GAP
+    return rows, total_height
+
+
 def _draw_line_words(draw, y, scene_line: SceneLine, font, is_current: bool, text_color, frame_width: int) -> None:
     words = scene_line.words
     if not words:
         return
 
     max_width = frame_width * _MAX_LINE_WIDTH_FRAC
-    rows = _split_line_into_rows(words, draw, font, max_width)
+    rows, total_height = _rows_and_block_height(words, draw, font, max_width)
 
     space_w = draw.textlength(" ", font=font)
     ascent, descent = font.getmetrics()
     text_height = ascent + descent
     row_height = text_height + _ROW_GAP
-    total_height = row_height * len(rows) - _ROW_GAP
     start_y = y - (total_height - text_height) / 2  # center the stacked rows around the original y
 
     for row_idx, row in enumerate(rows):
@@ -209,14 +229,28 @@ def draw_scene(
 
     center_y = frame_size[1] // 2
     ascent, descent = font.getmetrics()
-    line_height = (ascent + descent) + 20
+    single_row_height = ascent + descent
+    max_width = frame_size[0] * _MAX_LINE_WIDTH_FRAC
+
+    # The gap between the current-line slot and the next-line slot must widen
+    # when either one wraps onto multiple rows (window=1 in this codebase, so
+    # there are never more than these two lines at once) -- otherwise a long
+    # wrapped line's lower rows collide with the line below it. Reduces to
+    # exactly the original fixed single-row spacing when neither line wraps.
+    block_heights = {
+        sl.distance_from_current: _rows_and_block_height(sl.words, draw, font, max_width)[1]
+        for sl in scene.lines
+    }
+    current_height = block_heights.get(0, single_row_height)
+    next_height = block_heights.get(1, single_row_height)
+    step = (current_height + next_height) / 2 + _LINE_SPACING_PAD
 
     for sl in scene.lines:
         # Continuous position, not a fixed per-line step: every line drifts
         # upward by scroll_progress (0->1 across the current line's own real
         # start->end window) so the transition to the next line is a smooth
         # scroll instead of a snap.
-        y = center_y + (sl.distance_from_current - scene.scroll_progress) * line_height
+        y = center_y + (sl.distance_from_current - scene.scroll_progress) * step
         _draw_line_words(draw, y, sl, font, sl.is_current, text_color, frame_size[0])
 
     return frame

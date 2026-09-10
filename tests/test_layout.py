@@ -1,5 +1,5 @@
 from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Word, line_hash
-from lyricvideo.layout import build_scene, find_current_line_index
+from lyricvideo.layout import _in_a_line, _plausible_sung_intervals, build_scene, find_current_line_index
 
 
 def _make_lines():
@@ -148,3 +148,96 @@ def test_build_scene_image_key_gap_with_no_chord_track_falls_back_to_generic_key
     scene = build_scene(lines, t=2.0)  # no chord_track passed at all
 
     assert scene.image_key == line_hash("[Instrumental]")
+
+
+def test_plausible_sung_intervals_normal_line_matches_its_own_start_and_end():
+    line = LyricLine(
+        words=[Word(word="hello", start_time=0.0, end_time=0.5), Word(word="there", start_time=0.5, end_time=1.0)],
+        start_time=0.0, end_time=1.0,
+    )
+
+    assert _plausible_sung_intervals(line) == [(0.0, 1.0)]
+
+
+def test_plausible_sung_intervals_caps_an_outlier_word_duration_and_splits_on_the_resulting_gap():
+    """Real bug, 2026-09-09 'speak to me' redo: forced alignment gave the
+    word 'Breathe,' a 105-second duration (46.98-152.20) while the rest of
+    the line's words were tightly clustered together 8 seconds later
+    (153.92-163.20). The outlier word's duration must be capped, and the
+    resulting gap correctly splits the line into two real intervals."""
+    line = LyricLine(
+        words=[
+            Word(word="Breathe,", start_time=46.98, end_time=152.20),
+            Word(word="breathe", start_time=153.92, end_time=154.28),
+            Word(word="in", start_time=154.32, end_time=154.46),
+            Word(word="the", start_time=154.52, end_time=154.66),
+            Word(word="air,", start_time=154.92, end_time=155.80),
+            Word(word="don't", start_time=159.98, end_time=160.38),
+            Word(word="be", start_time=160.44, end_time=160.60),
+            Word(word="afraid", start_time=160.74, end_time=161.82),
+            Word(word="to", start_time=161.82, end_time=161.94),
+            Word(word="care", start_time=162.10, end_time=163.20),
+        ],
+        start_time=46.98, end_time=163.20,
+    )
+
+    intervals = _plausible_sung_intervals(line, max_word_duration=3.0, max_gap=5.0)
+
+    assert intervals == [(46.98, 49.98), (153.92, 163.20)]
+
+
+def test_plausible_sung_intervals_empty_line_returns_no_intervals():
+    assert _plausible_sung_intervals(LyricLine()) == []
+
+
+def test_plausible_sung_intervals_falls_back_to_line_window_when_words_have_no_timing():
+    """A line with a real (start_time, end_time) but no per-word timing at
+    all has nothing to sanity-check against -- it must keep working exactly
+    as before this fix, not lose its 'in a line' status entirely."""
+    line = LyricLine(start_time=0.0, end_time=2.0)
+
+    assert _plausible_sung_intervals(line) == [(0.0, 2.0)]
+
+
+def test_in_a_line_false_during_the_fake_gap_of_a_mistimed_line():
+    line = LyricLine(
+        words=[
+            Word(word="Breathe,", start_time=46.98, end_time=152.20),
+            Word(word="care", start_time=153.92, end_time=154.28),
+            Word(word="more", start_time=162.10, end_time=163.20),
+        ],
+        start_time=46.98, end_time=163.20,
+    )
+
+    assert _in_a_line([line], 48.0) is True    # within the capped real start of "Breathe,"
+    assert _in_a_line([line], 100.0) is False  # deep in the fake 105-second gap
+    assert _in_a_line([line], 163.0) is True   # within the real tightly-clustered tail
+
+
+def test_build_scene_instrumental_ken_burns_paces_to_the_active_chord_not_the_mistimed_line():
+    """The other half of the same real bug: once _in_a_line correctly reports
+    an instrumental stretch inside a mistimed line, the Ken Burns pan must
+    pace itself to the actual active chord's own (short) duration -- not the
+    (possibly very long) span between the tracked line and the next one --
+    or the pan still reads as frozen even though the image is now correctly
+    following the chord."""
+    line = LyricLine(
+        words=[
+            Word(word="Breathe,", start_time=46.98, end_time=152.20),
+            Word(word="care", start_time=153.92, end_time=163.20),
+        ],
+        start_time=46.98, end_time=163.20,
+    )
+    chord_track = ChordTrack(events=[
+        ChordEvent(46.98, 72.1, "Dmaj7"), ChordEvent(72.1, 132.0, "Bm7"), ChordEvent(132.0, 153.92, "E"),
+    ])
+
+    early = build_scene([line], t=135.0, chord_track=chord_track, audio_duration=240.0)
+    late = build_scene([line], t=150.0, chord_track=chord_track, audio_duration=240.0)
+
+    # Both instants sit inside the SAME chord event (E, 132.0-153.92) -- if
+    # Ken Burns were still paced to the old current-line-to-audio-end span
+    # (46.98 to 240.0, matching this test's own mistimed line), progress at
+    # both points would barely move. Paced to the 21.92-second chord instead,
+    # the difference between t=135 and t=150 is a real, substantial jump.
+    assert late.ken_burns_progress - early.ken_burns_progress > 0.3

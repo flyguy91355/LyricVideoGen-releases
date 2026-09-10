@@ -286,6 +286,51 @@ def test_draw_scene_wraps_a_long_line_so_it_never_touches_the_frame_edges(test_f
     assert np.array_equal(frame[:, -edge_width:], np.zeros_like(frame[:, -edge_width:]))
 
 
+def test_draw_scene_current_and_next_line_never_overlap_when_both_wrap(test_font_path):
+    """Real regression, 2026-09-09 'speak to me' redo: the lyric-wrap fix let
+    a line take multiple rows but never widened the fixed gap between the
+    current-line slot and the next-line preview slot below it, so a long
+    current line's lower rows rendered on top of the next line's text."""
+    current_text = (
+        "Run, rabbit, run, dig that hole, forget the Sun, and when at last "
+        "the work is done, don't sit down, its time to dig another one"
+    )
+    next_text = (
+        "Long you live, and high you fly, but only if you ride the tide, "
+        "balanced on the biggest wave, you race towards an early grave"
+    )
+    scene = Scene(
+        lines=[
+            SceneLine(
+                words=[SceneWord(text=w) for w in current_text.split()],
+                is_current=True, distance_from_current=0,
+            ),
+            SceneLine(
+                words=[SceneWord(text=w) for w in next_text.split()],
+                is_current=False, distance_from_current=1,
+            ),
+        ],
+        image_key="k", ken_burns_progress=0.0, scroll_progress=0.0,
+    )
+    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
+
+    frame = np.array(draw_scene(scene, bg, test_font_path))
+
+    rows_with_content = np.any(frame != 0, axis=(1, 2))
+    content_rows = np.where(rows_with_content)[0]
+    assert content_rows.size > 0
+
+    # With the old fixed single-row line_height (77px for this font/size) the
+    # next line's 2-row block would land squarely inside the current line's
+    # own 3-row block (measured directly: total span collapses to ~225px and
+    # the two blocks' pixel ranges overlap). The dynamic per-line-height step
+    # this test guards keeps them apart, spreading the real content across
+    # ~317px. 280 sits clearly between the two -- only the fixed behavior
+    # reaches it.
+    total_span = content_rows.max() - content_rows.min()
+    assert total_span >= 280
+
+
 def test_draw_scene_wrapped_line_keeps_the_configured_font_size(test_font_path):
     """No bandaid font-shrinking -- a long line wraps onto more rows at the
     exact same font size, never smaller."""

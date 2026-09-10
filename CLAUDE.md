@@ -113,11 +113,25 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    wrap onto multiple rows at commas (preferred) or by word (fallback) instead of
    running off the frame edges or ever shrinking the font (`render.py`'s
    `_split_line_into_rows`) -- real bug, a 127-character line overflowed both
-   edges before this. During an instrumental
+   edges before this. `draw_scene`'s current/next-line vertical spacing is
+   computed from each shown line's actual (possibly multi-row) height
+   (`_rows_and_block_height`), not a fixed single-row gap -- a second real bug
+   found on a live redo: the wrap fix alone let a wrapped current line's lower
+   rows render on top of the next-line preview underneath it. During an instrumental
    gap (past a line's own `end_time`, before the next line's `start_time`, or
    outside any line at all) the background image follows the active chord
    instead of freezing on the last-sung line — `layout.py`'s `_in_a_line()`
-   decides which applies. No song title or artist text is drawn into the frame
+   decides which applies, using `_plausible_sung_intervals()` rather than a
+   line's raw `start_time`/`end_time` envelope: a single misaligned word can
+   otherwise claim an implausible duration (real bug found live, 2026-09-09 --
+   forced alignment gave one word 105 seconds while the rest of that line's
+   words were plausibly clustered together 8 seconds later) and make the next
+   ~2 minutes falsely read as "still singing," suppressing both the per-chord
+   image-follow and Ken Burns pacing. `build_scene()`'s Ken Burns window
+   during a real instrumental stretch also now paces to the active chord's
+   own duration (when chord data is available) instead of the current-line-
+   to-next-line span, so each chord-driven image gets its own natural pan
+   instead of inheriting a stretched-out one. No song title or artist text is drawn into the frame
    anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
    chord legend were added to the frame.
 
@@ -181,7 +195,14 @@ code — just synced snapshots + release notes). The sync step exports from
 git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
 `cp`) specifically so uncommitted local changes can never leak into a
 public release — see the 2026-09-08 history entry for the real incident
-that found this the hard way.
+that found this the hard way. The owner runs the app directly from this same
+git checkout (not a separate deployed copy), so code changes reach them
+immediately on every commit; releases exist so the Update Available banner
+and changelog stay meaningful, not because Apply Update is the only way
+changes reach this install. `v1.1.0` (2026-09-09) is the first release cut
+since the project rename — it had drifted to reference the pre-rename
+`run_lyricvideogen.sh` (file no longer exists), fixed to
+`run_playalongvideoproduction.sh`.
 
 `Settings.render_kwargs()` centralizes resolution/color unpacking for
 `assemble_video()`; `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`
