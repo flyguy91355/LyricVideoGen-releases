@@ -680,3 +680,26 @@ actual lyric-highlight display timing itself. Owner is removing this
 video from YouTube and will redo it once fixed; the underlying
 "cap implausible per-word durations for display too, not just Ken-Burns"
 fix has not been scoped or implemented yet.
+
+## 2026-09-10 — Lyric-sync fix: cap the outlier line's own scroll timing, not just Ken Burns
+
+Follow-up to the "Come As You Are" investigation above. Traced exactly
+where the 6.86-second "Memoria" outlier could and couldn't actually cause
+a visible problem: `find_current_line_index` (which line is "current")
+and `word_sung`/`word_active` (karaoke word-highlight) both key only on a
+word's own START time, never a duration, so they were never actually
+distorted by this bug -- confirmed by reading the code, not assumed.
+`build_scene()`'s `scroll_progress`, though, paced the current line's own
+on-screen scroll animation across its raw `(start_time, end_time)`, and
+for this line that meant animating across a 6.86-second span for an
+utterance that plausibly takes closer to 1. Fixed with a new
+`_plausible_line_end()` (the end of `_plausible_sung_intervals()`'s last
+capped interval) used in place of the raw `end_time`. Verified against
+the real data: at 1 second into the real "Memoria" word, scroll_progress
+went from ~0.146 (raw 6.86s span) to ~0.332 (correctly paced against the
+3-second cap) -- a real, measurable difference on the exact case that
+triggered the report. Deliberately left `find_current_line_index` and
+word-highlight timing untouched, and left the Ken Burns fallback branch
+(a narrow edge case already covered by the 2026-09-09 fix for the cases
+that actually matter) alone too, to keep this fix scoped to the one
+mechanism actually shown to be broken.

@@ -213,7 +213,21 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    during a real instrumental stretch also now paces to the active chord's
    own duration (when chord data is available) instead of the current-line-
    to-next-line span, so each chord-driven image gets its own natural pan
-   instead of inheriting a stretched-out one. The scrolling timeline lane's
+   instead of inheriting a stretched-out one. `build_scene()`'s
+   `scroll_progress` (how far the current line's own on-screen scroll
+   animation has advanced) uses `_plausible_line_end()` -- the same
+   outlier-capped end as `_plausible_sung_intervals()` -- instead of the
+   line's raw `end_time`, for the identical reason: real bug found live,
+   2026-09-10, a repeated one-word line ("Memoria") got a 6.86-second
+   duration in forced alignment for what's normally close to 1 second,
+   which by itself didn't displace `_in_a_line()`/Ken Burns (that line's
+   own start/end weren't wildly wrong the way 2026-09-09's was) but did
+   distort how fast that one line's own scroll animation should move.
+   Deliberately scoped to just this one mechanism -- current-line selection
+   (`find_current_line_index`) and word-highlight timing
+   (`word_sung`/`word_active`) are untouched, since both key only on a
+   word's own start time, never a duration, and were never actually
+   affected by this bug. The scrolling timeline lane's
    per-segment chord label (`render.py`'s `_lane_label_font`) shrinks to fit a
    short-duration chord's narrow box instead of being skipped entirely when it
    doesn't fit at the default size (real owner-reported issue, 2026-09-09) --

@@ -1,5 +1,9 @@
+import pytest
+
 from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Word, line_hash
-from lyricvideo.layout import _in_a_line, _plausible_sung_intervals, build_scene, find_current_line_index
+from lyricvideo.layout import (
+    _in_a_line, _plausible_line_end, _plausible_sung_intervals, build_scene, find_current_line_index,
+)
 
 
 def _make_lines():
@@ -103,6 +107,50 @@ def test_build_scene_scroll_progress_tracks_time_through_current_line():
     assert start_scene.scroll_progress == 0.0
     assert 0.0 < mid_scene.scroll_progress < 1.0
     assert start_scene.scroll_progress < mid_scene.scroll_progress < end_scene.scroll_progress
+
+
+def test_build_scene_scroll_progress_not_distorted_by_an_outlier_word_duration():
+    """Real bug found live, 2026-09-10: a repeated one-word line ("Memoria")
+    got a 6.86s duration in forced alignment for what's normally close to a
+    1-second utterance. scroll_progress must pace against the line's real,
+    plausible end (capped the same way _plausible_sung_intervals already
+    caps Ken Burns/in-a-line decisions), not the raw, inflated end_time."""
+    lines = [
+        LyricLine(
+            words=[Word(word="Memoria", start_time=88.30, end_time=95.16)],
+            start_time=88.30, end_time=95.16,
+        ),
+    ]
+
+    # 89.30 is 1 second into the word -- with the raw (uncapped) 6.86s
+    # duration this would barely register as progress; capped at 3.0s
+    # (the same default as _plausible_sung_intervals), 1 of 3 seconds is
+    # a full third of the way through.
+    scene = build_scene(lines, t=89.30)
+
+    assert scene.scroll_progress == pytest.approx(1.0 / 3.0, abs=0.01)
+
+
+def test_plausible_line_end_matches_plausible_sung_intervals_end():
+    line = LyricLine(
+        words=[Word(word="Memoria", start_time=88.30, end_time=95.16)],
+        start_time=88.30, end_time=95.16,
+    )
+
+    assert _plausible_line_end(line) == 88.30 + 3.0
+
+
+def test_plausible_line_end_normal_line_matches_its_own_raw_end():
+    line = LyricLine(
+        words=[Word(word="hello", start_time=0.0, end_time=0.5), Word(word="there", start_time=0.5, end_time=1.0)],
+        start_time=0.0, end_time=1.0,
+    )
+
+    assert _plausible_line_end(line) == 1.0
+
+
+def test_plausible_line_end_returns_none_for_a_totally_empty_line():
+    assert _plausible_line_end(LyricLine()) is None
 
 
 def test_build_scene_image_key_follows_lyric_line_text_while_singing():

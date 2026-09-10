@@ -74,6 +74,23 @@ def _plausible_sung_intervals(
     return [(start, end) for start, end in intervals]
 
 
+def _plausible_line_end(line: LyricLine, max_word_duration: float = 3.0) -> float | None:
+    """The line's real, plausible end -- the end of its last plausible sung
+    interval (see _plausible_sung_intervals above), not its raw end_time,
+    which a single outlier word can inflate arbitrarily. Real bug found
+    live, 2026-09-10: a repeated one-word line ("Memoria") got a 6.86s
+    duration in forced alignment for what's normally close to a 1-second
+    utterance -- unlike the earlier 2026-09-09 "Breathe," bug, this single
+    line's own start/end weren't wildly displaced, so `_in_a_line` and Ken
+    Burns pacing weren't affected, but the line's own on-screen SCROLL
+    animation (paced across its own start->end) was distorted, since that
+    used the line's raw end_time directly. Returns None if the line has no
+    plausible interval at all (matches _plausible_sung_intervals' own
+    empty-list case)."""
+    intervals = _plausible_sung_intervals(line, max_word_duration=max_word_duration)
+    return intervals[-1][1] if intervals else None
+
+
 def _in_a_line(lines: list[LyricLine], t: float) -> bool:
     """True if t falls within some line's own real, plausible singing
     window(s) -- False during an intro, an instrumental gap between two lines,
@@ -155,9 +172,8 @@ def build_scene(
     ken_burns_progress = min(max((t - kb_start) / (kb_end - kb_start), 0.0), 1.0)
 
     scroll_start = current.start_time or 0.0
-    scroll_end = (
-        current.end_time if (current.end_time and current.end_time > scroll_start) else scroll_start + 1.0
-    )
+    plausible_end = _plausible_line_end(current)
+    scroll_end = plausible_end if (plausible_end and plausible_end > scroll_start) else scroll_start + 1.0
     scroll_progress = min(max((t - scroll_start) / (scroll_end - scroll_start), 0.0), 1.0)
 
     if in_a_line:
