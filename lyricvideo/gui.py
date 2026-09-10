@@ -435,6 +435,17 @@ class LyricVideoGUI:
         dialog.grab_set()
         dialog.lift()
         dialog.focus_force()
+        # lift()/focus_force() alone are NOT reliably honored by every Linux
+        # window manager -- several (Cinnamon included) block focus-stealing
+        # outright, so the dialog can still open silently behind the main
+        # window despite the calls above (confirmed live, 2026-09-10, on
+        # Linux Mint -- this is a second, harder recurrence of the exact bug
+        # this function's docstring already describes once). Briefly forcing
+        # "always on top" is the one approach every window manager actually
+        # respects; clearing it a moment later avoids permanently pinning
+        # this dialog above every other window on the desktop.
+        dialog.attributes("-topmost", True)
+        dialog.after(300, lambda: dialog.attributes("-topmost", False))
         self._update_dialog_window = dialog
 
         notes_widget = ctk.CTkTextbox(dialog, wrap="word", height=220)

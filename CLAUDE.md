@@ -233,8 +233,11 @@ really is pack()-managed under `root` like the banner. `gui.py` checks once on
 launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
-`focus_force` — it must never be losable behind the main window) with the
-release notes and an Apply Update button (confirms first,
+`focus_force`, plus a brief `-topmost` toggle — `lift`/`focus_force` alone
+are not reliably honored by every Linux window manager (Cinnamon
+included; confirmed live, 2026-09-10 recurrence of this same "invisible
+dialog" class of bug) — it must never be losable behind the main window)
+with the release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-dependencies-if-changed/copies/writes the new
 VERSION) followed by a Relaunch Now button. No severity tiering, no
 periodic re-check, no manual "Check Now" button — see the spec for why.

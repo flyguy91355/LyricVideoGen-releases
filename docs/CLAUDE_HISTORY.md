@@ -580,4 +580,6 @@ which correctly preserves whatever mode the SOURCE file already has --
 the bug was entirely upstream, in what got published, not in how updates
 get applied). Fixed by reading each file's tracked mode via
 `git ls-tree HEAD -- "$f"` and `chmod +x`ing the copy when it reports
-`100755`.
+`100755`. Verified for real, not assumed: re-cut v1.3.4 with the fixed
+script, then cloned the releases repo fresh and confirmed the file now
+ships at 775 (was 664 before the fix).
