@@ -244,7 +244,14 @@ code — just synced snapshots + release notes). The sync step exports from
 git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
 `cp`) specifically so uncommitted local changes can never leak into a
 public release — see the 2026-09-08 history entry for the real incident
-that found this the hard way. The owner runs the app directly from this same
+that found this the hard way. Since `git show ... > file` is a shell
+redirect, it never carries over git's own tracked executable-bit metadata
+(always the destination's default umask instead) — after writing each
+file, the script now checks `git ls-tree HEAD` for that path and
+`chmod +x`s it if git tracks it as `100755` (real incident, 2026-09-10:
+`run_playalongvideoproduction.sh` shipped non-executable in every release
+this session, silently re-breaking the desktop launcher on every Apply
+Update even after being fixed locally). The owner runs the app directly from this same
 git checkout (not a separate deployed copy), so code changes reach them
 immediately on every commit; releases exist so the Update Available banner
 and changelog stay meaningful, not because Apply Update is the only way

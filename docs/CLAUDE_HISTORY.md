@@ -557,3 +557,27 @@ swapping the button for a plain confirmation label whenever
 `load_youtube_state(work_dir)` shows the song already has a real upload
 on record. Verified directly against the real `youtube_state.json`
 this test run actually wrote (`video_id: uCFrQ2DE76Y`).
+
+## 2026-09-10 — Desktop launcher kept losing its executable bit, root-caused for real this time
+
+Owner reported "error launching application" after closing/reopening the
+app; direct reproduction found `run_playalongvideoproduction.sh` at mode
+644 again -- the exact same symptom fixed earlier this session (chmod +x,
+confirmed matching git's own tracked 755). This time, instead of just
+re-applying the same local chmod and moving on, checked WHY it kept
+recurring: cloned the actual public releases repo
+(`flyguy91355/LyricVideoGen-releases`) fresh and found the file shipped
+there at mode 664 -- non-executable -- even though this source repo
+correctly tracks it as 755. Root cause: `cut_release.sh`'s
+`git show "HEAD:$f" > "$CLONE_DIR/$f"` is a shell redirect, and a shell
+redirect always creates its destination file under the process's default
+umask; it has no way to know or carry over git's own tracked executable
+bit for that blob. Every single release cut this session (v1.1.0 through
+v1.3.3) shipped this file non-executable, which is exactly why "fixing"
+it locally never stuck -- the very next Apply Update copied the broken
+version right back over it (`copy_updatable_files` uses `shutil.copy2`,
+which correctly preserves whatever mode the SOURCE file already has --
+the bug was entirely upstream, in what got published, not in how updates
+get applied). Fixed by reading each file's tracked mode via
+`git ls-tree HEAD -- "$f"` and `chmod +x`ing the copy when it reports
+`100755`.
