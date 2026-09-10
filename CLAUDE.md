@@ -30,11 +30,18 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   detected directly from the audio, and the title field is an editable override, not
   a required input — then click Generate. A "New Song" button next to Generate
   clears the form/log/progress bar back to blank without relaunching the app.
-  The window's own close (X) button (`_on_close_window`, the only way to quit)
-  confirms first if a Generate/Redo/Batch is actively running -- closing
-  mid-run kills the pipeline (and any in-flight upload) partway through with
-  no way to resume; closes immediately, no prompt, whenever nothing is
-  running. A
+  The window's own close (X) button (bound via `root.protocol("WM_DELETE_WINDOW",
+  self._on_close_window)` in `__init__` -- the only way to quit) confirms first
+  if a Generate/Redo/Batch is actively running -- closing mid-run kills the
+  pipeline (and any in-flight upload) partway through with no way to resume;
+  closes immediately, no prompt, whenever nothing is running. Real incident,
+  2026-09-10: the first attempt shipped `_on_close_window()` itself correctly
+  but never actually wired the `root.protocol(...)` binding, so clicking X
+  still closed unconditionally -- verifying by calling the handler method
+  directly proved the method's own logic but not that a real close ever
+  reaches it. Now verified by actually invoking the registered
+  `WM_DELETE_WINDOW` Tcl callback (`root.tk.call(root.protocol("WM_DELETE_WINDOW"))`),
+  not the Python method directly. A
   "Batch: Process a Folder" section (`lyricvideo/batch.py` finds/resolves the
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or

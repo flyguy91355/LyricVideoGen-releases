@@ -608,3 +608,30 @@ to their calls (the new default of 3 would have silently redirected their
 existing small-`t` `make_frame()` assertions into the new countdown-frame
 code path instead of the real content path they were written to test) --
 5 new tests cover the countdown behavior itself directly.
+
+## 2026-09-10 — Close-confirmation feature shipped broken; a real gap in how it was "verified"
+
+Owner asked for a confirmation prompt when closing the app while a
+Generate/Redo/Batch is running. Implemented `_on_close_window()` and
+"verified" it by constructing a real `LyricVideoGUI` and calling
+`app._on_close_window()` directly with `_running` set both ways --
+all three scenarios (idle, running+decline, running+confirm) passed.
+Shipped as v1.4.1.
+
+Owner reported it did nothing: closed a running batch with zero warning.
+The bug: the commit added the `_on_close_window()` method itself but
+never actually added `root.protocol("WM_DELETE_WINDOW", self._on_close_window)`
+in `__init__` -- the binding line simply never made it into the file (root
+cause of the omission itself was never pinned down; what matters is the
+verification gap that let it ship anyway). Calling the method directly
+proved the method's OWN internal logic was correct, but proved nothing
+about whether a real click on the X button would ever reach it -- and it
+didn't, since nothing had told the window to call it.
+
+Fixed by adding the missing `root.protocol(...)` line, and this time
+verified by triggering the ACTUAL registered Tcl callback the window
+manager itself would invoke: `root.tk.call(root.protocol("WM_DELETE_WINDOW"))`,
+never calling the Python method directly. This is now the standing
+pattern for any future `WM_DELETE_WINDOW`-style binding in this app --
+proving a handler's own logic is correct is not the same as proving it's
+actually wired to the thing that's supposed to call it.

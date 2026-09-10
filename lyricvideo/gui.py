@@ -137,6 +137,7 @@ class LyricVideoGUI:
         current_version = read_local_version(str(_VERSION_FILE_PATH)) or "v0.0.0"
         root.title(f"PlayAlongVideoProduction {current_version}")
         root.geometry("1400x820")
+        root.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         self._queue: "queue.Queue" = queue.Queue()
         self._update_queue: "queue.Queue" = queue.Queue()
