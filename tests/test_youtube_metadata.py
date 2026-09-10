@@ -36,8 +36,7 @@ def test_generate_video_metadata_parses_all_three_labeled_fields():
     title, description, tags = generate_video_metadata(client, "Wish You Were Here", "lyrics here")
 
     assert title == "Wish You Were Here - Play Along"
-    assert "A wistful song about absence and longing." in description
-    assert "Spot an error in this video? Let me know in the comments!" in description
+    assert description == "A wistful song about absence and longing."
     assert tags == ["pink floyd", "play along", "guitar chords", "lyrics video"]
 
 

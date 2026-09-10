@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lyricvideo.youtube import list_new_comments, post_reply, upload_video
+from lyricvideo.youtube import list_new_comments, post_reply, upload_video, video_exists
 
 
 class _FakeUploadRequest:
@@ -12,14 +12,27 @@ class _FakeUploadRequest:
         return None, {"id": self._video_id}
 
 
+class _FakeListRequest:
+    def __init__(self, items: list):
+        self._items = items
+
+    def execute(self):
+        return {"items": self._items}
+
+
 class _FakeVideosResource:
     def __init__(self, video_id: str):
         self._video_id = video_id
         self.insert_kwargs = None
+        self.existing_video_ids: set[str] = set()
 
     def insert(self, **kwargs):
         self.insert_kwargs = kwargs
         return _FakeUploadRequest(self._video_id)
+
+    def list(self, part, id):
+        items = [{"id": id}] if id in self.existing_video_ids else []
+        return _FakeListRequest(items)
 
 
 class _FakeYoutubeClient:
@@ -150,3 +163,20 @@ def test_post_reply_sends_the_correct_parent_and_text():
     assert client._comments.insert_kwargs["body"]["snippet"]["parentId"] == "c2"
     assert client._comments.insert_kwargs["body"]["snippet"]["textOriginal"] == "Thanks for catching that!"
     assert client._comments.executed == [None]
+
+
+def test_video_exists_true_when_the_video_id_is_still_live():
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = {"abc123"}
+
+    assert video_exists(client, "abc123") is True
+
+
+def test_video_exists_false_when_the_video_was_deleted():
+    """Real incident 2026-09-10: the owner deleted a video directly on
+    YouTube; nothing in the app ever noticed its saved video_id had gone
+    stale until this check was added."""
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = set()
+
+    assert video_exists(client, "abc123") is False

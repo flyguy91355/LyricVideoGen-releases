@@ -42,7 +42,7 @@ from .update.apply import copy_updatable_files, extract_release_archive, require
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 from . import youtube_auth
-from .youtube import list_new_comments, post_reply
+from .youtube import list_new_comments, post_reply, video_exists
 from .youtube_comment_state import (
     PendingReply,
     add_pending_reply,
@@ -85,14 +85,16 @@ def _split_log_text(pending: str, text: str) -> tuple[str, str]:
 
 def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     """Uploads work_dir's finished video to YouTube if auto-upload is on,
-    YouTube is connected, and this song has never been uploaded before --
-    Redo of an already-uploaded song is deliberately skipped here to avoid
-    duplicate videos piling up (owner's explicit choice). Any failure is
-    caught and logged -- an upload problem must never make an
+    YouTube is connected, and this song has never been (verifiably) uploaded
+    before -- Redo of an already-uploaded song is deliberately skipped to
+    avoid duplicate videos piling up (owner's explicit choice), UNLESS the
+    saved video_id no longer exists on YouTube (the owner deleted it there
+    directly -- real incident 2026-09-10, "Come As You Are" stayed stuck
+    showing "already uploaded" forever after its manual deletion, since
+    nothing ever re-checked the saved state against YouTube's real state).
+    Any failure is caught and logged -- an upload problem must never make an
     otherwise-successful video generation look like it failed."""
     if not settings.youtube_auto_upload:
-        return
-    if load_youtube_state(work_dir) is not None:
         return
     credentials = youtube_auth.load_credentials()
     if credentials is None:
@@ -100,6 +102,13 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
 
     try:
         youtube_client = build("youtube", "v3", credentials=credentials)
+        state = load_youtube_state(work_dir)
+        if state is not None:
+            try:
+                if video_exists(youtube_client, state.video_id):
+                    return
+            except Exception:
+                return  # can't verify right now -- fail closed, don't risk a duplicate
         anthropic_client = anthropic.Anthropic()
         schedule_upload(youtube_client, anthropic_client, work_dir, settings)
         print(f"Uploaded to YouTube: {work_dir.name}")
@@ -856,15 +865,25 @@ class LyricVideoGUI:
         "Uploaded to YouTube" label in the same spot -- an enabled button
         right after an auto-upload already happened is misleading (looks
         like a pending action) and clicking it would create a duplicate
-        video on the channel."""
-        already_uploaded = work_dir is not None and load_youtube_state(work_dir) is not None
+        video on the channel. Re-verifies the saved video_id against
+        YouTube's real state (not just "a local record exists") so the label
+        doesn't keep claiming a video is live after the owner deleted it
+        directly on YouTube -- see _maybe_upload_to_youtube's docstring."""
+        credentials = youtube_auth.load_credentials()
+        state = load_youtube_state(work_dir) if work_dir is not None else None
+        already_uploaded = state is not None
+        if already_uploaded and credentials is not None:
+            try:
+                youtube_client = build("youtube", "v3", credentials=credentials)
+                already_uploaded = video_exists(youtube_client, state.video_id)
+            except Exception:
+                pass  # can't verify right now -- fail closed, keep showing "uploaded"
         if already_uploaded:
             self.upload_button.pack_forget()
             self.upload_status_label.pack(side="left", padx=(12, 0))
             return
         self.upload_status_label.pack_forget()
-        connected = youtube_auth.load_credentials() is not None
-        self.upload_button.configure(state="normal" if connected else "disabled")
+        self.upload_button.configure(state="normal" if credentials is not None else "disabled")
         self.upload_button.pack(side="left", padx=(12, 0))
 
     def _on_connect_youtube(self) -> None:

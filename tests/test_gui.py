@@ -27,11 +27,58 @@ def test_maybe_upload_to_youtube_skips_when_not_connected(tmp_path, monkeypatch)
     assert calls == []
 
 
-def test_maybe_upload_to_youtube_skips_when_already_uploaded(tmp_path, monkeypatch):
+def test_maybe_upload_to_youtube_skips_when_already_uploaded_and_still_live(tmp_path, monkeypatch):
     save_youtube_state(tmp_path, YoutubeState(video_id="abc", uploaded_at="2026-01-01T00:00:00", title="t"))
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.video_exists", lambda client, video_id: True)
     monkeypatch.setattr(
-        "lyricvideo.gui.youtube_auth.load_credentials",
-        lambda: (_ for _ in ()).throw(AssertionError("should not check credentials once already-uploaded is known")),
+        "lyricvideo.gui.schedule_upload",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not re-upload a still-live video")),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+
+def test_maybe_upload_to_youtube_re_uploads_when_saved_video_was_deleted_on_youtube(tmp_path, monkeypatch):
+    """Real incident 2026-09-10: the owner deleted "Come As You Are" directly
+    on YouTube after a redo; the stale local youtube_state.json kept the
+    song permanently stuck as "already uploaded" with no way to recover
+    short of manually deleting the JSON file. video_exists() now catches
+    this and lets the real upload proceed."""
+    save_youtube_state(tmp_path, YoutubeState(video_id="deleted-id", uploaded_at="2026-01-01T00:00:00", title="t"))
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.video_exists", lambda client, video_id: False)
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)
+
+    assert calls == [tmp_path]
+
+
+def test_maybe_upload_to_youtube_skips_when_verification_itself_fails(tmp_path, monkeypatch):
+    """A network hiccup while checking video_exists must fail CLOSED (skip,
+    not upload) -- never risk a duplicate video because a status check
+    happened to time out."""
+    save_youtube_state(tmp_path, YoutubeState(video_id="abc", uploaded_at="2026-01-01T00:00:00", title="t"))
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+
+    def _raise(client, video_id):
+        raise RuntimeError("network hiccup")
+
+    monkeypatch.setattr("lyricvideo.gui.video_exists", _raise)
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload when verification failed")),
     )
     settings = Settings(youtube_auto_upload=True)
 

@@ -57,6 +57,15 @@ def upload_video(
     return response["id"]
 
 
+def video_exists(youtube_client, video_id: str) -> bool:
+    """Whether video_id is still a real, live video on YouTube -- a locally
+    saved video_id (youtube_state.json) can go stale if the owner deletes
+    the video from YouTube Studio directly, and nothing else in this app
+    would ever notice."""
+    response = youtube_client.videos().list(part="id", id=video_id).execute()
+    return bool(response.get("items"))
+
+
 def list_new_comments(youtube_client, video_id: str, seen_comment_ids: set[str]) -> list[Comment]:
     response = youtube_client.commentThreads().list(
         part="snippet", videoId=video_id, textFormat="plainText", maxResults=100,

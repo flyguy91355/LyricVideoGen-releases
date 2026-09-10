@@ -410,7 +410,14 @@ between the two at the Settings boundary. `gui.py`'s module-level
 `_slugify`/`_split_log_text` already are) gates every auto-upload trigger
 -- only if enabled, connected, AND this song was never uploaded before --
 and is called from `_run_worker` (shared by both Generate and Redo) and
-per-item inside `_run_batch_worker`. Any upload failure is caught and
+per-item inside `_run_batch_worker`. "Never uploaded before" is verified
+live via `youtube.video_exists(client, video_id)`
+(`videos().list(part="id", id=...)`), not just "a `youtube_state.json`
+exists" -- real incident 2026-09-10: the owner deleted a video directly
+on YouTube Studio after a redo, and the stale local record left that song
+permanently stuck claiming "already uploaded" with no automatic recovery.
+A verification call that itself fails (network hiccup) fails CLOSED here
+(skip, never risk a duplicate upload). Any upload failure is caught and
 logged as a warning, never raised. A "YouTube: not connected"/"YouTube:
 connected as <channel>" status label + "Connect to YouTube" button sit
 above the Settings panel; a manual "Upload to YouTube" button next to the
@@ -419,9 +426,12 @@ always performs a fresh `schedule_upload()` immediately, bypassing the
 auto-upload skip-checks -- the owner's deliberate override for a
 correction or any other manual re-post. `_update_upload_button_state(work_dir)`
 swaps that button for a plain "✓ Uploaded to YouTube" label in the same
-spot whenever `load_youtube_state(work_dir)` shows the song already has a
-real upload on record (whether from auto-upload or a prior manual click)
--- real live feedback found this necessary: an enabled button right after
+spot whenever a saved `youtube_state.json` record's video_id still
+verifiably exists on YouTube (same `video_exists()` check as
+`_maybe_upload_to_youtube`, same fail-closed behavior on a verification
+error -- keep showing "uploaded" rather than flash a possibly-wrong
+button) -- real live feedback found the original "just check the local
+file" version necessary in the first place: an enabled button right after
 an auto-upload already succeeded looked exactly like a pending action
 (the owner assumed auto-upload had silently failed), and clicking it
 again would have created a duplicate video. `lyricvideo/youtube_comment_state.py`
@@ -455,9 +465,11 @@ because a personal single-user OAuth app always stays in Google's
 and pointless for personal use) -- Testing-mode refresh tokens hard-expire
 after exactly 7 days regardless of use, so reconnecting periodically via
 the "Connect to YouTube" button is expected, normal behavior, not a bug.
-No automated "corrected video" re-upload/relinking mechanism exists
-anywhere in this feature -- a correction is always the owner's own manual
-call via the upload button above.
+A video redone after being deleted directly on YouTube now re-uploads
+automatically on the next Redo/auto-upload check (via the `video_exists()`
+self-heal above); short of that specific case, there is still no
+automated "corrected video" relinking -- an in-session correction is the
+owner's own manual call via the upload button.
 
 This whole feature (11 tasks) is now complete and tested (363 tests
 passing). What's NOT yet verified: the interactive OAuth `connect()` flow

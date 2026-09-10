@@ -3,8 +3,6 @@ docs/superpowers/specs/2026-09-10-youtube-upload-design.md."""
 
 from __future__ import annotations
 
-_ERROR_INVITE = "Spot an error in this video? Let me know in the comments!"
-
 
 class MetadataGenError(Exception):
     pass
@@ -51,7 +49,7 @@ def generate_video_metadata(
     )
     fields = _parse_labeled_fields(_extract_text(response), ["TITLE", "DESCRIPTION", "TAGS"])
     title = fields["TITLE"] or song_title
-    description = f"{fields['DESCRIPTION']}\n\n{_ERROR_INVITE}".strip()
+    description = fields["DESCRIPTION"].strip()
     tags = [t.strip() for t in fields["TAGS"].split(",") if t.strip()]
     return title, description, tags
 

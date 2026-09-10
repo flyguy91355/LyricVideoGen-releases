@@ -703,3 +703,48 @@ word-highlight timing untouched, and left the Ken Burns fallback branch
 (a narrow edge case already covered by the 2026-09-09 fix for the cases
 that actually matter) alone too, to keep this fix scoped to the one
 mechanism actually shown to be broken.
+
+## 2026-09-10 — Removed the per-video "spot an error" invite; channel branding; stale-upload self-heal
+
+Owner had second thoughts about `youtube_metadata.py`'s auto-appended
+`"Spot an error in this video? Let me know in the comments!"` line on
+every video description -- removed outright (`generate_video_metadata` no
+longer appends anything past Claude's own description). The internal
+"⚠ possible error report" badge in the comment-reply review panel
+(`gui.py`, driven by `draft_comment_reply`'s `IS_ERROR_REPORT`
+classification) stays -- that's a private triage aid for the owner, not a
+public invitation, and was never what the owner objected to.
+
+Built channel branding (owner wanted "high class," explicitly not
+cartoon-style): `branding/generate_channel_banner.py` renders a
+2560x1440 PNG via Pillow -- deep indigo/magenta/gold diagonal gradient,
+a soft warm spotlight behind the wordmark, thin gold corner brackets and
+a rule line, letter-spaced typography, respecting YouTube's centered
+1546x423 safe area. Output at `branding/youtube_channel_banner.png`.
+Full About-tab description and channel keywords written to
+`branding/channel_customization.md` for the owner to paste into YouTube
+Studio's Basic info -- nothing in the codebase stores the channel's own
+name/description, so this is a one-time reference doc, not something the
+app reads.
+
+Separately, root-caused why "Come As You Are" wasn't showing up after
+its redo: `work/come-as-you-are/youtube_state.json` still recorded the
+OLD (buggy, pre-fix) video's video_id, uploaded before the owner deleted
+it directly from YouTube Studio. `_maybe_upload_to_youtube` (auto-upload)
+and `_update_upload_button_state` (the GUI label) both only ever checked
+"does a local state file exist," never "is that video still real on
+YouTube" -- so a manually-deleted video left the song permanently stuck
+showing "already uploaded" with the owner having no way to recover short
+of hand-editing the JSON file. Added `youtube.video_exists(client,
+video_id)` (a `videos().list(part="id", id=...)` call) and wired it into
+both call sites: a saved state now only counts as "already uploaded" if
+the video still verifiably exists on YouTube; if it's gone, auto-upload
+re-uploads for real and the button flips back to clickable. A
+verification call that itself fails (network hiccup) fails CLOSED in
+`_maybe_upload_to_youtube` (skip, never risk a duplicate) and CLOSED in
+`_update_upload_button_state` too (keep showing "uploaded" rather than
+flash a possibly-wrong button). Fixed the immediate case by hand
+(cleared the stale JSON, re-ran `schedule_upload` directly with a
+one-off script using the exact same code path as the manual upload
+button) -- new video_id `yyiyDvLizQw`, scheduled to publish
+2026-09-16T14:00 ET per the existing once-a-day release spacing.
