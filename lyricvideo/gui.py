@@ -16,6 +16,7 @@ import customtkinter as ctk
 import httpx
 from dotenv import load_dotenv
 
+from .batch import find_audio_files, resolve_batch_items
 from .identify import extract_metadata
 from .pipeline import (
     STAGES,
@@ -108,6 +109,10 @@ class LyricVideoGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.redo_song_var = tk.StringVar()
         self.redo_new_images_var = tk.BooleanVar(value=False)
+        self.batch_folder_var = tk.StringVar()
+        self._batch_items: list = []  # list[BatchItem] once resolved
+        self._batch_index = 0
+        self._batch_results = {"succeeded": [], "skipped_already_done": [], "failed": []}
 
         self.title_var.trace_add("write", self._on_title_changed)
 
@@ -212,6 +217,22 @@ class LyricVideoGUI:
         ).pack(side="left", padx=8)
         self.redo_button = ctk.CTkButton(redo_controls, text="Redo", command=self._on_redo, width=80)
         self.redo_button.pack(side="left", padx=8)
+
+        batch_frame = ctk.CTkFrame(left)
+        batch_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkLabel(batch_frame, text="Batch: Process a Folder", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=8, pady=(8, 4)
+        )
+        batch_controls = ctk.CTkFrame(batch_frame, fg_color="transparent")
+        batch_controls.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkEntry(batch_controls, textvariable=self.batch_folder_var, width=340, state="readonly").pack(
+            side="left", padx=(0, 8)
+        )
+        ctk.CTkButton(batch_controls, text="Browse Folder...", command=self._on_browse_batch_folder, width=110).pack(
+            side="left", padx=8
+        )
+        self.batch_button = ctk.CTkButton(batch_controls, text="Start Batch", command=self._on_start_batch, width=90)
+        self.batch_button.pack(side="left", padx=8)
 
         self.log_widget = ctk.CTkTextbox(left, state="disabled", wrap="word")
         self.log_widget.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -476,6 +497,132 @@ class LyricVideoGUI:
         self.progress_bar.set(0.0)
         self._clear_log()
 
+    def _on_browse_batch_folder(self) -> None:
+        folder = filedialog.askdirectory()
+        if folder:
+            self.batch_folder_var.set(folder)
+
+    def _on_start_batch(self) -> None:
+        if self._running:
+            return
+        folder = self.batch_folder_var.get().strip()
+        if not folder:
+            messagebox.showerror("No folder selected", "Choose a folder to batch-process first.")
+            return
+
+        self._running = True
+        self.generate_button.configure(state="disabled")
+        self.redo_button.configure(state="disabled")
+        self.batch_button.configure(state="disabled")
+        self.status_var.set("Scanning folder...")
+        self._clear_log()
+
+        thread = threading.Thread(target=self._resolve_batch_worker, args=(Path(folder),), daemon=True)
+        thread.start()
+        self.root.after(100, self._poll_queue)
+
+    def _resolve_batch_worker(self, folder: Path) -> None:
+        try:
+            files = find_audio_files(folder)
+            items = resolve_batch_items(files, PROJECT_ROOT / "work")
+            self._queue.put(("batch_resolved", items))
+        except Exception as e:
+            self._queue.put(("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
+
+    def _start_batch_run(self, items: list) -> None:
+        self._batch_items = items
+        self._batch_index = 0
+        self._batch_results = {"succeeded": [], "skipped_already_done": [], "failed": []}
+        self.status_var.set(f"Starting batch (0/{len(items)})...")
+        self.progress_bar.set(0.0)
+
+        thread = threading.Thread(target=self._run_batch_worker, args=(items,), daemon=True)
+        thread.start()
+        self.root.after(100, self._poll_queue)
+
+    def _run_batch_worker(self, items: list) -> None:
+        writer = _QueueWriter(self._queue)
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = writer, writer
+        results = {"succeeded": [], "skipped_already_done": [], "failed": []}
+        try:
+            for index, item in enumerate(items, start=1):
+                self._queue.put(("batch_file_start", (index, len(items), item.title)))
+                try:
+                    if item.already_done:
+                        backup_song_outputs(item.work_dir, _slugify(item.title))
+                        run_pipeline(
+                            item.audio_path, item.work_dir, item.title,
+                            start_stage="fetch_lyrics", settings=self.settings,
+                            progress_callback=lambda stage: self._queue.put(("stage", stage)),
+                        )
+                    else:
+                        run_pipeline(
+                            item.audio_path, item.work_dir, item.title,
+                            settings=self.settings,
+                            progress_callback=lambda stage: self._queue.put(("stage", stage)),
+                        )
+                    results["succeeded"].append(item.title)
+                except Exception as e:
+                    results["failed"].append((item.title, f"{type(e).__name__}: {e}"))
+                    print(f"Batch item {item.title!r} failed: {type(e).__name__}: {e}")
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+        self._queue.put(("batch_done", results))
+
+    def _on_batch_resolved(self, items: list) -> None:
+        if not items:
+            self._running = False
+            self.generate_button.configure(state="normal")
+            self.redo_button.configure(state="normal")
+            self.batch_button.configure(state="normal")
+            self.status_var.set("Ready")
+            messagebox.showinfo("No audio files found", "That folder has no .mp3/.wav/.m4a/.flac files.")
+            return
+
+        done_count = sum(1 for i in items if i.already_done)
+        to_process = items
+        if done_count:
+            skip_done = messagebox.askyesno(
+                "Some songs already done",
+                f"{done_count} of {len(items)} songs already have a finished video.\n\n"
+                "Skip those and only process the rest? (No = regenerate everyone, "
+                "backing up each one's current video/timing first, same as Redo.)",
+            )
+            if skip_done:
+                to_process = [i for i in items if not i.already_done]
+
+        if not to_process:
+            self._running = False
+            self.generate_button.configure(state="normal")
+            self.redo_button.configure(state="normal")
+            self.batch_button.configure(state="normal")
+            self.status_var.set("Ready")
+            messagebox.showinfo("Nothing to do", "Every song in that folder is already done.")
+            return
+
+        self._start_batch_run(to_process)
+
+    def _on_batch_done(self, results: dict) -> None:
+        self._batch_items = []
+        self._batch_index = 0
+        self.status_var.set("Batch done")
+        self.progress_bar.set(1.0)
+        self._running = False
+        self.generate_button.configure(state="normal")
+        self.redo_button.configure(state="normal")
+        self.batch_button.configure(state="normal")
+
+        summary = (
+            f"Succeeded: {len(results['succeeded'])}\n"
+            f"Failed: {len(results['failed'])}"
+        )
+        if results["failed"]:
+            failed_names = "\n".join(f"  - {title}: {err}" for title, err in results["failed"])
+            messagebox.showwarning("Batch finished with failures", f"{summary}\n\n{failed_names}")
+        else:
+            messagebox.showinfo("Batch finished", summary)
+
     def _on_generate(self) -> None:
         if self._running:
             return
@@ -604,21 +751,31 @@ class LyricVideoGUI:
                 continue
             flush_log()
             if kind == "stage":
-                self.status_var.set(f"Stage: {payload}")
-                # +1: report("done") isn't a real STAGES entry, but seeing the
-                # bar reach 100% only once done fires (not at the start of the
-                # last real stage) reads better than stalling at 6/7.
-                try:
-                    fraction = (STAGES.index(payload) + 1) / len(STAGES)
-                except ValueError:
-                    fraction = self.progress_bar.get()
-                self.progress_bar.set(min(1.0, fraction))
+                if self._batch_items:
+                    self.status_var.set(f"File {self._batch_index}/{len(self._batch_items)}: Stage: {payload}")
+                    try:
+                        stage_fraction = (STAGES.index(payload) + 1) / len(STAGES)
+                    except ValueError:
+                        stage_fraction = 0.0
+                    combined = (self._batch_index - 1 + stage_fraction) / len(self._batch_items)
+                    self.progress_bar.set(min(1.0, combined))
+                else:
+                    self.status_var.set(f"Stage: {payload}")
+                    # +1: report("done") isn't a real STAGES entry, but seeing the
+                    # bar reach 100% only once done fires (not at the start of the
+                    # last real stage) reads better than stalling at 6/7.
+                    try:
+                        fraction = (STAGES.index(payload) + 1) / len(STAGES)
+                    except ValueError:
+                        fraction = self.progress_bar.get()
+                    self.progress_bar.set(min(1.0, fraction))
             elif kind == "done":
                 self.status_var.set("Done")
                 self.progress_bar.set(1.0)
                 self._running = False
                 self.generate_button.configure(state="normal")
                 self.redo_button.configure(state="normal")
+                self.batch_button.configure(state="normal")
                 messagebox.showinfo("Video ready", f"Wrote {payload}")
                 return
             elif kind == "error":
@@ -626,8 +783,19 @@ class LyricVideoGUI:
                 self._running = False
                 self.generate_button.configure(state="normal")
                 self.redo_button.configure(state="normal")
+                self.batch_button.configure(state="normal")
                 self._append_log(f"\nERROR:\n{payload}\n")
                 messagebox.showerror("Generation failed", payload.splitlines()[0])
+                return
+            elif kind == "batch_resolved":
+                self._on_batch_resolved(payload)
+                return
+            elif kind == "batch_file_start":
+                self._batch_index, total, title = payload
+                self.status_var.set(f"File {self._batch_index}/{total}: {title}")
+                self.progress_bar.set(min(1.0, (self._batch_index - 1) / total))
+            elif kind == "batch_done":
+                self._on_batch_done(payload)
                 return
         flush_log()
 

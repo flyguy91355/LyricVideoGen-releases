@@ -29,8 +29,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   file — title/artist/lyrics are identified and fetched automatically, chords are
   detected directly from the audio, and the title field is an editable override, not
   a required input — then click Generate. A "New Song" button next to Generate
-  clears the form/log/progress bar back to blank without relaunching the app.
-  Built with CustomTkinter
+  clears the form/log/progress bar back to blank without relaunching the app. A
+  "Batch: Process a Folder" section (`lyricvideo/batch.py` finds/resolves the
+  files) runs every audio file in a folder through the pipeline sequentially --
+  one up-front confirmation decides whether already-done songs are skipped or
+  regenerated (backing up each one first, like Redo) for the whole batch; a
+  file that errors is logged and skipped, never aborting the rest. Built with
+  CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
   Redo/log console/generation progress bar, right = the scrollable Settings panel
   (`lyricvideo/settings_panel.py`) bound to a `Settings` object
