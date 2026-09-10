@@ -586,6 +586,22 @@ class LyricVideoGUI:
         self._last_work_dir = None
         self._update_upload_button_state(None)
 
+    def _on_close_window(self) -> None:
+        """Bound to the window's own close (X) button, the only way to quit
+        this app -- if nothing is running, closes immediately; if a
+        Generate/Redo/Batch is in progress, confirms first, since closing
+        mid-run kills the pipeline (and any in-flight Demucs/render/upload
+        work) partway through with no way to resume it. Owner-requested,
+        2026-09-10."""
+        if self._running and not messagebox.askyesno(
+            "Quit while running?",
+            "A video is currently being generated. Quitting now stops the "
+            "process partway through -- it will not resume from where it left off.\n\n"
+            "Quit anyway?",
+        ):
+            return
+        self.root.destroy()
+
     def _on_browse_batch_folder(self) -> None:
         current = self.batch_folder_var.get()
         initialdir = current if current and Path(current).is_dir() else None
