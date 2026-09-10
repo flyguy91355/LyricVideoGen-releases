@@ -294,10 +294,23 @@ class LyricVideoGUI:
 
         right = ctk.CTkFrame(body)
         right.grid(row=0, column=1, sticky="nsew")
-        self.settings_preview = SettingsPreviewFrame(right, self.settings)
-        self.settings_preview.pack(fill="x", padx=6, pady=(6, 0))
 
-        youtube_connect_frame = ctk.CTkFrame(right, fg_color="transparent")
+        # Real live-use finding, 2026-09-10: Settings (5 sections) + the live
+        # preview + the YouTube connect status + the comments panel all
+        # stacked in this one column left almost no room for Settings itself
+        # -- a CTkTabview instead gives each its own tab the full column
+        # height, with nothing permanently eating space from the other.
+        self.right_tabs = ctk.CTkTabview(right)
+        self.right_tabs.pack(fill="both", expand=True, padx=4, pady=4)
+        settings_tab = self.right_tabs.add("Settings")
+        youtube_tab = self.right_tabs.add("YouTube")
+
+        self.settings_preview = SettingsPreviewFrame(settings_tab, self.settings)
+        self.settings_preview.pack(fill="x", padx=6, pady=(6, 0))
+        self.settings_panel = SettingsPanel(settings_tab, self.settings, on_change=self._on_settings_changed)
+        self.settings_panel.pack(fill="both", expand=True, padx=6, pady=6)
+
+        youtube_connect_frame = ctk.CTkFrame(youtube_tab, fg_color="transparent")
         youtube_connect_frame.pack(fill="x", padx=4, pady=(6, 0))
         self.youtube_status_var = tk.StringVar(value="YouTube: not connected")
         ctk.CTkLabel(youtube_connect_frame, textvariable=self.youtube_status_var, anchor="w").pack(side="left")
@@ -305,10 +318,7 @@ class LyricVideoGUI:
             youtube_connect_frame, text="Connect to YouTube", command=self._on_connect_youtube, width=160,
         ).pack(side="right")
 
-        self._build_youtube_panel(right)
-
-        self.settings_panel = SettingsPanel(right, self.settings, on_change=self._on_settings_changed)
-        self.settings_panel.pack(fill="both", expand=True, padx=6, pady=6)
+        self._build_youtube_panel(youtube_tab)
 
     def _add_row(self, frame: ctk.CTkFrame, row: int, label: str, var: tk.StringVar) -> None:
         ctk.CTkLabel(frame, text=label).grid(row=row, column=0, sticky="w")
@@ -869,14 +879,14 @@ class LyricVideoGUI:
         threading.Thread(target=worker, daemon=True).start()
 
     def _build_youtube_panel(self, parent) -> None:
-        frame = ctk.CTkFrame(parent)
-        frame.pack(side="bottom", fill="x", padx=4, pady=(0, 6))
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=4, pady=(6, 6))
         header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=8, pady=(8, 4))
+        header.pack(fill="x", padx=4, pady=(0, 4))
         ctk.CTkLabel(header, text="YouTube Comments", font=ctk.CTkFont(weight="bold")).pack(side="left")
         ctk.CTkButton(header, text="Check Now", command=self._on_check_youtube_comments, width=100).pack(side="right")
-        self.youtube_replies_frame = ctk.CTkScrollableFrame(frame, height=200)
-        self.youtube_replies_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.youtube_replies_frame = ctk.CTkScrollableFrame(frame)
+        self.youtube_replies_frame.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         self._render_pending_replies()
         self.root.after(20 * 60 * 1000, self._schedule_youtube_comment_check)
 

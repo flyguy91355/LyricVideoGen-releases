@@ -55,8 +55,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   dialog's `initialdir`. Built with
   CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
-  Redo/log console/generation progress bar, right = the scrollable Settings panel
-  (`lyricvideo/settings_panel.py`) bound to a `Settings` object
+  Redo/log console/generation progress bar, right = a `CTkTabview` (`self.right_tabs`)
+  with a "Settings" tab (live preview + the scrollable Settings panel) and a
+  "YouTube" tab (connect status/button + the comments panel) -- real live-use
+  finding, 2026-09-10: stacking all of that in one column left almost no room
+  for Settings itself; tabs give each its own full-height space instead. The
+  scrollable Settings panel
+  (`lyricvideo/settings_panel.py`) is bound to a `Settings` object
   (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
   loaded on launch and saved on every control change). `render.py`/`detect_chords.py`/
   `assemble_video()` all take plain keyword arguments for every Settings-backed value
