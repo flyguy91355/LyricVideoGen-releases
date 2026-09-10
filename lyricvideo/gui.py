@@ -489,13 +489,30 @@ class LyricVideoGUI:
         dialog.protocol("WM_DELETE_WINDOW", _on_close)
 
     def _on_apply_update_clicked(self, release: dict) -> None:
-        if not messagebox.askyesno(
-            "Apply update",
-            f"Download and apply {release['tag_name']} now?\n\n"
-            "This reinstalls dependencies if they changed and overwrites the "
-            "program's own files. Your songs, work files, and .env are never "
-            "touched.",
-        ):
+        # Real recurrence, 2026-09-10 (screenshots): with no `parent=` given,
+        # this confirmation isn't WM-recognized as belonging to the "Update
+        # available" dialog it's actually triggered from -- on the same
+        # flaky window manager already found for that dialog, it could open
+        # behind it instead of on top. `parent=dialog` gives it the correct
+        # transient relationship; briefly forcing `dialog` itself topmost
+        # around the call is the same belt-and-suspenders fix already used
+        # for that dialog's own visibility.
+        dialog = self._update_dialog_window
+        if dialog is not None:
+            dialog.attributes("-topmost", True)
+        try:
+            confirmed = messagebox.askyesno(
+                "Apply update",
+                f"Download and apply {release['tag_name']} now?\n\n"
+                "This reinstalls dependencies if they changed and overwrites the "
+                "program's own files. Your songs, work files, and .env are never "
+                "touched.",
+                parent=dialog,
+            )
+        finally:
+            if dialog is not None:
+                dialog.attributes("-topmost", False)
+        if not confirmed:
             return
         self._update_apply_button.configure(state="disabled")
         self._update_status_var.set("Downloading...")

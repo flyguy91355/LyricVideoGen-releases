@@ -275,6 +275,13 @@ with the release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-dependencies-if-changed/copies/writes the new
 VERSION) followed by a Relaunch Now button. No severity tiering, no
 periodic re-check, no manual "Check Now" button — see the spec for why.
+The Apply Update confirmation itself (`_on_apply_update_clicked`'s own
+`messagebox.askyesno`) is a SEPARATE dialog from the outer "Update
+available" one and needs the identical `parent=`/topmost treatment for
+the same reason -- real recurrence, 2026-09-10 (owner screenshots): with
+no `parent=` given it wasn't WM-recognized as that dialog's child and
+could open behind it. Fixed by passing `parent=self._update_dialog_window`
+and briefly forcing that dialog topmost around the call.
 Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (the
 releases repo itself was created 2026-09-08, public/unlisted, no source
 code — just synced snapshots + release notes). The sync step exports from
