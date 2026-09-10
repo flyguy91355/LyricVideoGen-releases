@@ -135,10 +135,22 @@ class LyricVideoGUI:
         body.grid_columnconfigure(0, weight=3)
         body.grid_columnconfigure(1, weight=2)
         body.grid_rowconfigure(0, weight=1)
+        # `body` (not `left`) is the update banner's `before=` anchor: pack()'s
+        # `before=` requires a widget managed by pack() in the SAME master as
+        # the widget being packed. `left` is grid()-managed inside `body`, not
+        # pack()-managed inside `self.root` like the banner is -- using it
+        # here always raised TclError: window isn't packed, silently (a real
+        # bug from the CustomTkinter rebuild, found live 2026-09-09: the
+        # banner never once appeared across multiple relaunches with a real
+        # update available, because Tkinter callback exceptions print to a
+        # log the desktop-launched app's owner never sees, not to any visible
+        # UI). `body` itself IS pack()-managed directly under `self.root`,
+        # exactly like the banner, so `before=body` inserts the banner right
+        # above it as intended.
+        self.top_frame = body
 
         left = ctk.CTkFrame(body)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.top_frame = left  # anchor for the update banner's `before=` pack
 
         form = ctk.CTkFrame(left, fg_color="transparent")
         form.pack(fill="x", padx=10, pady=10)

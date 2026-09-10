@@ -181,7 +181,16 @@ PlayAlongVideoProduction, deliberately not moved yet (see CLAUDE_HISTORY) —
 and allow-listed archive extraction/copy
 (`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
 `CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
-`work/`, `.venv/`). `gui.py` checks once on launch (background thread) and
+`work/`, `.venv/`). `self.top_frame` (the `before=` anchor `_poll_update_queue`
+packs the banner above) must be a widget managed by `.pack()` directly under
+`self.root` -- real bug found live 2026-09-09 (never once showed a real
+available update across multiple relaunches): the CustomTkinter rebuild left
+`top_frame` pointing at `left`, which is `.grid()`-managed inside the `body`
+frame, so every attempt raised `TclError: window isn't packed`, silently (a
+background-thread Tkinter callback exception prints to a log the desktop-
+launched app's owner never sees). Fixed to anchor on `body` itself, which
+really is pack()-managed under `root` like the banner. `gui.py` checks once on
+launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
 `focus_force` — it must never be losable behind the main window) with the
