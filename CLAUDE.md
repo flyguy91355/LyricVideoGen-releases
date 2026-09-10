@@ -409,7 +409,14 @@ nothing ever posts without that explicit click. A "Check Now" button plus
 a 20-minute `root.after` timer (only while the app is open) scan every
 song with a `youtube_state.json` for new comments, scoped to only videos
 this app uploaded; one Claude call per new comment drafts a reply and
-flags likely error reports. That same 20-minute tick
+flags likely error reports. `_check_youtube_comments_worker` isolates each
+video's own `list_new_comments()` call in its own try/except (plus a
+top-level one around the whole method as a last resort) -- real live
+crash, 2026-09-10: a video with comments disabled (YouTube returns a
+completely normal `HttpError 403 commentsDisabled`, not a bug) was
+uncaught, silently aborting the check for every OTHER video too, forever,
+since the identical failure recurs on every future 20-minute tick. One
+video's failure must never block the rest. That same 20-minute tick
 (`_youtube_periodic_tick`, on a background thread -- both
 `load_credentials()`'s token refresh and `get_channel_title()` can make a
 real network call, never safe on the GUI thread) also refreshes the

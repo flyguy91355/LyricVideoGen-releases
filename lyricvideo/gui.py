@@ -977,27 +977,50 @@ class LyricVideoGUI:
         threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()
 
     def _check_youtube_comments_worker(self) -> None:
-        credentials = youtube_auth.load_credentials()
-        if credentials is None:
-            return
-        youtube_client = build("youtube", "v3", credentials=credentials)
-        anthropic_client = anthropic.Anthropic()
-        seen_ids = load_seen_comment_ids()
-        new_ids = []
-        for work_dir in sorted((PROJECT_ROOT / "work").glob("*")):
-            state = load_youtube_state(work_dir)
-            if state is None:
-                continue
-            for comment in list_new_comments(youtube_client, state.video_id, seen_ids):
-                draft, is_error_report = draft_comment_reply(anthropic_client, comment.text, state.title)
-                add_pending_reply(PendingReply(
-                    comment_id=comment.comment_id, video_id=comment.video_id, author=comment.author,
-                    comment_text=comment.text, draft_reply=draft, is_error_report=is_error_report,
-                ))
-                new_ids.append(comment.comment_id)
-        if new_ids:
-            mark_comments_seen(new_ids)
-        self.root.after(0, self._render_pending_replies)
+        """Runs on a background thread, both on-demand (Check Now) and every
+        20 minutes via _youtube_periodic_tick -- an unhandled exception here
+        would otherwise recur forever on every future tick with no visible
+        indication beyond a scary traceback in the log, so the whole body is
+        one last defensive layer on top of the per-video isolation below."""
+        try:
+            credentials = youtube_auth.load_credentials()
+            if credentials is None:
+                return
+            youtube_client = build("youtube", "v3", credentials=credentials)
+            anthropic_client = anthropic.Anthropic()
+            seen_ids = load_seen_comment_ids()
+            new_ids = []
+            for work_dir in sorted((PROJECT_ROOT / "work").glob("*")):
+                state = load_youtube_state(work_dir)
+                if state is None:
+                    continue
+                try:
+                    comments = list_new_comments(youtube_client, state.video_id, seen_ids)
+                except Exception as e:
+                    # Real live crash, 2026-09-10: a video with comments disabled
+                    # (a completely normal state, not an error) raised
+                    # HttpError 403 here, uncaught -- one bad video was silently
+                    # aborting the check for every OTHER video too, forever,
+                    # since the same failure recurs every 20-minute tick. One
+                    # video's failure must never block checking the rest.
+                    print(
+                        f"WARNING: could not check comments for {work_dir.name} "
+                        f"({state.video_id}): {type(e).__name__}: {e}",
+                        file=sys.stderr,
+                    )
+                    continue
+                for comment in comments:
+                    draft, is_error_report = draft_comment_reply(anthropic_client, comment.text, state.title)
+                    add_pending_reply(PendingReply(
+                        comment_id=comment.comment_id, video_id=comment.video_id, author=comment.author,
+                        comment_text=comment.text, draft_reply=draft, is_error_report=is_error_report,
+                    ))
+                    new_ids.append(comment.comment_id)
+            if new_ids:
+                mark_comments_seen(new_ids)
+            self.root.after(0, self._render_pending_replies)
+        except Exception as e:
+            print(f"WARNING: YouTube comment check failed: {type(e).__name__}: {e}", file=sys.stderr)
 
     def _schedule_youtube_comment_check(self) -> None:
         threading.Thread(target=self._youtube_periodic_tick, daemon=True).start()
