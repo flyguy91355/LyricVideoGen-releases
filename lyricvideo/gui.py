@@ -350,14 +350,18 @@ class LyricVideoGUI:
         ctk.CTkButton(frame, text="Browse...", command=browse, width=90).grid(row=row, column=2, padx=4)
 
     def _on_settings_changed(self) -> None:
-        """SettingsPanel's on_change fires on every keystroke/slider-move/color-pick.
-        Suppressed while the panel is still being populated on launch (Settings.load()
-        itself is already the source of truth then -- saving mid-load would just
-        write back the same file it was read from, harmlessly but pointlessly)."""
+        """SettingsPanel's on_change fires on every keystroke/slider-move/color-pick,
+        live-updating the preview and the in-memory settings this session's own
+        Generate/Redo/Batch will use -- but never the settings FILE on disk.
+        SettingsPanel owns persistence entirely itself now (its own "Save Settings"
+        button, with an itemized confirm dialog first): a change here becoming
+        permanent the instant a slider gets nudged is exactly the real incident
+        (2026-09-10) this split was built to prevent. Suppressed while the panel
+        is still being populated on launch (Settings.load() itself is already the
+        source of truth then)."""
         if self._suppress_settings_save:
             return
         self.settings = self.settings_panel.collect()
-        self.settings.save()
         self.settings_preview.update_preview(self.settings)
 
     def _on_title_changed(self, *_args) -> None:

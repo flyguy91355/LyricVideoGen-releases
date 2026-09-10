@@ -748,3 +748,50 @@ flash a possibly-wrong button). Fixed the immediate case by hand
 one-off script using the exact same code path as the manual upload
 button) -- new video_id `yyiyDvLizQw`, scheduled to publish
 2026-09-16T14:00 ET per the existing once-a-day release spacing.
+
+## 2026-09-10 — Settings no longer auto-save; itemized confirm before any write
+
+Owner reported having moved a settings slider by accident, without
+noticing, at some point in the past -- and every single slider
+drag/color-pick/checkbox toggle was calling `Settings.save()` immediately,
+so that one unnoticed bump had already silently become the permanent
+default with no undo. First proposal (gate persistence behind an explicit
+"Save Settings" button, keep the live preview instant) got real pushback:
+"so what if i moved something by mistake and not knowing, and then later
+a changed a setting on purpose.. and when i saved, it would also saved
+the one i didnt know i moved, correct?" -- correct, and a real gap: a
+plain Save button still saves the WHOLE current state, silently including
+whatever else drifted. Fixed by making the drift visible, not just gating
+when it lands: `SettingsPanel._baseline` holds what's actually on disk;
+every change is diffed against it (`_dirty_fields`, comparing
+`asdict(baseline)` to `asdict(self.collect())` field-by-field), and any
+differing field gets a small "●" marker directly on its own label
+(`_refresh_dirty_indicators`) -- visible just scrolling past it, before
+Save is ever clicked. Save Settings' confirm dialog then lists every
+changed field as `label: old → new` (reusing each slider's own display
+`fmt` closure, now also stored per-field in `_field_formatters`, so the
+values read the same way they do on the slider itself) -- the owner
+reviews the whole list and can back out to fix a field that shouldn't be
+there before anything touches disk. Discard changes reloads `_baseline`
+with no disk write at all. Reset to Defaults still just repopulates the
+live widgets (as before); it now also requires a subsequent Save to
+persist, so previewing defaults no longer instantly overwrites the real
+config either. `gui.py`'s `_on_settings_changed` still updates the
+in-memory `self.settings` and the live preview on every change (so the
+current session's Generate/Redo/Batch always uses the latest tweak) but
+no longer calls `.save()` -- SettingsPanel owns persistence entirely on
+its own now. Verified with a real headless Tk root (this project's
+established GUI-verification precedent, not pytest, per
+`values_to_settings`' own docstring) exercising the exact reported
+scenario: change A goes unnoticed, change B is deliberate, Save's
+confirm dialog lists both by name before writing, Discard reverts to the
+last real save (not the factory default) without touching disk, and a
+change with no Save click never reaches disk at all -- plus a screenshot
+of the live dirty markers for a visual check. Mid-implementation, EVERY
+edit to `settings_panel.py` silently failed to persist to disk on the
+first attempt (each `Edit` call reported success; a fresh `Read`/`grep`
+immediately after showed the pre-edit file, unchanged) for reasons never
+identified -- caught only by verifying with `grep` after every edit
+instead of trusting the tool's own success report, and fixed by simply
+redoing the same edits a second time, each one confirmed on disk before
+moving to the next.

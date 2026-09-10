@@ -340,7 +340,21 @@ that same mapping, then downscales it for on-screen display. `gui.py`'s Settings
 column is now preview pane (fixed, on top) + the scrollable `SettingsPanel` (which
 also gained a "Reset to Defaults" button, confirmed via a dialog, that repopulates
 every control from `Settings()` in one on_change firing rather than one per field);
-main window widened to 1400x820 to fit it. `pipeline.py`'s font-resolution helper
+main window widened to 1400x820 to fit it. **`SettingsPanel` never writes to disk
+except via its own "Save Settings" button** (2026-09-10, real owner incident: every
+slider drag used to call `Settings.save()` immediately, so one accidental bump
+silently became the permanent default forever) -- `self._baseline` (the settings
+actually on disk) is compared field-by-field against the live widgets on every
+change; any field that differs gets a small "●" marker directly on its own label
+(`_refresh_dirty_indicators`), and Save Settings/Discard changes only enable when
+something is actually dirty. Save shows an itemized `old → new` confirm dialog
+for every changed field before writing anything (catches an earlier accidental
+change riding along with a later deliberate one -- the exact scenario the owner
+described); Discard just reloads `self._baseline`, touching disk not at all.
+Closing the app (or a crash) with unsaved changes simply loses them, by design.
+`gui.py`'s in-memory `self.settings` still updates live on every change (so the
+current session's own Generate/Redo/Batch always uses your latest tweak) -- only
+the on-disk file itself is gated behind the explicit Save click. `pipeline.py`'s font-resolution helper
 was renamed `_default_font` -> `default_font` (no longer module-private, since the
 preview needs it too).
 

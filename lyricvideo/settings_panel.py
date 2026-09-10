@@ -77,6 +77,17 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self.vars: dict[str, tk.Variable] = {}
         self._row = 0
         self._suppress_change = False
+        # The settings actually on disk right now -- NOT necessarily what the
+        # widgets currently show. Everything below is dirty-tracking against
+        # this baseline; it only moves forward on an explicit Save (or a
+        # Discard, which just reloads it). Nothing else in this class writes
+        # to disk. See "Save Settings" below: an accidental slider drag must
+        # never become permanent on its own (real owner incident, 2026-09-10).
+        self._baseline = settings
+        self._field_labels: dict[str, str] = {}
+        self._field_widgets: dict[str, ctk.CTkBaseClass] = {}
+        self._field_default_color: dict[str, object] = {}
+        self._field_formatters: dict[str, Callable] = {}
         self.grid_columnconfigure(1, weight=1)
         self._build()
         self.load_from(settings)
@@ -90,6 +101,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
     def _changed(self) -> None:
         if self._suppress_change:
             return
+        self._refresh_dirty_indicators()
         if self.on_change is not None:
             self.on_change()
 
@@ -98,21 +110,29 @@ class SettingsPanel(ctk.CTkScrollableFrame):
             row=self._row, column=0, columnspan=3, sticky="w", padx=6, pady=(14, 4))
         self._row += 1
 
-    def _add(self, label: str, widget) -> None:
-        ctk.CTkLabel(self, text=label, anchor="w").grid(row=self._row, column=0, sticky="w", padx=(6, 10), pady=3)
+    def _add(self, name: str, label: str, widget) -> None:
+        lbl = ctk.CTkLabel(self, text=label, anchor="w")
+        lbl.grid(row=self._row, column=0, sticky="w", padx=(6, 10), pady=3)
         widget.grid(row=self._row, column=1, sticky="ew", pady=3)
         self._row += 1
+        self._register_field_label(name, label, lbl)
+
+    def _register_field_label(self, name: str, label: str, widget) -> None:
+        self._field_labels[name] = label
+        self._field_widgets[name] = widget
+        self._field_default_color[name] = widget.cget("text_color")
 
     def _option(self, name: str, label: str, values: list) -> None:
         var = self._var(name, tk.StringVar)
         menu = ctk.CTkOptionMenu(self, values=[str(v) for v in values], variable=var)
-        self._add(label, menu)
+        self._add(name, label, menu)
 
     def _check(self, name: str, label: str) -> None:
         var = self._var(name, tk.BooleanVar)
         check = ctk.CTkCheckBox(self, text=label, variable=var)
         check.grid(row=self._row, column=0, columnspan=2, sticky="w", padx=6, pady=3)
         self._row += 1
+        self._register_field_label(name, label, check)
 
     def _slider(self, name: str, label: str, lo: float, hi: float, steps: int, fmt) -> None:
         var = self._var(name, tk.DoubleVar)
@@ -126,11 +146,12 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         slider.pack(side="left", fill="x", expand=True)
         value_label.pack(side="left", padx=(8, 0))
         _on_move(var.get())
-        self._add(label, frame)
+        self._add(name, label, frame)
+        self._field_formatters[name] = fmt
 
     def _color(self, name: str, label: str) -> None:
         var = self._var(name, tk.StringVar)
-        self._add(label, ColorButton(self, var))
+        self._add(name, label, ColorButton(self, var))
 
     def _browse_font(self) -> None:
         f = filedialog.askopenfilename(parent=self, title="Choose a font",
@@ -153,8 +174,76 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         ):
             self.load_from(Settings())
 
+    def _format_value(self, name: str, value) -> str:
+        if name == "youtube_category_id":
+            return _YOUTUBE_CATEGORY_LABELS.get(value, str(value))
+        if isinstance(value, bool):
+            return "On" if value else "Off"
+        if name in self._field_formatters:
+            return self._field_formatters[name](value)
+        if isinstance(value, str) and not value.strip():
+            return "(none)"
+        return str(value)
+
+    def _dirty_fields(self) -> dict:
+        """Every field where the live widgets disagree with the settings
+        actually on disk (self._baseline) -- name -> (old, new) raw values."""
+        baseline = asdict(self._baseline)
+        current = asdict(self.collect())
+        return {name: (baseline[name], current[name]) for name in current if current[name] != baseline[name]}
+
+    def _refresh_dirty_indicators(self) -> None:
+        """Marks each changed field's own label/checkbox with a small dot so
+        a stray slider move is visible just by scrolling past it -- the
+        first of two chances to notice, the second being the itemized
+        confirmation Save Settings shows before writing anything to disk."""
+        dirty = self._dirty_fields()
+        for name, widget in self._field_widgets.items():
+            base_text = self._field_labels[name]
+            if name in dirty:
+                widget.configure(text=f"● {base_text}", text_color="#f0a339")
+            else:
+                widget.configure(text=base_text, text_color=self._field_default_color[name])
+        state = "normal" if dirty else "disabled"
+        self.save_button.configure(state=state)
+        self.discard_button.configure(state=state)
+
+    def _on_save_clicked(self) -> None:
+        dirty = self._dirty_fields()
+        if not dirty:
+            return
+        lines = [
+            f"{self._field_labels.get(name, name)}: "
+            f"{self._format_value(name, old)} → {self._format_value(name, new)}"
+            for name, (old, new) in dirty.items()
+        ]
+        if not messagebox.askyesno("Save settings", "Save these changes?\n\n" + "\n".join(lines)):
+            return
+        settings = self.collect()
+        settings.save()
+        self._baseline = settings
+        self._refresh_dirty_indicators()
+
+    def _on_discard_clicked(self) -> None:
+        if not self._dirty_fields():
+            return
+        if messagebox.askyesno("Discard changes", "Discard all unsaved changes and reload the last saved settings?"):
+            self.load_from(self._baseline)
+
     def _build(self) -> None:
         self._section("Output")
+        save_row = ctk.CTkFrame(self, fg_color="transparent")
+        save_row.grid(row=self._row, column=0, columnspan=3, sticky="ew", padx=6, pady=(0, 4))
+        save_row.grid_columnconfigure(0, weight=1)
+        save_row.grid_columnconfigure(1, weight=1)
+        self.save_button = ctk.CTkButton(save_row, text="Save Settings", command=self._on_save_clicked, state="disabled")
+        self.save_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        self.discard_button = ctk.CTkButton(
+            save_row, text="Discard changes", command=self._on_discard_clicked, state="disabled",
+            fg_color="gray30", hover_color="gray20",
+        )
+        self.discard_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        self._row += 1
         ctk.CTkButton(
             self, text="Reset to Defaults", command=self._on_reset_clicked, fg_color="gray30", hover_color="gray20",
         ).grid(row=self._row, column=0, columnspan=3, sticky="ew", padx=6, pady=(0, 10))
@@ -169,7 +258,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._section("Typography & colors")
         self.vars["font_path"] = tk.StringVar()
         self.vars["font_path"].trace_add("write", lambda *_: self._changed())
-        self._add("Font (blank = auto)", ctk.CTkButton(self, text="Browse font...", command=self._browse_font))
+        self._add("font_path", "Font (blank = auto)",
+                   ctk.CTkButton(self, text="Browse font...", command=self._browse_font))
         self._slider("lyric_size", "Lyric size", 30, 100, 70, lambda v: f"{int(v)}")
         self._slider("chord_now_size", "Chord (NOW) size", 40, 120, 80, lambda v: f"{int(v)}")
         self._slider("chord_next_size", "Chord (NEXT) size", 20, 60, 40, lambda v: f"{int(v)}")
@@ -197,7 +287,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._section("YouTube")
         self.vars["youtube_client_secrets_path"] = tk.StringVar()
         self.vars["youtube_client_secrets_path"].trace_add("write", lambda *_: self._changed())
-        self._add("Client secrets file",
+        self._add("youtube_client_secrets_path", "Client secrets file",
                    ctk.CTkButton(self, text="Browse client secrets file...", command=self._browse_youtube_secrets))
         self._check("youtube_auto_upload", "Auto-upload finished videos to YouTube")
         self._option("youtube_privacy", "Privacy", ["public", "unlisted", "private"])
