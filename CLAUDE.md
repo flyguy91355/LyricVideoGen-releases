@@ -338,7 +338,14 @@ above the Settings panel; a manual "Upload to YouTube" button next to the
 Status line (enabled once a video finishes and YouTube is connected)
 always performs a fresh `schedule_upload()` immediately, bypassing the
 auto-upload skip-checks -- the owner's deliberate override for a
-correction or any other manual re-post. `lyricvideo/youtube_comment_state.py`
+correction or any other manual re-post. `_update_upload_button_state(work_dir)`
+swaps that button for a plain "✓ Uploaded to YouTube" label in the same
+spot whenever `load_youtube_state(work_dir)` shows the song already has a
+real upload on record (whether from auto-upload or a prior manual click)
+-- real live feedback found this necessary: an enabled button right after
+an auto-upload already succeeded looked exactly like a pending action
+(the owner assumed auto-upload had silently failed), and clicking it
+again would have created a duplicate video. `lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies
 are still awaiting the owner's review (`PendingReply` +

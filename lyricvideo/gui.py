@@ -246,6 +246,9 @@ class LyricVideoGUI:
         self.upload_button = ctk.CTkButton(
             status_frame, text="Upload to YouTube", command=self._on_manual_upload, state="disabled", width=140,
         )
+        self.upload_status_label = ctk.CTkLabel(
+            status_frame, text="✓ Uploaded to YouTube", text_color="#3ecf8e",
+        )
         self.upload_button.pack(side="left", padx=(12, 0))
 
         self.progress_bar = ctk.CTkProgressBar(left)
@@ -559,6 +562,8 @@ class LyricVideoGUI:
         self.status_var.set("Ready")
         self.progress_bar.set(0.0)
         self._clear_log()
+        self._last_work_dir = None
+        self._update_upload_button_state(None)
 
     def _on_browse_batch_folder(self) -> None:
         current = self.batch_folder_var.get()
@@ -791,6 +796,22 @@ class LyricVideoGUI:
         except Exception:
             self.youtube_status_var.set("YouTube: connected (channel name unavailable)")
 
+    def _update_upload_button_state(self, work_dir: Path | None) -> None:
+        """Swaps between the clickable "Upload to YouTube" button and a plain
+        "Uploaded to YouTube" label in the same spot -- an enabled button
+        right after an auto-upload already happened is misleading (looks
+        like a pending action) and clicking it would create a duplicate
+        video on the channel."""
+        already_uploaded = work_dir is not None and load_youtube_state(work_dir) is not None
+        if already_uploaded:
+            self.upload_button.pack_forget()
+            self.upload_status_label.pack(side="left", padx=(12, 0))
+            return
+        self.upload_status_label.pack_forget()
+        connected = youtube_auth.load_credentials() is not None
+        self.upload_button.configure(state="normal" if connected else "disabled")
+        self.upload_button.pack(side="left", padx=(12, 0))
+
     def _on_connect_youtube(self) -> None:
         secrets_path = self.settings.youtube_client_secrets_path
         if not secrets_path:
@@ -822,7 +843,7 @@ class LyricVideoGUI:
                 self.root.after(0, lambda: messagebox.showerror(
                     "Not connected", "Connect to YouTube in Settings first.",
                 ))
-                self.root.after(0, lambda: self.upload_button.configure(state="normal"))
+                self.root.after(0, lambda: self._update_upload_button_state(work_dir))
                 return
             try:
                 youtube_client = build("youtube", "v3", credentials=credentials)
@@ -832,7 +853,7 @@ class LyricVideoGUI:
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Upload failed", f"{type(e).__name__}: {e}"))
             finally:
-                self.root.after(0, lambda: self.upload_button.configure(state="normal"))
+                self.root.after(0, lambda: self._update_upload_button_state(work_dir))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1024,9 +1045,7 @@ class LyricVideoGUI:
                 self.generate_button.configure(state="normal")
                 self.redo_button.configure(state="normal")
                 self.batch_button.configure(state="normal")
-                self.upload_button.configure(
-                    state="normal" if youtube_auth.load_credentials() is not None else "disabled"
-                )
+                self._update_upload_button_state(self._last_work_dir)
                 messagebox.showinfo("Video ready", f"Wrote {payload}")
                 return
             elif kind == "error":

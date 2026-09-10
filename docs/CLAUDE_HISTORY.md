@@ -538,3 +538,22 @@ video in Studio instead. Since that subcategory only appears under the
 Education top-level category, `Settings.youtube_category_id` default changed
 from `"26"` (Howto & Style) to `"27"` (Education) so the option is actually
 there for the owner to pick when they go set it by hand.
+
+## 2026-09-10 — First real end-to-end YouTube upload test, and its real bug
+
+Owner completed the full Google Cloud OAuth setup live (project, YouTube
+Data API v3 enabled, OAuth consent screen, test user, Desktop app
+credential) and ran a real Redo with "Auto-upload finished videos to
+YouTube" checked. Owner initially thought it failed ("done but not
+uploading.. has a upload to youtube button tho") because the manual
+"Upload to YouTube" button was still sitting there active after the run
+finished. The real log showed `Uploaded to YouTube: all-the-young-dudes`
+-- it had actually succeeded; the auto-upload path only ever logged a
+quiet console line, unlike the manual button's own popup confirmation,
+so success was easy to mistake for failure. Owner's own diagnosis was
+right: an active button in that state is misleading and risks a
+duplicate upload if clicked. Fixed with `_update_upload_button_state()`
+swapping the button for a plain confirmation label whenever
+`load_youtube_state(work_dir)` shows the song already has a real upload
+on record. Verified directly against the real `youtube_state.json`
+this test run actually wrote (`video_id: uCFrQ2DE76Y`).
