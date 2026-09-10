@@ -10,21 +10,44 @@ try:
 except ImportError:
     from moviepy import AudioFileClip, VideoClip  # moviepy >= 2.0 dropped .editor
 
+from .chord_diagram import draw_chord_legend
 from .layout import build_scene
-from .models import InstrumentalChord, LyricLine
-from .render import FRAME_SIZE, apply_ken_burns, draw_scene, ken_burns_preset_for_key
+from .models import ChordTrack, LyricLine, current_chord_at
+from .render import (
+    ACCENT_COLOR, DIM_TEXT_COLOR, FRAME_SIZE, apply_ken_burns, draw_chord_bar, draw_scene,
+    ken_burns_preset_for_key,
+)
 
 FPS = 24
 
 
 def assemble_video(
     lines: list[LyricLine],
+    chord_track: ChordTrack,
     image_dir: Path,
     audio_path: Path,
     out_path: Path,
     font_path: str,
     fallback_color: tuple[int, int, int] = (30, 30, 40),
-    instrumental_chords: list[InstrumentalChord] | None = None,
+    *,
+    frame_size: tuple[int, int] = FRAME_SIZE,
+    fps: int = FPS,
+    encoder: str = "libx264",
+    crf: int = 20,
+    lyric_size: int = 48,
+    text_color: tuple[int, int, int] = (255, 255, 255),
+    accent_color: tuple[int, int, int] = ACCENT_COLOR,
+    dim_text_color: tuple[int, int, int] = DIM_TEXT_COLOR,
+    panel_color: tuple[int, int, int] = (11, 18, 32),
+    panel_alpha: int = 150,
+    chord_now_size: int = 64,
+    chord_next_size: int = 32,
+    show_chord_timeline: bool = True,
+    show_key_bpm: bool = True,
+    timeline_window_sec: float = 12.0,
+    chord_legend_labels: list[str] | None = None,
+    show_chord_legend: bool = True,
+    chord_legend_scale: float = 1.0,
 ) -> None:
     image_cache: dict[str, Image.Image] = {}
     audio_clip = AudioFileClip(str(audio_path))
@@ -36,18 +59,38 @@ def assemble_video(
             if path.exists():
                 image_cache[key] = Image.open(path).convert("RGB")
             else:
-                image_cache[key] = Image.new("RGB", FRAME_SIZE, fallback_color)
+                image_cache[key] = Image.new("RGB", frame_size, fallback_color)
         return image_cache[key]
 
     def make_frame(t: float):
-        scene = build_scene(lines, t, instrumental_chords=instrumental_chords, audio_duration=duration)
+        scene = build_scene(lines, t, chord_track=chord_track, audio_duration=duration)
         start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(scene.image_key)
         bg = apply_ken_burns(
             get_image(scene.image_key), scene.ken_burns_progress,
             start_x, start_y, end_x, end_y, zoom_start, zoom_end,
+            frame_size=frame_size,
         )
-        frame = draw_scene(scene, bg, font_path)
+        frame = draw_scene(
+            scene, bg, font_path, font_size=lyric_size, text_color=text_color, frame_size=frame_size,
+        )
+        frame = draw_chord_bar(
+            frame, chord_track, t, font_path,
+            frame_size=frame_size, accent_color=accent_color, dim_text_color=dim_text_color,
+            panel_color=panel_color, panel_alpha=panel_alpha, chord_now_size=chord_now_size,
+            chord_next_size=chord_next_size, show_chord_timeline=show_chord_timeline,
+            show_key_bpm=show_key_bpm, timeline_window_sec=timeline_window_sec,
+        )
+        current = current_chord_at(chord_track, t)
+        frame = draw_chord_legend(
+            frame, chord_legend_labels or [], current.label if current is not None else None, font_path,
+            frame_size=frame_size, show_chord_legend=show_chord_legend, size_scale=chord_legend_scale,
+            accent_color=accent_color, text_color=text_color, dim_text_color=dim_text_color,
+            panel_color=panel_color,
+        )
         return np.array(frame)
 
     video_clip = VideoClip(make_frame, duration=duration).set_audio(audio_clip)
-    video_clip.write_videofile(str(out_path), fps=FPS, codec="libx264", audio_codec="aac")
+    video_clip.write_videofile(
+        str(out_path), fps=fps, codec=encoder, audio_codec="aac",
+        ffmpeg_params=["-crf", str(crf)],
+    )

@@ -1,8 +1,13 @@
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
-from lyricvideo.render import apply_ken_burns, draw_scene, ken_burns_preset_for_key, FRAME_SIZE, KEN_BURNS_PRESETS
+from lyricvideo.render import (
+    CHORD_BOX, FRAME_SIZE, KEN_BURNS_PRESETS,
+    apply_ken_burns, compute_chord_bar_layout, draw_chord_bar, draw_scene,
+    ken_burns_preset_for_key, _split_line_into_rows,
+)
 from lyricvideo.layout import Scene, SceneLine, SceneWord
+from lyricvideo.models import ChordEvent, ChordTrack
 
 
 def test_apply_ken_burns_returns_frame_sized_image():
@@ -13,14 +18,18 @@ def test_apply_ken_burns_returns_frame_sized_image():
     assert out_end.size == FRAME_SIZE
 
 
+def test_apply_ken_burns_respects_custom_frame_size():
+    img = Image.new("RGB", (800, 600), (10, 20, 30))
+    out = apply_ken_burns(img, progress=0.5, frame_size=(1280, 720))
+    assert out.size == (1280, 720)
+
+
 def test_apply_ken_burns_pans_toward_end_position():
-    # Use a gradient image so different crop regions are actually distinguishable.
     img = Image.new("RGB", (800, 600))
     for x in range(800):
         for y in range(0, 600, 50):
             img.paste((x % 256, 0, 0), (x, y, x + 1, y + 50))
 
-    # left -> right pan at full zoom: start should differ from end
     start = np.array(apply_ken_burns(img, progress=0.0, start_x=0.0, end_x=1.0, zoom_start=1.3, zoom_end=1.3))
     end = np.array(apply_ken_burns(img, progress=1.0, start_x=0.0, end_x=1.0, zoom_start=1.3, zoom_end=1.3))
     assert not np.array_equal(start, end)
@@ -39,7 +48,6 @@ def test_ken_burns_preset_for_key_is_deterministic():
 
 def test_ken_burns_preset_for_key_varies_across_keys():
     presets_seen = {ken_burns_preset_for_key(f"key-{i}") for i in range(len(KEN_BURNS_PRESETS) * 3)}
-    # With enough distinct keys, more than just one single preset should appear.
     assert len(presets_seen) > 1
 
 
@@ -48,7 +56,7 @@ def test_draw_scene_renders_without_error_and_draws_text(test_font_path):
     scene = Scene(
         lines=[
             SceneLine(
-                words=[SceneWord(text="hello", chord="G"), SceneWord(text="there")],
+                words=[SceneWord(text="hello"), SceneWord(text="there")],
                 is_current=True,
                 distance_from_current=0,
             ),
@@ -78,24 +86,233 @@ def test_draw_scene_scroll_progress_shifts_line_position(test_font_path):
     frame_at_start = np.array(draw_scene(make_scene(0.0), bg, test_font_path))
     frame_at_mid = np.array(draw_scene(make_scene(0.5), bg, test_font_path))
 
-    # Same text, different vertical position -> the two rendered frames must
-    # actually differ (a real regression here would be scroll_progress being
-    # silently ignored and every frame rendering identically).
     assert not np.array_equal(frame_at_start, frame_at_mid)
 
 
-def test_draw_scene_shows_instrumental_chord_instead_of_lines(test_font_path):
-    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
+def test_draw_scene_respects_custom_text_color(test_font_path):
     scene = Scene(
-        lines=[
-            SceneLine(words=[SceneWord(text="should not appear")], is_current=True, distance_from_current=0),
-        ],
-        image_key="abc123",
-        ken_burns_progress=0.0,
-        instrumental_chord="Em7",
+        lines=[SceneLine(words=[SceneWord(text="hi")], is_current=True, distance_from_current=0)],
+        image_key="k", ken_burns_progress=0.0,
     )
+    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
 
-    frame = draw_scene(scene, bg, test_font_path)
+    default_frame = np.array(draw_scene(scene, bg, test_font_path))
+    red_frame = np.array(draw_scene(scene, bg, test_font_path, text_color=(255, 0, 0)))
+
+    assert not np.array_equal(default_frame, red_frame)
+
+
+def test_draw_scene_respects_custom_frame_size(test_font_path):
+    scene = Scene(
+        lines=[SceneLine(words=[SceneWord(text="hi")], is_current=True, distance_from_current=0)],
+        image_key="k", ken_burns_progress=0.0,
+    )
+    bg = Image.new("RGB", (1280, 720), (0, 0, 0))
+
+    frame = draw_scene(scene, bg, test_font_path, frame_size=(1280, 720))
+
+    assert frame.size == (1280, 720)
+
+
+def test_compute_chord_bar_layout_scales_with_frame_size():
+    default_layout = compute_chord_bar_layout(FRAME_SIZE)
+    small_layout = compute_chord_bar_layout((1280, 720))
+
+    assert default_layout["chord_box"] == CHORD_BOX
+    assert small_layout["chord_box"] != CHORD_BOX
+    assert all(0 <= c <= 1280 for c in (small_layout["chord_box"][0], small_layout["chord_box"][2]))
+
+
+def test_draw_chord_bar_renders_without_error(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C"), ChordEvent(2.0, 4.0, "G")], key="C major", bpm=120.0)
+
+    frame = draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path)
 
     assert frame.size == FRAME_SIZE
-    assert frame.getextrema() != ((0, 0), (0, 0), (0, 0))
+    assert frame.crop(CHORD_BOX).getextrema() != ((20, 20), (20, 20), (20, 20))
+
+
+def test_draw_chord_bar_shows_dash_when_no_current_chord(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[ChordEvent(5.0, 7.0, "C")])
+
+    frame = draw_chord_bar(bg, chord_track, t=0.0, font_path=test_font_path)
+
+    assert frame.size == FRAME_SIZE
+
+
+def test_draw_chord_bar_does_not_mutate_input_frame(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C")])
+
+    draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path)
+
+    assert bg.getextrema() == ((20, 20), (20, 20), (20, 20))
+
+
+def test_draw_chord_bar_respects_custom_accent_color(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C")])
+
+    default_frame = np.array(draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path))
+    red_frame = np.array(draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path, accent_color=(255, 0, 0)))
+
+    assert not np.array_equal(default_frame, red_frame)
+
+
+def test_draw_chord_bar_hides_timeline_lane_when_disabled(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C"), ChordEvent(2.0, 20.0, "G")])
+
+    shown = draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path, show_chord_timeline=True)
+    hidden = draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path, show_chord_timeline=False)
+
+    layout = compute_chord_bar_layout(FRAME_SIZE)
+    lane_box = layout["lane_box"]
+    # With the lane hidden, that region must still show the plain panel background,
+    # not a chord segment block -- so it must differ from the shown-lane version.
+    assert not np.array_equal(np.array(shown.crop(lane_box)), np.array(hidden.crop(lane_box)))
+
+
+def test_draw_chord_bar_hides_key_bpm_badge_when_disabled(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C")], key="C major", bpm=120.0)
+
+    shown = np.array(draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path, show_key_bpm=True))
+    hidden = np.array(draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path, show_key_bpm=False))
+
+    assert not np.array_equal(shown, hidden)
+
+
+def test_draw_chord_bar_respects_custom_timeline_window(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    # A chord far enough out that only a wide window includes any of it.
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C"), ChordEvent(2.0, 4.0, "G"), ChordEvent(20.0, 22.0, "Am")])
+
+    narrow = np.array(draw_chord_bar(bg, chord_track, t=0.0, font_path=test_font_path, timeline_window_sec=3.0))
+    wide = np.array(draw_chord_bar(bg, chord_track, t=0.0, font_path=test_font_path, timeline_window_sec=25.0))
+
+    assert not np.array_equal(narrow, wide)
+
+
+def _row_width(row, draw, font):
+    space_w = draw.textlength(" ", font=font)
+    widths = [draw.textlength(w.text, font=font) for w in row]
+    return sum(widths) + space_w * max(len(row) - 1, 0)
+
+
+def test_split_line_into_rows_keeps_a_short_line_on_one_row(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(test_font_path, 20)
+    words = [SceneWord(text=w) for w in "hello there".split()]
+
+    rows = _split_line_into_rows(words, draw, font, max_width=1000)
+
+    assert len(rows) == 1
+    assert [w.text for w in rows[0]] == ["hello", "there"]
+
+
+def test_split_line_into_rows_splits_at_commas_when_too_wide(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(test_font_path, 20)
+    words = [SceneWord(text=w) for w in "one, two, three, four, five, six".split()]
+    full_width = _row_width(words, draw, font)
+
+    rows = _split_line_into_rows(words, draw, font, max_width=full_width * 0.5)
+
+    assert len(rows) > 1
+    # No words lost or reordered.
+    assert [w.text for row in rows for w in row] == [w.text for w in words]
+    # Every row must actually fit inside max_width.
+    for row in rows:
+        assert _row_width(row, draw, font) <= full_width * 0.5
+    # Splits happen after a comma wherever a row has more than one word.
+    for row in rows[:-1]:
+        if len(row) > 1:
+            assert row[-1].text.endswith(",")
+
+
+def test_split_line_into_rows_falls_back_to_word_wrap_without_commas(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(test_font_path, 20)
+    words = [SceneWord(text=w) for w in "supercalifragilisticexpialidocious is quite a remarkably long word indeed today".split()]
+    full_width = _row_width(words, draw, font)
+
+    rows = _split_line_into_rows(words, draw, font, max_width=full_width * 0.5)
+
+    assert len(rows) > 1
+    assert [w.text for row in rows for w in row] == [w.text for w in words]
+    for row in rows:
+        assert _row_width(row, draw, font) <= full_width * 0.5
+
+
+def test_split_line_into_rows_never_drops_a_single_word_wider_than_max_width(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(test_font_path, 20)
+    words = [SceneWord(text="Supercalifragilisticexpialidocious")]
+
+    rows = _split_line_into_rows(words, draw, font, max_width=10)
+
+    assert [w.text for row in rows for w in row] == ["Supercalifragilisticexpialidocious"]
+
+
+def test_draw_scene_wraps_a_long_line_so_it_never_touches_the_frame_edges(test_font_path):
+    # The exact line that overflowed both edges of a real rendered video
+    # (2026-09-09, "speak-to-me-breathe") at the default 48pt font size.
+    long_text = (
+        "Run, rabbit, run, dig that hole, forget the Sun, and when at last "
+        "the work is done, don't sit down, its time to dig another one"
+    )
+    scene = Scene(
+        lines=[
+            SceneLine(
+                words=[SceneWord(text=w) for w in long_text.split()],
+                is_current=True, distance_from_current=0,
+            ),
+        ],
+        image_key="k", ken_burns_progress=0.0,
+    )
+    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
+
+    frame = np.array(draw_scene(scene, bg, test_font_path))
+
+    edge_width = 10
+    assert np.array_equal(frame[:, :edge_width], np.zeros_like(frame[:, :edge_width]))
+    assert np.array_equal(frame[:, -edge_width:], np.zeros_like(frame[:, -edge_width:]))
+
+
+def test_draw_scene_wrapped_line_keeps_the_configured_font_size(test_font_path):
+    """No bandaid font-shrinking -- a long line wraps onto more rows at the
+    exact same font size, never smaller."""
+    from PIL import ImageFont as PILImageFont
+
+    long_text = (
+        "Run, rabbit, run, dig that hole, forget the Sun, and when at last "
+        "the work is done, don't sit down, its time to dig another one"
+    )
+    scene = Scene(
+        lines=[
+            SceneLine(
+                words=[SceneWord(text=w) for w in long_text.split()],
+                is_current=True, distance_from_current=0,
+            ),
+        ],
+        image_key="k", ken_burns_progress=0.0,
+    )
+    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
+
+    frame = np.array(draw_scene(scene, bg, test_font_path, font_size=48))
+    reference_font = PILImageFont.truetype(test_font_path, 48)
+    ascent, descent = reference_font.getmetrics()
+
+    # The wrapped text must still reach the full glyph height a real 48pt
+    # font produces -- proof the font was never shrunk to fit.
+    rows_with_content = np.any(frame != 0, axis=(1, 2))
+    content_rows = np.where(rows_with_content)[0]
+    assert content_rows.size > 0
+    assert (content_rows.max() - content_rows.min()) >= (ascent + descent)

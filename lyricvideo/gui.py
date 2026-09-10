@@ -10,23 +10,61 @@ import threading
 import tkinter as tk
 import traceback
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox
 
+import customtkinter as ctk
 import httpx
 from dotenv import load_dotenv
 
-from .pipeline import run_pipeline
+from .identify import extract_metadata
+from .pipeline import (
+    STAGES,
+    run_pipeline,
+    slugify as _slugify,
+    list_redoable_songs,
+    load_redo_inputs,
+    backup_song_outputs,
+    prepare_images_for_fresh_regeneration,
+)
+from .settings import Settings
+from .settings_panel import SettingsPanel
+from .settings_preview import SettingsPreviewFrame
 from .update.apply import copy_updatable_files, extract_release_archive, requirements_changed
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 
+_CR_LF_RE = re.compile(r"[\r\n]")
+
+
+def _split_log_text(pending: str, text: str) -> tuple[str, str]:
+    """Terminal-style \\r/\\n handling for the log widget: \\n commits the
+    current line permanently, \\r discards it and starts the line over (this
+    is what tqdm-style progress bars send on every update). Returns
+    (new_pending_line, text_to_commit) -- text_to_commit is zero or more
+    complete newline-terminated lines safe to insert verbatim; new_pending
+    is the trailing not-yet-terminated content that should currently be
+    showing as the widget's last, still-changeable line.
+    """
+    if not text:
+        return pending, ""
+    committed: list[str] = []
+    current = pending
+    start = 0
+    for m in _CR_LF_RE.finditer(text):
+        idx = m.start()
+        current += text[start:idx]
+        if m.group() == "\n":
+            committed.append(current + "\n")
+        current = ""
+        start = idx + 1
+    current += text[start:]
+    return current, "".join(committed)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
 
-
-def _slugify(title: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
-    return slug or "untitled-song"
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
 
 class _QueueWriter:
@@ -47,29 +85,34 @@ class _QueueWriter:
 
 
 class LyricVideoGUI:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: ctk.CTk):
         self.root = root
         current_version = read_local_version(str(_VERSION_FILE_PATH)) or "v0.0.0"
-        root.title(f"LyricVideoGen {current_version}")
-        root.geometry("760x600")
+        root.title(f"PlayAlongVideoProduction {current_version}")
+        root.geometry("1400x820")
 
         self._queue: "queue.Queue" = queue.Queue()
         self._update_queue: "queue.Queue" = queue.Queue()
         self._current_version = current_version
         self._available_update: dict | None = None
         self._running = False
+        self._log_pending = ""
+        self._log_has_uncommitted_line = False
+        self._suppress_settings_save = True  # True while load_from() is populating widgets on launch
+
+        self.settings = Settings.load()
 
         self.title_var = tk.StringVar()
         self.audio_var = tk.StringVar()
-        self.lyrics_var = tk.StringVar()
-        self.tab_pdf_var = tk.StringVar()
-        self.chords_text_var = tk.StringVar()
         self.work_dir_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Ready")
+        self.redo_song_var = tk.StringVar()
+        self.redo_new_images_var = tk.BooleanVar(value=False)
 
         self.title_var.trace_add("write", self._on_title_changed)
 
         self._build_widgets()
+        self._suppress_settings_save = False
         self._check_api_keys()
         self._start_update_check()
 
@@ -77,66 +120,104 @@ class LyricVideoGUI:
         pad = {"padx": 8, "pady": 4}
 
         self.update_banner_var = tk.StringVar()
-        self.update_banner = ttk.Label(
+        self.update_banner = ctk.CTkLabel(
             self.root,
             textvariable=self.update_banner_var,
-            foreground="#0060c0",
+            text_color="#4da3ff",
             cursor="hand2",
             anchor="w",
         )
         self.update_banner.bind("<Button-1>", self._on_update_banner_clicked)
 
-        frame = ttk.Frame(self.root)
-        frame.pack(fill="x", **pad)
-        frame.columnconfigure(1, weight=1)
-        self.top_frame = frame
+        # Two-column body: left = single-song form + Redo, right = SettingsPanel.
+        body = ctk.CTkFrame(self.root, fg_color="transparent")
+        body.pack(fill="both", expand=True, **pad)
+        body.grid_columnconfigure(0, weight=3)
+        body.grid_columnconfigure(1, weight=2)
+        body.grid_rowconfigure(0, weight=1)
 
-        self._add_row(frame, 0, "Song title:", self.title_var)
+        left = ctk.CTkFrame(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.top_frame = left  # anchor for the update banner's `before=` pack
+
+        form = ctk.CTkFrame(left, fg_color="transparent")
+        form.pack(fill="x", padx=10, pady=10)
+        form.grid_columnconfigure(1, weight=1)
+
+        self._add_row(form, 0, "Song title (auto-filled, editable):", self.title_var)
         self._add_file_row(
-            frame, 1, "Audio file (mp3/wav):", self.audio_var,
+            form, 1, "Audio file (mp3/wav):", self.audio_var,
             [("Audio files", "*.mp3 *.wav *.m4a *.flac"), ("All files", "*.*")],
+            on_selected=self._on_audio_selected,
         )
-        self._add_file_row(
-            frame, 2, "Lyrics text file:", self.lyrics_var,
-            [("Text files", "*.txt"), ("All files", "*.*")],
-        )
-        self._add_file_row(
-            frame, 3, "Tab/chords PDF:", self.tab_pdf_var,
-            [("PDF files", "*.pdf"), ("All files", "*.*")],
-        )
-        self._add_file_row(
-            frame, 4, "Or: chord-over-lyric text file:", self.chords_text_var,
-            [("Text files", "*.txt"), ("All files", "*.*")],
-        )
-        self._add_row(frame, 5, "Work directory:", self.work_dir_var)
+        self._add_row(form, 2, "Work directory:", self.work_dir_var)
 
-        note = ttk.Label(
-            frame,
-            text="Supply either the tab PDF, or the chord-over-lyric text file (skips\n"
-            "Claude/vision entirely for chord placement -- use this if the PDF path fails\n"
-            "with a content-filtering error).",
-            foreground="#666",
+        note = ctk.CTkLabel(
+            form,
+            text="Title, artist, and lyrics are identified automatically from the audio\n"
+            "file's tags and online lookup -- edit the title above if it's wrong. Chords\n"
+            "are detected directly from the audio; no tab or chord sheet is needed.",
+            text_color="gray60",
             justify="left",
+            anchor="w",
         )
-        note.grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 8))
+        note.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 8))
 
-        self.generate_button = ttk.Button(frame, text="Generate Video", command=self._on_generate)
-        self.generate_button.grid(row=7, column=0, columnspan=3, pady=8)
+        button_row = ctk.CTkFrame(form, fg_color="transparent")
+        button_row.grid(row=4, column=0, columnspan=3, pady=8)
+        self.generate_button = ctk.CTkButton(button_row, text="Generate Video", command=self._on_generate)
+        self.generate_button.pack(side="left", padx=4)
+        self.new_song_button = ctk.CTkButton(
+            button_row, text="New Song", command=self._on_new_song, fg_color="gray30", hover_color="gray20",
+        )
+        self.new_song_button.pack(side="left", padx=4)
 
-        status_frame = ttk.Frame(self.root)
-        status_frame.pack(fill="x", **pad)
-        ttk.Label(status_frame, text="Status:").pack(side="left")
-        ttk.Label(status_frame, textvariable=self.status_var, foreground="#0a6").pack(side="left", padx=6)
+        status_frame = ctk.CTkFrame(left, fg_color="transparent")
+        status_frame.pack(fill="x", padx=10, pady=(0, 4))
+        ctk.CTkLabel(status_frame, text="Status:").pack(side="left")
+        ctk.CTkLabel(status_frame, textvariable=self.status_var, text_color="#3ecf8e").pack(
+            side="left", padx=6
+        )
 
-        self.log_widget = scrolledtext.ScrolledText(self.root, height=20, state="disabled", wrap="word")
-        self.log_widget.pack(fill="both", expand=True, **pad)
+        self.progress_bar = ctk.CTkProgressBar(left)
+        self.progress_bar.set(0.0)
+        self.progress_bar.pack(fill="x", padx=10, pady=(0, 10))
 
-    def _add_row(self, frame: ttk.Frame, row: int, label: str, var: tk.StringVar) -> None:
-        ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=var, width=60).grid(row=row, column=1, sticky="ew", padx=4)
+        redo_frame = ctk.CTkFrame(left)
+        redo_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkLabel(redo_frame, text="Redo an Existing Song", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=8, pady=(8, 4)
+        )
+        redo_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
+        redo_controls.pack(fill="x", padx=8, pady=(0, 8))
+        self.redo_combo = ctk.CTkComboBox(
+            redo_controls, variable=self.redo_song_var,
+            values=list_redoable_songs(PROJECT_ROOT / "work"), width=260, state="readonly",
+        )
+        self.redo_combo.pack(side="left", padx=(0, 8))
+        ctk.CTkCheckBox(
+            redo_controls, text="Generate new images", variable=self.redo_new_images_var,
+        ).pack(side="left", padx=8)
+        self.redo_button = ctk.CTkButton(redo_controls, text="Redo", command=self._on_redo, width=80)
+        self.redo_button.pack(side="left", padx=8)
+
+        self.log_widget = ctk.CTkTextbox(left, state="disabled", wrap="word")
+        self.log_widget.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        right = ctk.CTkFrame(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        self.settings_preview = SettingsPreviewFrame(right, self.settings)
+        self.settings_preview.pack(fill="x", padx=6, pady=(6, 0))
+        self.settings_panel = SettingsPanel(right, self.settings, on_change=self._on_settings_changed)
+        self.settings_panel.pack(fill="both", expand=True, padx=6, pady=6)
+
+    def _add_row(self, frame: ctk.CTkFrame, row: int, label: str, var: tk.StringVar) -> None:
+        ctk.CTkLabel(frame, text=label).grid(row=row, column=0, sticky="w")
+        ctk.CTkEntry(frame, textvariable=var, width=360).grid(row=row, column=1, sticky="ew", padx=4)
 
     def _add_file_row(
-        self, frame: ttk.Frame, row: int, label: str, var: tk.StringVar, filetypes: list
+        self, frame: ctk.CTkFrame, row: int, label: str, var: tk.StringVar, filetypes: list,
+        on_selected=None,
     ) -> None:
         self._add_row(frame, row, label, var)
 
@@ -144,13 +225,48 @@ class LyricVideoGUI:
             path = filedialog.askopenfilename(filetypes=filetypes)
             if path:
                 var.set(path)
+                if on_selected is not None:
+                    on_selected(path)
 
-        ttk.Button(frame, text="Browse...", command=browse).grid(row=row, column=2, padx=4)
+        ctk.CTkButton(frame, text="Browse...", command=browse, width=90).grid(row=row, column=2, padx=4)
+
+    def _on_settings_changed(self) -> None:
+        """SettingsPanel's on_change fires on every keystroke/slider-move/color-pick.
+        Suppressed while the panel is still being populated on launch (Settings.load()
+        itself is already the source of truth then -- saving mid-load would just
+        write back the same file it was read from, harmlessly but pointlessly)."""
+        if self._suppress_settings_save:
+            return
+        self.settings = self.settings_panel.collect()
+        self.settings.save()
+        self.settings_preview.update_preview(self.settings)
 
     def _on_title_changed(self, *_args) -> None:
         if not self._running:
             slug = _slugify(self.title_var.get())
             self.work_dir_var.set(str(PROJECT_ROOT / "work" / slug))
+
+    def _on_audio_selected(self, path: str) -> None:
+        """Best-effort auto-fill of the title once an audio file is picked --
+        never overwrites a title the owner already typed, and any failure
+        (offline, unreadable file) is silently ignored: Generate still works
+        with an auto-identified title computed fresh inside run_pipeline's own
+        identify stage regardless of whether this GUI-side preview succeeds."""
+        if self.title_var.get().strip():
+            return
+        thread = threading.Thread(target=self._identify_worker, args=(path,), daemon=True)
+        thread.start()
+
+    def _identify_worker(self, path: str) -> None:
+        try:
+            info = extract_metadata(Path(path))
+        except Exception:
+            return
+        self.root.after(0, lambda: self._apply_identified_title(info.title))
+
+    def _apply_identified_title(self, title: str) -> None:
+        if not self.title_var.get().strip():  # still empty -- no manual edit arrived meanwhile
+            self.title_var.set(title)
 
     def _check_api_keys(self) -> None:
         load_dotenv(PROJECT_ROOT / ".env")
@@ -205,31 +321,43 @@ class LyricVideoGUI:
             self._open_update_dialog(self._available_update)
 
     def _open_update_dialog(self, release: dict) -> None:
-        dialog = tk.Toplevel(self.root)
+        dialog = ctk.CTkToplevel(self.root)
         dialog.title(f"Update available: {release['tag_name']}")
-        dialog.geometry("480x360")
+        dialog_w, dialog_h = 480, 360
+        self.root.update_idletasks()
+        # Centered over the main window and kept above it (transient +
+        # grab_set + lift/focus_force) -- a plain Toplevel can otherwise open
+        # behind the main window with no visible indication, which is
+        # exactly how the owner missed the Relaunch Now button appearing.
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_h) // 2
+        dialog.geometry(f"{dialog_w}x{dialog_h}+{max(x, 0)}+{max(y, 0)}")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.lift()
+        dialog.focus_force()
         self._update_dialog_window = dialog
 
-        notes_widget = scrolledtext.ScrolledText(dialog, wrap="word", height=14)
+        notes_widget = ctk.CTkTextbox(dialog, wrap="word", height=220)
         notes_widget.insert("1.0", release.get("notes", "") or "(no release notes)")
         notes_widget.configure(state="disabled")
         notes_widget.pack(fill="both", expand=True, padx=8, pady=8)
 
         self._update_status_var = tk.StringVar(value="")
-        ttk.Label(dialog, textvariable=self._update_status_var, foreground="#666").pack(
+        ctk.CTkLabel(dialog, textvariable=self._update_status_var, text_color="gray60").pack(
             anchor="w", padx=8
         )
 
-        self._update_button_frame = ttk.Frame(dialog)
+        self._update_button_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         self._update_button_frame.pack(fill="x", padx=8, pady=8)
 
-        self._update_apply_button = ttk.Button(
+        self._update_apply_button = ctk.CTkButton(
             self._update_button_frame,
             text="Apply Update",
             command=lambda: self._on_apply_update_clicked(release),
         )
         self._update_apply_button.pack(side="left")
-        ttk.Button(self._update_button_frame, text="Close", command=dialog.destroy).pack(
+        ctk.CTkButton(self._update_button_frame, text="Close", command=dialog.destroy).pack(
             side="right"
         )
 
@@ -248,7 +376,7 @@ class LyricVideoGUI:
             "touched.",
         ):
             return
-        self._update_apply_button.state(["disabled"])
+        self._update_apply_button.configure(state="disabled")
         self._update_status_var.set("Downloading...")
         thread = threading.Thread(
             target=self._apply_update_worker, args=(release,), daemon=True
@@ -313,60 +441,101 @@ class LyricVideoGUI:
     def _on_apply_update_done(self, tag_name: str) -> None:
         self._update_status_var.set(f"Updated to {tag_name}. Relaunch to use it.")
         self._update_apply_button.pack_forget()
-        ttk.Button(
+        ctk.CTkButton(
             self._update_button_frame, text="Relaunch Now", command=self._on_relaunch_clicked
         ).pack(side="left")
 
     def _on_apply_update_error(self, message: str) -> None:
         self._update_status_var.set(f"Update failed: {message}")
-        self._update_apply_button.state(["!disabled"])
+        self._update_apply_button.configure(state="normal")
 
     def _on_relaunch_clicked(self) -> None:
         venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
         subprocess.Popen([str(venv_python), "-m", "lyricvideo.gui"], cwd=str(PROJECT_ROOT))
         self.root.destroy()
 
+    def _on_new_song(self) -> None:
+        if self._running:
+            return
+        self.title_var.set("")
+        self.audio_var.set("")
+        self.work_dir_var.set("")  # after title_var -- overrides its own auto-fill trace
+        self.status_var.set("Ready")
+        self.progress_bar.set(0.0)
+        self._clear_log()
+
     def _on_generate(self) -> None:
         if self._running:
             return
 
-        title = self.title_var.get().strip()
-        audio = self.audio_var.get().strip()
-        lyrics = self.lyrics_var.get().strip()
-        tab_pdf = self.tab_pdf_var.get().strip()
-        chords_text = self.chords_text_var.get().strip()
+        title = self.title_var.get().strip()  # optional -- run_pipeline's own
+        audio = self.audio_var.get().strip()   # identify stage falls back if blank
         work_dir = self.work_dir_var.get().strip()
 
-        if not title:
-            messagebox.showerror("Missing input", "Song title is required.")
-            return
         if not audio:
             messagebox.showerror("Missing input", "Audio file is required.")
-            return
-        if not tab_pdf and not chords_text:
-            messagebox.showerror(
-                "Missing input", "Supply either a tab PDF or a chord-over-lyric text file."
-            )
             return
         if not work_dir:
             messagebox.showerror("Missing input", "Work directory is required.")
             return
 
         self._running = True
-        self.generate_button.state(["disabled"])
+        self.generate_button.configure(state="disabled")
+        self.redo_button.configure(state="disabled")
         self.status_var.set("Starting...")
+        self.progress_bar.set(0.0)
         self._clear_log()
 
         thread = threading.Thread(
             target=self._run_worker,
-            args=(
-                Path(audio),
-                Path(tab_pdf) if tab_pdf else None,
-                Path(work_dir),
-                title,
-                Path(lyrics) if lyrics else None,
-                Path(chords_text) if chords_text else None,
-            ),
+            args=(Path(audio), Path(work_dir), title or None),
+            daemon=True,
+        )
+        thread.start()
+        self.root.after(100, self._poll_queue)
+
+    def _on_redo(self) -> None:
+        if self._running:
+            return
+
+        slug = self.redo_song_var.get().strip()
+        if not slug:
+            messagebox.showerror("No song selected", "Pick a song from the dropdown to redo.")
+            return
+
+        song_dir = PROJECT_ROOT / "work" / slug
+        try:
+            audio_path, title = load_redo_inputs(song_dir)
+        except Exception as e:
+            messagebox.showerror("Could not load song", f"{type(e).__name__}: {e}")
+            return
+
+        generate_new_images = self.redo_new_images_var.get()
+        if not messagebox.askyesno(
+            "Redo song",
+            f'Redo "{title}" using the current program?\n\n'
+            "This re-syncs chords/lyrics with today's code and re-renders the "
+            "video, overwriting it in place -- the current video and timing "
+            "data are backed up first. "
+            + ("New AI images will be generated." if generate_new_images
+               else "Existing images will be reused (no AI cost)."),
+        ):
+            return
+
+        backup_song_outputs(song_dir, _slugify(title))
+        if generate_new_images:
+            prepare_images_for_fresh_regeneration(song_dir / "images")
+
+        self._running = True
+        self.generate_button.configure(state="disabled")
+        self.redo_button.configure(state="disabled")
+        self.status_var.set("Starting...")
+        self.progress_bar.set(0.0)
+        self._clear_log()
+
+        thread = threading.Thread(
+            target=self._run_worker,
+            args=(audio_path, song_dir, title, "fetch_lyrics"),
             daemon=True,
         )
         thread.start()
@@ -375,11 +544,9 @@ class LyricVideoGUI:
     def _run_worker(
         self,
         audio_path: Path,
-        tab_pdf_path: Path | None,
         work_dir: Path,
-        title: str,
-        lyrics_file: Path | None,
-        chords_text_file: Path | None,
+        title: str | None = None,
+        start_stage: str = "identify",
     ) -> None:
         writer = _QueueWriter(self._queue)
         old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -387,11 +554,10 @@ class LyricVideoGUI:
         try:
             out_path = run_pipeline(
                 audio_path,
-                tab_pdf_path,
                 work_dir,
                 title,
-                lyrics_file=lyrics_file,
-                chords_text_file=chords_text_file,
+                start_stage=start_stage,
+                settings=self.settings,
                 progress_callback=lambda stage: self._queue.put(("stage", stage)),
             )
             self._queue.put(("done", str(out_path)))
@@ -401,28 +567,58 @@ class LyricVideoGUI:
             sys.stdout, sys.stderr = old_stdout, old_stderr
 
     def _poll_queue(self) -> None:
+        # Drain everything queued since the last tick up front, rather than
+        # handling each item with its own widget update -- moviepy/tqdm can
+        # write dozens of progress-bar chunks within a single 100ms tick, and
+        # one insert+see() per chunk against a growing Text widget is what
+        # made the log pane (and the whole GUI) grind to a crawl.
+        items: list[tuple[str, str]] = []
         try:
             while True:
-                kind, payload = self._queue.get_nowait()
-                if kind == "log":
-                    self._append_log(payload)
-                elif kind == "stage":
-                    self.status_var.set(f"Stage: {payload}")
-                elif kind == "done":
-                    self.status_var.set("Done")
-                    self._running = False
-                    self.generate_button.state(["!disabled"])
-                    messagebox.showinfo("Video ready", f"Wrote {payload}")
-                    return
-                elif kind == "error":
-                    self.status_var.set("Failed")
-                    self._running = False
-                    self.generate_button.state(["!disabled"])
-                    self._append_log(f"\nERROR:\n{payload}\n")
-                    messagebox.showerror("Generation failed", payload.splitlines()[0])
-                    return
+                items.append(self._queue.get_nowait())
         except queue.Empty:
             pass
+
+        log_chunks: list[str] = []
+
+        def flush_log() -> None:
+            if log_chunks:
+                self._append_log("".join(log_chunks))
+                log_chunks.clear()
+
+        for kind, payload in items:
+            if kind == "log":
+                log_chunks.append(payload)
+                continue
+            flush_log()
+            if kind == "stage":
+                self.status_var.set(f"Stage: {payload}")
+                # +1: report("done") isn't a real STAGES entry, but seeing the
+                # bar reach 100% only once done fires (not at the start of the
+                # last real stage) reads better than stalling at 6/7.
+                try:
+                    fraction = (STAGES.index(payload) + 1) / len(STAGES)
+                except ValueError:
+                    fraction = self.progress_bar.get()
+                self.progress_bar.set(min(1.0, fraction))
+            elif kind == "done":
+                self.status_var.set("Done")
+                self.progress_bar.set(1.0)
+                self._running = False
+                self.generate_button.configure(state="normal")
+                self.redo_button.configure(state="normal")
+                messagebox.showinfo("Video ready", f"Wrote {payload}")
+                return
+            elif kind == "error":
+                self.status_var.set("Failed")
+                self._running = False
+                self.generate_button.configure(state="normal")
+                self.redo_button.configure(state="normal")
+                self._append_log(f"\nERROR:\n{payload}\n")
+                messagebox.showerror("Generation failed", payload.splitlines()[0])
+                return
+        flush_log()
+
         if self._running:
             self.root.after(100, self._poll_queue)
 
@@ -430,16 +626,30 @@ class LyricVideoGUI:
         self.log_widget.configure(state="normal")
         self.log_widget.delete("1.0", "end")
         self.log_widget.configure(state="disabled")
+        self._log_pending = ""
+        self._log_has_uncommitted_line = False
 
     def _append_log(self, text: str) -> None:
+        self._log_pending, to_commit = _split_log_text(self._log_pending, text)
+
         self.log_widget.configure(state="normal")
-        self.log_widget.insert("end", text)
+        if self._log_has_uncommitted_line:
+            # The widget's current last line was left showing a still-in-
+            # progress update (e.g. a tqdm percentage) -- replace it rather
+            # than appending, so a burst of \r updates collapses into one
+            # line instead of piling up a new permanent line per update.
+            self.log_widget.delete("end-1c linestart", "end-1c")
+        if to_commit:
+            self.log_widget.insert("end", to_commit)
+        if self._log_pending:
+            self.log_widget.insert("end", self._log_pending)
         self.log_widget.see("end")
         self.log_widget.configure(state="disabled")
+        self._log_has_uncommitted_line = bool(self._log_pending)
 
 
 def main() -> None:
-    root = tk.Tk()
+    root = ctk.CTk()
     LyricVideoGUI(root)
     root.mainloop()
 

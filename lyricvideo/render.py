@@ -5,34 +5,64 @@ import hashlib
 from PIL import Image, ImageDraw, ImageFont
 
 from .layout import Scene, SceneLine
+from .models import ChordTrack, current_chord_at, next_chord_after
 
 FRAME_SIZE = (1920, 1080)
 
-CURRENT_LINE_COLOR = (46, 204, 113)  # bright green
-NEXT_LINE_COLOR = (255, 255, 255)  # white
-CHORD_ACTIVE_COLOR = (255, 215, 0)  # gold -- highlighted the moment it's hit
-CHORD_PENDING_COLOR = (170, 170, 170)  # dim -- shown ahead of time, not yet hit
+CURRENT_LINE_UNSUNG_COLOR = (255, 255, 255)  # white -- default text_color
+WORD_HIGHLIGHT_BG_COLOR = (46, 204, 113)     # bright green -- box behind already-sung words
+WORD_HIGHLIGHT_TEXT_COLOR = (255, 255, 255)  # white text on top of the highlight box
+TEXT_STROKE_COLOR = (0, 0, 0)                # black outline so text reads over any background
+TEXT_STROKE_WIDTH = 3
+
+# Chord bar geometry at the default FRAME_SIZE (landscape), ported from LyricChord's
+# compute_layout()'s landscape branch (frames.py). Kept as module constants for the
+# default (zero-plumbing, zero-recompute) path; compute_chord_bar_layout() below
+# derives the same shape for any other frame_size.
+_CHORD_BAR_MARGIN = 120
+_CHORD_BAR_PAD = 20
+CHORD_BOX = (
+    _CHORD_BAR_MARGIN, int(FRAME_SIZE[1] * 0.665),
+    FRAME_SIZE[0] - _CHORD_BAR_MARGIN, int(FRAME_SIZE[1] * 0.925),
+)
+_inner_h = CHORD_BOX[3] - CHORD_BOX[1] - 2 * _CHORD_BAR_PAD
+NOW_BOX = (
+    CHORD_BOX[0] + _CHORD_BAR_PAD, CHORD_BOX[1] + _CHORD_BAR_PAD,
+    CHORD_BOX[0] + _CHORD_BAR_PAD + int(FRAME_SIZE[0] * 0.19), CHORD_BOX[3] - _CHORD_BAR_PAD,
+)
+NEXT_BOX = (
+    NOW_BOX[2] + _CHORD_BAR_PAD, CHORD_BOX[1] + _CHORD_BAR_PAD + int(_inner_h * 0.15),
+    NOW_BOX[2] + _CHORD_BAR_PAD + int(FRAME_SIZE[0] * 0.13), CHORD_BOX[3] - _CHORD_BAR_PAD - int(_inner_h * 0.15),
+)
+LANE_BOX = (
+    NEXT_BOX[2] + 2 * _CHORD_BAR_PAD, CHORD_BOX[1] + _CHORD_BAR_PAD + int(_inner_h * 0.2),
+    CHORD_BOX[2] - _CHORD_BAR_PAD, CHORD_BOX[3] - _CHORD_BAR_PAD - int(_inner_h * 0.2),
+)
+KEY_BPM_BADGE_XY = (FRAME_SIZE[0] - _CHORD_BAR_MARGIN, int(FRAME_SIZE[1] * 0.06))
+
+PANEL_ALPHA_DEFAULT = 150
+BOX_FILL = (30, 41, 59, 235)       # NOW/NEXT/lane box fill (not owner-configurable)
+ACCENT_COLOR = (56, 189, 248)      # current-chord highlight
+DIM_TEXT_COLOR = (148, 163, 184)
+LANE_BLOCK_COLOR = (51, 65, 85, 235)
+TIMELINE_WINDOW_SECONDS = 12.0
 
 # (start_x, start_y, end_x, end_y, zoom_start, zoom_end) -- x/y are 0..1
-# fractions of the available pan range (0.5 = centered). Covers side-to-side,
-# up-down, the four diagonals, a push-in, and a pull-out, so consecutive
-# images don't all move the same way.
+# fractions of the available pan range (0.5 = centered).
 KEN_BURNS_PRESETS: list[tuple[float, float, float, float, float, float]] = [
-    (0.0, 0.0, 1.0, 1.0, 1.0, 1.15),  # top-left -> bottom-right
-    (1.0, 1.0, 0.0, 0.0, 1.0, 1.15),  # bottom-right -> top-left
-    (0.0, 1.0, 1.0, 0.0, 1.0, 1.15),  # bottom-left -> top-right
-    (1.0, 0.0, 0.0, 1.0, 1.0, 1.15),  # top-right -> bottom-left
-    (0.0, 0.5, 1.0, 0.5, 1.0, 1.15),  # left -> right
-    (1.0, 0.5, 0.0, 0.5, 1.0, 1.15),  # right -> left
-    (0.5, 0.0, 0.5, 1.0, 1.0, 1.15),  # top -> bottom
-    (0.5, 1.0, 0.5, 0.0, 1.0, 1.15),  # bottom -> top
-    (0.5, 0.5, 0.5, 0.5, 1.18, 1.0),  # centered pull-out (zoom out)
+    (0.0, 0.0, 1.0, 1.0, 1.0, 1.15),
+    (1.0, 1.0, 0.0, 0.0, 1.0, 1.15),
+    (0.0, 1.0, 1.0, 0.0, 1.0, 1.15),
+    (1.0, 0.0, 0.0, 1.0, 1.0, 1.15),
+    (0.0, 0.5, 1.0, 0.5, 1.0, 1.15),
+    (1.0, 0.5, 0.0, 0.5, 1.0, 1.15),
+    (0.5, 0.0, 0.5, 1.0, 1.0, 1.15),
+    (0.5, 1.0, 0.5, 0.0, 1.0, 1.15),
+    (0.5, 0.5, 0.5, 0.5, 1.18, 1.0),
 ]
 
 
 def ken_burns_preset_for_key(image_key: str) -> tuple[float, float, float, float, float, float]:
-    """Deterministic per-image pick (stable across a render, and identical for
-    a reused cached image) rather than random-per-frame, which would jitter."""
     idx = int(hashlib.sha256(image_key.encode("utf-8")).hexdigest(), 16) % len(KEN_BURNS_PRESETS)
     return KEN_BURNS_PRESETS[idx]
 
@@ -46,8 +76,9 @@ def apply_ken_burns(
     end_y: float = 1.0,
     zoom_start: float = 1.0,
     zoom_end: float = 1.15,
+    frame_size: tuple[int, int] = FRAME_SIZE,
 ) -> Image.Image:
-    img = image.resize(FRAME_SIZE)
+    img = image.resize(frame_size)
     zoom = zoom_start + (zoom_end - zoom_start) * progress
     w, h = img.size
     new_w, new_h = max(int(w * zoom), w), max(int(h * zoom), h)
@@ -60,30 +91,108 @@ def apply_ken_burns(
     return img.crop((x, y, x + w, y + h))
 
 
-def _draw_line_with_chords(draw, y, scene_line: SceneLine, font, chord_font, is_current: bool):
+_MAX_LINE_WIDTH_FRAC = 0.92  # a lyric line may use at most this fraction of the frame width
+_ROW_GAP = 4                 # extra pixels between wrapped rows of one long lyric line
+
+
+def _split_line_into_rows(words: list, draw, font, max_width: float) -> list:
+    """Groups `words` into one or more rows that each fit within max_width.
+    Never shrinks the font -- a long line wraps onto more rows instead.
+    Prefers splitting after a word ending in a comma (a real vocal pause);
+    falls back to plain word-by-word wrapping for a comma-free clause (or
+    comma-free line) that's still too wide on its own. A single word wider
+    than max_width is never split or dropped -- it becomes its own row."""
+    space_w = draw.textlength(" ", font=font)
+
+    def width_of(ws: list) -> float:
+        widths = [draw.textlength(w.text, font=font) for w in ws]
+        return sum(widths) + space_w * max(len(ws) - 1, 0)
+
+    if width_of(words) <= max_width:
+        return [words]
+
+    # Break into comma-delimited chunks -- the natural, preferred wrap points.
+    chunks = []
+    current: list = []
+    for w in words:
+        current.append(w)
+        if w.text.endswith(","):
+            chunks.append(current)
+            current = []
+    if current:
+        chunks.append(current)
+
+    # Greedily pack whole chunks onto each row; a chunk still too wide on its
+    # own (no internal commas) falls back to word-by-word wrapping.
+    rows: list = []
+    row: list = []
+    for chunk in chunks:
+        if row and width_of(row + chunk) > max_width:
+            rows.append(row)
+            row = []
+        if width_of(chunk) > max_width:
+            if row:
+                rows.append(row)
+                row = []
+            word_row: list = []
+            for w in chunk:
+                if word_row and width_of(word_row + [w]) > max_width:
+                    rows.append(word_row)
+                    word_row = [w]
+                else:
+                    word_row.append(w)
+            if word_row:
+                rows.append(word_row)
+        else:
+            row = row + chunk
+    if row:
+        rows.append(row)
+
+    return rows
+
+
+def _draw_line_words(draw, y, scene_line: SceneLine, font, is_current: bool, text_color, frame_width: int) -> None:
     words = scene_line.words
     if not words:
         return
+
+    max_width = frame_width * _MAX_LINE_WIDTH_FRAC
+    rows = _split_line_into_rows(words, draw, font, max_width)
+
     space_w = draw.textlength(" ", font=font)
-    widths = [draw.textlength(w.text, font=font) for w in words]
-    total_w = sum(widths) + space_w * max(len(words) - 1, 0)
-    x = (FRAME_SIZE[0] - total_w) / 2
-    fill = CURRENT_LINE_COLOR if is_current else NEXT_LINE_COLOR
-    for word, w_width in zip(words, widths):
-        if word.chord:
-            chord_color = CHORD_ACTIVE_COLOR if word.chord_active else CHORD_PENDING_COLOR
-            chord_w = draw.textlength(word.chord, font=chord_font)
-            chord_x = x + (w_width - chord_w) / 2
-            draw.text((chord_x, y - chord_font.size - 10), word.chord, font=chord_font, fill=chord_color)
-        draw.text((x, y), word.text, font=font, fill=fill)
-        x += w_width + space_w
+    ascent, descent = font.getmetrics()
+    text_height = ascent + descent
+    row_height = text_height + _ROW_GAP
+    total_height = row_height * len(rows) - _ROW_GAP
+    start_y = y - (total_height - text_height) / 2  # center the stacked rows around the original y
 
+    for row_idx, row in enumerate(rows):
+        row_y = start_y + row_idx * row_height
+        widths = [draw.textlength(w.text, font=font) for w in row]
+        total_w = sum(widths) + space_w * max(len(row) - 1, 0)
+        x = (frame_width - total_w) / 2
 
-def _draw_instrumental_chord(draw, chord: str, chord_font):
-    chord_w = draw.textlength(chord, font=chord_font)
-    x = (FRAME_SIZE[0] - chord_w) / 2
-    y = FRAME_SIZE[1] // 2 - chord_font.size // 2
-    draw.text((x, y), chord, font=chord_font, fill=CHORD_ACTIVE_COLOR)
+        for word, w_width in zip(row, widths):
+            # Karaoke-style sweep: a highlight box appears behind each word the
+            # instant it's actually sung (real per-word timing from forced
+            # alignment), moving left to right through the line in sync with the
+            # vocals -- not yet-sung words stay plain. Not owner-configurable
+            # (already-tuned mechanism, see the 2026-09-09 GUI-design spec).
+            if is_current and word.word_active:
+                pad_x, pad_y = 6, 4
+                draw.rectangle(
+                    [x - pad_x, row_y - pad_y, x + w_width + pad_x, row_y + text_height + pad_y],
+                    fill=WORD_HIGHLIGHT_BG_COLOR,
+                )
+                text_fill = WORD_HIGHLIGHT_TEXT_COLOR
+            else:
+                text_fill = text_color
+
+            draw.text(
+                (x, row_y), word.text, font=font, fill=text_fill,
+                stroke_width=TEXT_STROKE_WIDTH, stroke_fill=TEXT_STROKE_COLOR,
+            )
+            x += w_width + space_w
 
 
 def draw_scene(
@@ -91,31 +200,165 @@ def draw_scene(
     background: Image.Image,
     font_path: str,
     font_size: int = 48,
-    chord_font_size: int = 40,
-    instrumental_chord_font_size: int = 80,
+    text_color: tuple[int, int, int] = CURRENT_LINE_UNSUNG_COLOR,
+    frame_size: tuple[int, int] = FRAME_SIZE,
 ) -> Image.Image:
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
     font = ImageFont.truetype(font_path, font_size)
-    chord_font = ImageFont.truetype(font_path, chord_font_size)
 
-    if scene.instrumental_chord:
-        # No line is being sung right now -- show the instrumental chord large and
-        # centered instead of the (stale) current/next lyric lines.
-        instrumental_font = ImageFont.truetype(font_path, instrumental_chord_font_size)
-        _draw_instrumental_chord(draw, scene.instrumental_chord, instrumental_font)
-        return frame
-
-    center_y = FRAME_SIZE[1] // 2
-    line_height = font_size + 40
+    center_y = frame_size[1] // 2
+    ascent, descent = font.getmetrics()
+    line_height = (ascent + descent) + 20
 
     for sl in scene.lines:
         # Continuous position, not a fixed per-line step: every line drifts
         # upward by scroll_progress (0->1 across the current line's own real
         # start->end window) so the transition to the next line is a smooth
-        # scroll instead of a snap, and lands exactly on the next line's
-        # position the instant it becomes current.
+        # scroll instead of a snap.
         y = center_y + (sl.distance_from_current - scene.scroll_progress) * line_height
-        _draw_line_with_chords(draw, y, sl, font, chord_font, sl.is_current)
+        _draw_line_words(draw, y, sl, font, sl.is_current, text_color, frame_size[0])
 
     return frame
+
+
+def _display_chord_label(label: str) -> str:
+    return "N.C." if label == "N" else label
+
+
+def compute_chord_bar_layout(frame_size: tuple[int, int]) -> dict[str, tuple[int, int, int, int]]:
+    """Chord-bar box geometry (chord_box/now_box/next_box/lane_box/badge_xy) for any
+    frame_size, landscape-only (this program always renders landscape). At the
+    default FRAME_SIZE this reproduces CHORD_BOX/NOW_BOX/NEXT_BOX/LANE_BOX exactly."""
+    w, h = frame_size
+    margin, pad = _CHORD_BAR_MARGIN, _CHORD_BAR_PAD
+    chord_box = (margin, int(h * 0.665), w - margin, int(h * 0.925))
+    inner_h = chord_box[3] - chord_box[1] - 2 * pad
+    now_box = (
+        chord_box[0] + pad, chord_box[1] + pad,
+        chord_box[0] + pad + int(w * 0.19), chord_box[3] - pad,
+    )
+    next_box = (
+        now_box[2] + pad, chord_box[1] + pad + int(inner_h * 0.15),
+        now_box[2] + pad + int(w * 0.13), chord_box[3] - pad - int(inner_h * 0.15),
+    )
+    lane_box = (
+        next_box[2] + 2 * pad, chord_box[1] + pad + int(inner_h * 0.2),
+        chord_box[2] - pad, chord_box[3] - pad - int(inner_h * 0.2),
+    )
+    badge_xy = (w - margin, int(h * 0.06))
+    return {"chord_box": chord_box, "now_box": now_box, "next_box": next_box,
+            "lane_box": lane_box, "badge_xy": badge_xy}
+
+
+def draw_chord_bar(
+    frame: Image.Image,
+    chord_track: ChordTrack,
+    t: float,
+    font_path: str,
+    *,
+    frame_size: tuple[int, int] = FRAME_SIZE,
+    accent_color: tuple[int, int, int] = ACCENT_COLOR,
+    dim_text_color: tuple[int, int, int] = DIM_TEXT_COLOR,
+    panel_color: tuple[int, int, int] = (11, 18, 32),
+    panel_alpha: int = PANEL_ALPHA_DEFAULT,
+    chord_now_size: int = 64,
+    chord_next_size: int = 32,
+    show_chord_timeline: bool = True,
+    show_key_bpm: bool = True,
+    timeline_window_sec: float = TIMELINE_WINDOW_SECONDS,
+) -> Image.Image:
+    """Composites the NOW/NEXT/timeline chord bar and the Key/BPM badge onto
+    `frame`, ported from LyricChord's FrameComposer._draw_chords + its header
+    badge. Independent of which lyric line/word is on screen -- looked up
+    directly from chord_track by playback time t. Returns a new image; `frame`
+    is not mutated (matches draw_scene's own copy-on-write style)."""
+    layout = CHORD_BOX_LAYOUT_DEFAULT if frame_size == FRAME_SIZE else compute_chord_bar_layout(frame_size)
+    chord_box, now_box, next_box, lane_box, badge_xy = (
+        layout["chord_box"], layout["now_box"], layout["next_box"], layout["lane_box"], layout["badge_xy"],
+    )
+
+    label_font = ImageFont.truetype(font_path, 20)
+    now_font = ImageFont.truetype(font_path, chord_now_size)
+    next_font = ImageFont.truetype(font_path, chord_next_size)
+    small_font = ImageFont.truetype(font_path, 24)
+    lane_font = ImageFont.truetype(font_path, 30)
+
+    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    panel_fill = (*panel_color, panel_alpha)
+    draw.rounded_rectangle(chord_box, radius=24, fill=panel_fill)
+    draw.rounded_rectangle(now_box, radius=18, fill=BOX_FILL)
+    draw.rounded_rectangle(next_box, radius=16, fill=BOX_FILL)
+    if show_chord_timeline:
+        draw.rounded_rectangle(lane_box, radius=12, fill=BOX_FILL)
+
+    draw.text((now_box[0] + 16, now_box[1] + 10), "NOW", font=label_font, fill=dim_text_color)
+    draw.text((next_box[0] + 14, next_box[1] + 8), "NEXT", font=label_font, fill=dim_text_color)
+
+    current = current_chord_at(chord_track, t)
+    next_event = next_chord_after(chord_track, t)
+
+    now_label = _display_chord_label(current.label) if current else "—"
+    now_color = accent_color if current else dim_text_color
+    now_w = draw.textlength(now_label, font=now_font)
+    draw.text(
+        ((now_box[0] + now_box[2]) / 2 - now_w / 2, (now_box[1] + now_box[3]) / 2 - chord_now_size / 2),
+        now_label, font=now_font, fill=now_color,
+    )
+
+    if next_event is not None:
+        next_label = _display_chord_label(next_event.label)
+        next_w = draw.textlength(next_label, font=next_font)
+        draw.text(
+            ((next_box[0] + next_box[2]) / 2 - next_w / 2, next_box[1] + 34),
+            next_label, font=next_font, fill=(248, 250, 252, 255),
+        )
+        eta = f"in {max(0.0, next_event.start - t):.1f}s"
+        eta_w = draw.textlength(eta, font=small_font)
+        draw.text(
+            ((next_box[0] + next_box[2]) / 2 - eta_w / 2, next_box[3] - 30),
+            eta, font=small_font, fill=dim_text_color,
+        )
+
+    if show_chord_timeline:
+        lx0, ly0, lx1, ly1 = lane_box
+        pps = (lx1 - lx0) / timeline_window_sec
+        for event in chord_track.events:
+            if event.start >= t + timeline_window_sec:
+                break
+            if event.end <= t:
+                continue
+            bx0 = lx0 + max(0.0, event.start - t) * pps
+            bx1 = lx0 + min(timeline_window_sec, event.end - t) * pps
+            if bx1 - bx0 < 2:
+                continue
+            is_current = current is not None and event is current
+            fill = (*accent_color, 255) if is_current else LANE_BLOCK_COLOR
+            draw.rounded_rectangle((int(bx0) + 1, ly0 + 6, int(bx1) - 1, ly1 - 6), radius=10, fill=fill)
+            label = _display_chord_label(event.label)
+            text_color = (11, 18, 32, 255) if is_current else (248, 250, 252, 255)
+            label_w = draw.textlength(label, font=lane_font)
+            if label_w + 16 <= (bx1 - bx0):
+                draw.text(((bx0 + bx1) / 2 - label_w / 2, (ly0 + ly1) / 2 - 15), label, font=lane_font, fill=text_color)
+
+    if show_key_bpm and (chord_track.key or chord_track.bpm):
+        parts = []
+        if chord_track.key:
+            parts.append(f"Key: {chord_track.key}")
+        if chord_track.bpm:
+            parts.append(f"{int(round(chord_track.bpm))} BPM")
+        badge = "   ·   ".join(parts)
+        bx, by = badge_xy
+        badge_w = draw.textlength(badge, font=small_font)
+        draw.text((bx - badge_w, by), badge, font=small_font, fill=(*accent_color, 255))
+
+    composited = Image.alpha_composite(frame.convert("RGBA"), overlay)
+    return composited.convert("RGB")
+
+
+CHORD_BOX_LAYOUT_DEFAULT = {
+    "chord_box": CHORD_BOX, "now_box": NOW_BOX, "next_box": NEXT_BOX,
+    "lane_box": LANE_BOX, "badge_xy": KEY_BPM_BADGE_XY,
+}

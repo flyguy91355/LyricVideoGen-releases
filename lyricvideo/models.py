@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
@@ -7,16 +8,15 @@ from pathlib import Path
 
 
 @dataclass
-class ChordWord:
+class Word:
     word: str
-    chord: str | None = None
     start_time: float | None = None
     end_time: float | None = None
 
 
 @dataclass
 class LyricLine:
-    words: list[ChordWord] = field(default_factory=list)
+    words: list[Word] = field(default_factory=list)
     start_time: float | None = None
     end_time: float | None = None
 
@@ -26,19 +26,48 @@ class LyricLine:
 
 
 @dataclass
-class InstrumentalChord:
-    chord: str
-    start_time: float
-    end_time: float
+class ChordEvent:
+    """A chord held from `start` to `end` (seconds). Label like 'Am', 'F#', 'N'."""
+
+    start: float
+    end: float
+    label: str
+
+    @property
+    def duration(self) -> float:
+        return max(0.0, self.end - self.start)
 
 
 @dataclass
-class InstrumentalBlock:
-    """An unordered-in-time chord progression found during parsing, before real
-    timing exists -- positioned relative to the lyric lines it sits next to."""
+class ChordTrack:
+    """Timeline of chords plus global musical info for one song, produced by
+    detect_chords() and otherwise independent of the lyric lines entirely."""
 
-    chords: list[str] = field(default_factory=list)
-    before_line_index: int = 0  # index into the parsed lyric_lines list; == len(lyric_lines) means "after the last line" (an outro)
+    events: list[ChordEvent] = field(default_factory=list)
+    key: str = ""
+    bpm: float = 0.0
+
+
+def current_chord_at(track: ChordTrack, t: float) -> ChordEvent | None:
+    """The chord event covering time t, or None (before the first event, after the
+    last, or an empty track). O(log n) via bisect against events sorted by start
+    time (detect_chords always emits them in order)."""
+    starts = [e.start for e in track.events]
+    i = bisect.bisect_right(starts, t) - 1
+    if i < 0:
+        return None
+    event = track.events[i]
+    return event if t < event.end else None
+
+
+def next_chord_after(track: ChordTrack, t: float) -> ChordEvent | None:
+    """The first chord event starting after t whose label differs from whatever is
+    current at t, so a merged-boundary duplicate segment is never reported as "next"."""
+    current = current_chord_at(track, t)
+    for event in track.events:
+        if event.start > t and (current is None or event.label != current.label):
+            return event
+    return None
 
 
 @dataclass
@@ -48,7 +77,7 @@ class Song:
     vocal_stem_path: str | None = None
     instrumental_stem_path: str | None = None
     lines: list[LyricLine] = field(default_factory=list)
-    instrumental_chords: list[InstrumentalChord] = field(default_factory=list)
+    chord_track: ChordTrack = field(default_factory=ChordTrack)
     image_cache: dict[str, str] = field(default_factory=dict)
 
 
@@ -61,24 +90,34 @@ def _song_to_dict(song: Song) -> dict:
 
 
 def _song_from_dict(data: dict) -> Song:
+    # Picks only Word's own fields rather than Word(**w): songs saved by the
+    # pre-merge pipeline carry a "chord" key on every word (from the old ChordWord
+    # model) that Word no longer has -- Word(**w) would raise TypeError on every
+    # such file (confirmed live 2026-09-09, broke Redo on every pre-existing song).
     lines = [
         LyricLine(
-            words=[ChordWord(**w) for w in ln["words"]],
+            words=[
+                Word(word=w["word"], start_time=w.get("start_time"), end_time=w.get("end_time"))
+                for w in ln["words"]
+            ],
             start_time=ln.get("start_time"),
             end_time=ln.get("end_time"),
         )
         for ln in data.get("lines", [])
     ]
-    instrumental_chords = [
-        InstrumentalChord(**c) for c in data.get("instrumental_chords", [])
-    ]
+    chord_data = data.get("chord_track") or {}
+    chord_track = ChordTrack(
+        events=[ChordEvent(**e) for e in chord_data.get("events", [])],
+        key=chord_data.get("key", ""),
+        bpm=chord_data.get("bpm", 0.0),
+    )
     return Song(
         title=data["title"],
         audio_path=data["audio_path"],
         vocal_stem_path=data.get("vocal_stem_path"),
         instrumental_stem_path=data.get("instrumental_stem_path"),
         lines=lines,
-        instrumental_chords=instrumental_chords,
+        chord_track=chord_track,
         image_cache=data.get("image_cache", {}),
     )
 

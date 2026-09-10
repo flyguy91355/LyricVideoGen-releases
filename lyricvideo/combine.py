@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import ChordWord, LyricLine
+from .models import Word, LyricLine
 
 MONOTONIC_TOLERANCE = 0.05
 
@@ -25,7 +25,7 @@ def combine_alignment(
     prev_end = -1.0
     timed_lines: list[LyricLine] = []
     for line in parsed_lines:
-        new_words: list[ChordWord] = []
+        new_words: list[Word] = []
         for w in line.words:
             start, end = word_times[idx]
             if start < 0 or end > audio_duration or end < start or start < prev_end - MONOTONIC_TOLERANCE:
@@ -33,7 +33,7 @@ def combine_alignment(
                     f"invalid timestamp for word {idx} ('{w.word}'): start={start}, "
                     f"end={end}, audio_duration={audio_duration}, prev_end={prev_end}"
                 )
-            new_words.append(ChordWord(word=w.word, chord=w.chord, start_time=start, end_time=end))
+            new_words.append(Word(word=w.word, start_time=start, end_time=end))
             prev_end = end
             idx += 1
         timed_lines.append(

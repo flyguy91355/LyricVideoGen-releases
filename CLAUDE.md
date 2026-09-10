@@ -1,28 +1,55 @@
-# LyricVideoGen
+# PlayAlongVideoProduction
 
-Generates synced lyric+chord "play along" videos from a tab PDF and an audio
-file: scrolling lyrics with chord names timed over the words they change on,
-composited over an AI-generated, Ken-Burns-panned background image that
-changes per lyric line to follow the song's meaning. Full design in
-`docs/superpowers/specs/2026-09-06-tab-pdf-video-generator-design.md`; the
-build plan (all steps checked off) is in
-`docs/superpowers/plans/2026-09-06-tab-pdf-video-generator.md`.
+Generates synced lyric+chord "play along" videos from nothing but an audio file:
+karaoke-style scrolling lyrics (forced-aligned to the real vocal stem) and a
+NOW/NEXT/timeline chord bar (chords detected directly from the audio, never from a
+tab or chord sheet) composited over an AI-generated, Ken-Burns-panned background
+image that changes per lyric line — and per active chord during instrumental
+gaps — to follow the song. Original tab-PDF-input design in
+`docs/superpowers/specs/2026-09-06-tab-pdf-video-generator-design.md` (superseded —
+see the MP3-only merge design below); that build plan (all steps checked off) is in
+`docs/superpowers/plans/2026-09-06-tab-pdf-video-generator.md`. The MP3-only merge
+design is `docs/superpowers/specs/2026-09-09-chord-detection-merge-design.md`, plan
+`docs/superpowers/plans/2026-09-09-mp3-only-chord-merge.md`. The GUI is built on
+CustomTkinter with an owner-tunable Settings panel (output resolution/fps/encoder/
+crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
+`docs/superpowers/specs/2026-09-09-customtkinter-settings-gui-design.md`, plan
+`docs/superpowers/plans/2026-09-09-customtkinter-settings-gui.md`.
 
 ## Running it
 
-- **GUI (normal use):** double-click the `LyricVideoGen` desktop icon, or run
-  `./run_lyricvideogen.sh` from the repo root. Supply a title, audio file, and
-  either a tab PDF or a chords-text file, then click Generate. Built with
-  Tkinter (`lyricvideo/gui.py`).
+- **GUI (normal use):** double-click the `PlayAlongVideoProduction` desktop icon, or
+  run `./run_playalongvideoproduction.sh` from the repo root. That script calls
+  `.venv/bin/python` directly rather than `source .venv/bin/activate` — a venv's
+  `bin/activate` bakes an absolute `VIRTUAL_ENV` path in at creation time, and this
+  venv still carries its pre-rename path (`/home/doug/LyricVideoGen/.venv`), so
+  sourcing it would silently put the wrong (or no) `python` first on `PATH`; the
+  venv's own `python` binary locates its site-packages relative to itself and needs
+  no activation. Supply just an audio
+  file — title/artist/lyrics are identified and fetched automatically, chords are
+  detected directly from the audio, and the title field is an editable override, not
+  a required input — then click Generate. A "New Song" button next to Generate
+  clears the form/log/progress bar back to blank without relaunching the app.
+  Built with CustomTkinter
+  (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
+  Redo/log console/generation progress bar, right = the scrollable Settings panel
+  (`lyricvideo/settings_panel.py`) bound to a `Settings` object
+  (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
+  loaded on launch and saved on every control change). `render.py`/`detect_chords.py`/
+  `assemble_video()` all take plain keyword arguments for every Settings-backed value
+  (colors as RGB tuples, sizes as int, toggles as bool) and default to the program's
+  original hardcoded values — they do not import `settings.py`; `run_pipeline()` is
+  the sole integration point that accepts a real `Settings` object and unpacks it.
 - **CLI (staged/resumable, useful for debugging one stage):**
   ```bash
-  cd /home/doug/LyricVideoGen
-  .venv/bin/python -m lyricvideo.pipeline --audio <path> --tab-pdf <path> \
-      --work-dir <dir> --title "<title>" [--stage separate|parse|align|images|render]
+  cd /home/doug/PlayAlongVideoProduction
+  .venv/bin/python -m lyricvideo.pipeline --audio <path> --work-dir <dir> \
+      [--title "<override>"] \
+      [--stage identify|separate|fetch_lyrics|align|detect_chords|images|render]
   ```
   `--stage` resumes from a later stage using artifacts already written to
-  `--work-dir` by an earlier run — useful since `separate`/`align`/`images`
-  are the slow/expensive stages.
+  `--work-dir` by an earlier run — useful since `separate`/`fetch_lyrics`/
+  `detect_chords`/`images` are the slow/expensive stages.
 - Requires `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` at the repo
   root (both are set locally; see `.env.example` for the template). No
   Alpaca/trading credentials are involved — this is a separate, unrelated
@@ -30,45 +57,95 @@ build plan (all steps checked off) is in
 
 ## Pipeline stages (`lyricvideo/pipeline.py`, `STAGES`)
 
-1. **separate** (`separate.py`) — Demucs two-stem split of `--audio` into
+1. **identify** (`identify.py`) — resolves title/artist/duration from ID3/Vorbis/
+   M4A tags, filename parsing, and (if the artist is still unknown) lrclib-artist-
+   consensus + MusicBrainz-by-duration lookups. Written to `work_dir/song_info.json`.
+   A caller-supplied `--title` overrides the identified title for display/filename
+   purposes only — artist/duration always come from this stage's own resolution.
+2. **separate** (`separate.py`) — Demucs two-stem split of `--audio` into
    vocals/instrumental (CPU). Output path convention
    (`work_dir/htdemucs/<audio_stem>/{vocals,no_vocals}.wav`) is what makes
    `--stage` resumption work — later stages look for the file at that same
    path rather than re-running Demucs.
-2. **parse** — extracts structured `(lyric line, [word_index, chord] pairs)`
-   data from the input. Three input paths, in order of preference:
-   - `--chords-text-file`: owner-typed plain chord-over-lyric text
-     (`plaintext_chords.py`) — pure deterministic parsing, **no Claude call at
-     all**. Use this when vision-based chord mapping keeps hitting Anthropic
-     content-filtering on a song's lyrics (confirmed real and
-     non-deterministic on some songs).
-   - `--tab-pdf` with a real text layer: `pdf_parse.py` (pdfplumber),
-     deterministic, no Claude call.
-   - `--tab-pdf` that's scanned/image-only (raises `NoTextLayerError`): falls
-     back to `vision_parse.py`, which requires `--lyrics-file` (owner-supplied
-     plain lyrics). Claude only returns `[word_index, chord]` position pairs
-     against text you already gave it — **it never generates or alters lyric
-     text itself.**
-3. **align** — forced word-level alignment (`align.py`) against the isolated
-   vocal stem; `combine.py` merges alignment timing back onto the parsed
-   lines/chords; `instrumental_chords.py` times chords that fall in
-   instrumental (no-lyric) gaps between lines by anchoring to real
-   frame-to-frame chroma novelty peaks in the no-vocals stem, with a minimum
-   time-spacing constraint between chosen boundaries (rejecting candidates
-   too close to each other OR to the gap's own start/end) so one sharp
-   transition's smeared neighboring frames can't crowd out every other real
-   chord change — see the 2026-09-08 history entry for the concrete failure
-   mode this fixed.
-4. **images** — `imagery.py`: one Claude call summarizes the whole song's
-   gist once (`summarize_song_gist`), then each *unique* lyric line gets its
-   own generated background image (Replicate), cached by line text so a
-   repeated chorus reuses its image instead of paying to regenerate it. Also
-   reuses any `images_backup_*/` archive left in the work dir before
-   generating new images — back up rather than delete `images/` if you want
-   to regenerate render-only changes without re-paying for images.
-5. **render** — `assemble.py`/`layout.py`/`render.py`: composites scrolling
-   lyrics + chord flashes + Ken Burns pans over the audio into the final
-   1080p mp4 (`work_dir/<slugified-title>.mp4`).
+3. **fetch_lyrics** (`fetch_lyrics.py` + `vocal_onset.py`) — plain lyric-line
+   text, no manual input required: a sidecar `.lrc`/`.txt` next to the audio file,
+   then lrclib.net (edition-consensus voting across every matching-length record,
+   using `vocal_onset.py`'s narrow vocal-onset-rise check to disambiguate
+   disagreeing first-line candidates), then the `syncedlyrics` aggregator as a
+   last resort. Written to `work_dir/lyric_lines.json`. Any timestamps a provider's
+   LRC carries are discarded — real timing always comes from the next stage.
+4. **align** — forced word-level alignment (`align.py`) against the isolated
+   vocal stem, timing `fetch_lyrics`'s text; `combine.py` merges the timing onto
+   the lines. `align_words()` has no idea where its input words came from, so this
+   is the same alignment mechanism the original tab-PDF design used.
+5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
+   identity, entirely independent of lyrics: harmonic/percussive separation → CQT
+   chroma → beat-sync → template match against 12-root × {maj, min, 7, min7, maj7}
+   → key-aware (Krumhansl-Schmuckler) Viterbi decoding, run on Demucs's own
+   `no_vocals.wav`. Produces one `ChordTrack` (events + key + bpm) covering the
+   whole song, saved onto the `Song`. This is the ONLY chord source in this
+   program — there is no tab/sheet input to defer to, and audio-detected chords
+   always win.
+6. **images** — `imagery.py`: one Claude call summarizes the whole song's gist
+   once (`summarize_song_gist`), then each *unique* lyric line AND each distinct
+   chord label that occurs during an instrumental gap (`_instrumental_chord_labels`
+   in `pipeline.py`) gets its own generated background image (Replicate), cached by
+   content hash so a repeated chorus or a repeated chord anywhere in the song
+   reuses one image instead of paying to regenerate it. Also reuses any
+   `images_backup_*/` archive left in the work dir before generating new images.
+7. **render** — `assemble.py`/`layout.py`/`render.py`: composites scrolling lyrics
+   (karaoke word-highlight sweep, Ken Burns pans), a NOW/NEXT/segmented-timeline
+   chord bar, a Key/BPM badge, and a chord fingering legend
+   (`lyricvideo/chord_shapes.py` + `chord_diagram.py`) over the audio into the
+   final mp4 (`work_dir/<slugified-title>.mp4`). The legend shows one small
+   guitar diagram per unique chord in the song (`pipeline.ordered_unique_chords()`,
+   first-appearance order), upper-left, with the currently-playing chord's
+   diagram highlighted; fingering data is extracted from `tombatossals/chords-db`
+   (MIT licensed), not hand-authored — every one of the 12 roots x 5 qualities
+   `detect_chords()` can produce resolves to a real shape. `chord_diagram.py`'s
+   `_legend_layout()` sizes the diagrams from the song's actual chord count (real
+   bug 2026-09-09: a 16-chord song wrapped to 4 rows and overlapped the lyrics and
+   the chord bar) -- never more than 2 rows, shrinking only as much as needed to
+   fit within a reserved upper region, and never growing past `Settings.
+   chord_legend_size` (percent, owner-adjustable, default 100%). Each diagram's
+   own panel always renders near-opaque (fixed, NOT the translucent panel_alpha
+   used elsewhere) so it stays legible against any background. Long lyric lines
+   wrap onto multiple rows at commas (preferred) or by word (fallback) instead of
+   running off the frame edges or ever shrinking the font (`render.py`'s
+   `_split_line_into_rows`) -- real bug, a 127-character line overflowed both
+   edges before this. During an instrumental
+   gap (past a line's own `end_time`, before the next line's `start_time`, or
+   outside any line at all) the background image follows the active chord
+   instead of freezing on the last-sung line — `layout.py`'s `_in_a_line()`
+   decides which applies. No song title or artist text is drawn into the frame
+   anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
+   chord legend were added to the frame.
+
+## Redo an Existing Song
+
+`models.py`'s `load_song()` tolerates `lyrics_timed.json` files saved by the
+pre-MP3-only-merge pipeline (a `"chord"` key on word dicts, `"instrumental_chords"`
+instead of `"chord_track"`) — it reads only `Word`'s own current fields rather than
+splatting the whole legacy dict, and a missing `"chord_track"` key degrades to an
+empty `ChordTrack` rather than raising. Legacy chord/word data is silently dropped,
+never migrated — correct, since Redo resumes before lyrics/chords are regenerated
+anyway. Re-runs a previously completed song through the current code, picking up
+fixes made since the original run without re-running Demucs. A redo resumes at
+`"fetch_lyrics"` (there is no `parsed_tab.json` to reuse post-merge — lyrics are
+re-fetched and chords re-detected fresh on every redo, both cheap relative to
+Demucs/images), reusing the existing Demucs stems and `work_dir/song_info.json`
+(read via the `else` branch of `run_pipeline`'s `identify` stage, since a
+`start_stage` past `"identify"` never re-runs it), via `list_redoable_songs()`/
+`load_redo_inputs()` (reads the original `audio_path`/`title` back off the song's
+own `lyrics_timed.json`, so the owner never re-browses for the original files). In
+`gui.py`, the "Redo an Existing Song" dropdown lists every `work/` folder with a
+completed run; a "Generate new images" checkbox (default off = reuse, matching this
+app's existing cost-conscious convention) forces fresh images via
+`prepare_images_for_fresh_regeneration()` — it moves the old `images/` dir aside to
+`images_prior_<timestamp>/`, deliberately NOT `images_backup_*` (that name is
+auto-searched for reuse by the images stage, which would silently defeat "generate
+new"). `backup_song_outputs()` always copies the current video + `lyrics_timed.json`
+into `work_dir/redo_backup_<timestamp>/` before a redo touches anything.
 
 ## Notable pinned dependency
 
@@ -83,23 +160,52 @@ See `docs/superpowers/specs/2026-09-08-update-available-design.md`.
 `VERSION` at the repo root tracks the last version actually applied to
 this checkout (never hand-edited, never bumped per-commit).
 `lyricvideo/update/` provides version parsing/comparison
-(`version.py`), a GitHub Releases API client against the public,
-unlisted `flyguy91355/LyricVideoGen-releases` repo (`release_client.py`,
-httpx-based), and allow-listed archive extraction/copy
+(`version.py`), a GitHub Releases API client (`release_client.py`,
+httpx-based) against the public, unlisted `flyguy91355/LyricVideoGen-releases`
+repo — still the pre-rename name as of the 2026-09-09 project rename to
+PlayAlongVideoProduction, deliberately not moved yet (see CLAUDE_HISTORY) —
+and allow-listed archive extraction/copy
 (`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
 `CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
 `work/`, `.venv/`). `gui.py` checks once on launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
-dialog with the release notes and an Apply Update button (confirms first,
+modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
+`focus_force` — it must never be losable behind the main window) with the
+release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-dependencies-if-changed/copies/writes the new
 VERSION) followed by a Relaunch Now button. No severity tiering, no
 periodic re-check, no manual "Check Now" button — see the spec for why.
 Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (the
 releases repo itself was created 2026-09-08, public/unlisted, no source
-code — just synced snapshots + release notes).
+code — just synced snapshots + release notes). The sync step exports from
+git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
+`cp`) specifically so uncommitted local changes can never leak into a
+public release — see the 2026-09-08 history entry for the real incident
+that found this the hard way.
+
+`Settings.render_kwargs()` centralizes resolution/color unpacking for
+`assemble_video()`; `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`
+(owner request 2026-09-09) renders a synthetic sample frame (fake lyric line + fake
+chord track, no real song/network/AI image) at the chosen output resolution using
+that same mapping, then downscales it for on-screen display. `gui.py`'s Settings
+column is now preview pane (fixed, on top) + the scrollable `SettingsPanel` (which
+also gained a "Reset to Defaults" button, confirmed via a dialog, that repopulates
+every control from `Settings()` in one on_change firing rather than one per field);
+main window widened to 1400x820 to fit it. `pipeline.py`'s font-resolution helper
+was renamed `_default_font` -> `default_font` (no longer module-private, since the
+preview needs it too).
+
+`lyricvideo/chord_shapes.py` holds guitar fingering data for every chord
+`detect_chords()` can produce, extracted from tombatossals/chords-db (MIT).
+`lyricvideo/chord_diagram.py` draws a full chord-fingering legend from that
+data, wired into `assemble_video()` (new `chord_legend_labels`/
+`show_chord_legend` parameters, drawn every frame with the live current chord)
+and threaded all the way through `run_pipeline()` via
+`pipeline.ordered_unique_chords()`. `Settings.show_chord_legend` toggle (in `render_kwargs()` too) has a
+`SettingsPanel` checkbox and shows up in the live preview pane too.
 
 ## Tests
 
 ```bash
-cd /home/doug/LyricVideoGen && .venv/bin/python -m pytest tests/ -v
+cd /home/doug/PlayAlongVideoProduction && .venv/bin/python -m pytest tests/ -v
 ```

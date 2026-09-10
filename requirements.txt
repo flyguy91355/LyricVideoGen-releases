@@ -1,4 +1,10 @@
-pdfplumber>=0.10
+# Song identification / lyric fetching (ported from LyricChord)
+mutagen>=1.47
+requests>=2.31
+syncedlyrics>=1.0
+
+customtkinter>=5.2
+
 torch>=2.1
 torchaudio>=2.1
 torchcodec>=0.1

@@ -1,13 +1,13 @@
 import pytest
 
-from lyricvideo.models import ChordWord, LyricLine
+from lyricvideo.models import Word, LyricLine
 from lyricvideo.combine import combine_alignment, AlignmentSanityError
 
 
 def _parsed_lines():
     return [
-        LyricLine(words=[ChordWord(word="hello", chord="G"), ChordWord(word="there")]),
-        LyricLine(words=[ChordWord(word="my", chord="D"), ChordWord(word="friend")]),
+        LyricLine(words=[Word(word="hello"), Word(word="there")]),
+        LyricLine(words=[Word(word="my"), Word(word="friend")]),
     ]
 
 
@@ -19,7 +19,6 @@ def test_combine_alignment_assigns_times_in_order():
 
     assert result[0].words[0].start_time == 0.0
     assert result[0].words[0].end_time == 0.4
-    assert result[0].words[0].chord == "G"
     assert result[0].start_time == 0.0
     assert result[0].end_time == 0.9
     assert result[1].words[0].start_time == 1.0
