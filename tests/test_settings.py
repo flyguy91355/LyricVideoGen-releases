@@ -30,6 +30,17 @@ def test_settings_defaults_match_current_hardcoded_render_behavior():
     assert s.chord_legend_size == 100
 
 
+def test_youtube_settings_defaults():
+    s = Settings()
+    assert s.youtube_auto_upload is False
+    assert s.youtube_client_secrets_path == ""
+    assert s.youtube_privacy == "public"
+    assert s.youtube_category_id == "26"
+    assert s.youtube_made_for_kids is False
+    assert s.youtube_min_days_between_uploads == 2
+    assert s.youtube_preferred_upload_hour == 15
+
+
 def test_resolutions_encoders_fps_options_are_nonempty():
     assert "1080p (1920x1080)" in RESOLUTIONS
     assert "720p (1280x720)" in RESOLUTIONS

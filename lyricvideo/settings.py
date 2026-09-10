@@ -56,6 +56,16 @@ class Settings:
     include_seventh_chords: bool = False
     min_chord_seconds: float = 0.5
 
+    # --- YouTube (youtube_schedule.py / gui.py) --------------------------
+    youtube_auto_upload: bool = False
+    youtube_client_secrets_path: str = ""
+    youtube_privacy: str = "public"          # "public" | "unlisted" | "private"
+    youtube_category_id: str = "26"          # YouTube's own category id -- 26 = "Howto & Style"
+    youtube_made_for_kids: bool = False      # COPPA declaration, required on every upload
+    youtube_min_days_between_uploads: int = 2
+    youtube_preferred_upload_hour: int = 15  # 24h local time (0-23); 3 PM matches research
+                                              # on peak engagement windows
+
     def render_kwargs(self) -> dict:
         """The subset of these settings that draw_scene()/draw_chord_bar() (via
         assemble_video()) actually take as plain keyword arguments -- resolution

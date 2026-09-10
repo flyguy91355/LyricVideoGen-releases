@@ -463,3 +463,57 @@ clauses onto as few rows as fit the frame width, falling back to word-by-word
 wrapping only for a comma-free clause that's still too wide on its own, and
 never changing the font size. Rows stack centered on the line's original
 vertical slot. Verified against the exact real overflowing line from the video.
+
+## 2026-09-10 — YouTube upload + channel management feature shipped
+
+Owner wanted finished videos to optionally auto-upload to their YouTube
+channel, with the channel side (title/description, comment replies) managed
+by the app too. Full design discussion in
+`docs/superpowers/specs/2026-09-10-youtube-upload-design.md`, implementation
+plan in `docs/superpowers/plans/2026-09-10-youtube-upload-channel-management.md`
+(11 TDD tasks, all complete, 363 tests passing).
+
+**Scheduling redesign mid-brainstorm:** the original design queued finished
+videos locally and released one every N days via a periodic `root.after`
+timer. Before implementing, checked YouTube's real `videos.insert` docs and
+found `status.publishAt` requires `privacyStatus: "private"` at upload time,
+with YouTube's own servers auto-publishing at that moment — even immediately
+if `publishAt` is already in the past. Replaced the local queue entirely with
+`youtube_schedule.py`: upload immediately, reserve a future publish slot
+(`compute_next_publish_slot()`, spaced from the last *reserved* slot, not
+from `now`, so a batch of several videos still lands one every N days in
+order), let YouTube do the actual publishing. Strictly more reboot-proof than
+the original design — publishing no longer depends on this app being open at
+the right moment at all, only the initial upload does, and that already
+happens the instant a video finishes.
+
+**Owner's real growth-strategy question, answered with 2026 research, not
+guessed:** owner asked about seeding a brand-new zero-subscriber channel with
+a backlog vs. spacing uploads. Real 2026 upload-timing/frequency studies
+(SocialPilot, WebFX, Crisp, Alan Spicer) back both halves of the owner's
+instinct: don't publish many videos live on the same day (hurts ranking more
+than it helps), but bulk-*producing* content and staggering the actual
+publish schedule is standard practice. No feature change needed — the
+already-live `youtube_min_days_between_uploads` Settings field just gets
+turned down (e.g. to 1) during an initial seeding push, then back up once
+caught up to real-time production.
+
+**Explicitly dropped from scope, owner's own call:** an automated
+"corrected video" re-upload/relinking mechanic (upload a fix, link it from
+the old video's description, draft a reply pointing to it). Owner realized
+multiple corrections over a song's lifetime would pile up as several videos
+on the channel, and didn't want to lose the original's views/comments by
+deleting duplicates either — so this was cut entirely. The description
+still invites viewers to report errors in the comments (useful signal, still
+flagged for the owner via the comment-review panel), but any actual
+correction is now a fully manual call using the ordinary "Upload to YouTube"
+button, same as any other upload.
+
+Other real decisions baked in: category defaults to "Howto & Style" (id 26);
+`made_for_kids` defaults to `False` (a required COPPA declaration, not just
+a preference); comment replies are always draft-then-approve, never
+auto-posted, matching how this owner already operates the AITrading project
+(review before anything automated posts publicly); comment monitoring is
+scoped only to videos this app itself uploaded and only runs while the GUI
+is open (no always-on service, matching how every other feature here already
+works).

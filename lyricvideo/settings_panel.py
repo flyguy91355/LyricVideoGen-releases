@@ -17,7 +17,11 @@ from .settings import ENCODERS, FPS_OPTIONS, RESOLUTIONS, Settings, hex_to_rgb
 
 _INT_FIELDS = {
     "fps", "crf", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha", "chord_legend_size",
+    "youtube_min_days_between_uploads", "youtube_preferred_upload_hour",
 }
+
+_YOUTUBE_CATEGORY_IDS = {"Howto & Style": "26", "Education": "27", "Music": "10"}
+_YOUTUBE_CATEGORY_LABELS = {v: k for k, v in _YOUTUBE_CATEGORY_IDS.items()}
 
 
 def values_to_settings(raw: dict) -> Settings:
@@ -29,6 +33,10 @@ def values_to_settings(raw: dict) -> Settings:
     for name in _INT_FIELDS:
         if name in coerced:
             coerced[name] = int(float(coerced[name]))
+    if "youtube_category_id" in coerced:
+        coerced["youtube_category_id"] = _YOUTUBE_CATEGORY_IDS.get(
+            coerced["youtube_category_id"], coerced["youtube_category_id"],
+        )
     return Settings.from_dict(coerced)
 
 
@@ -129,6 +137,14 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         if f:
             self.vars["font_path"].set(f)
 
+    def _browse_youtube_secrets(self) -> None:
+        f = filedialog.askopenfilename(
+            parent=self, title="Choose your client_secret_*.json file",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if f:
+            self.vars["youtube_client_secrets_path"].set(f)
+
     def _on_reset_clicked(self) -> None:
         if messagebox.askyesno(
             "Reset settings",
@@ -173,6 +189,20 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._check("include_seventh_chords", "Detect 7th chords (7, m7, maj7)")
         self._slider("min_chord_seconds", "Minimum chord length", 0.2, 2.0, 18, lambda v: f"{v:.1f}s")
 
+        self._section("YouTube")
+        self.vars["youtube_client_secrets_path"] = tk.StringVar()
+        self.vars["youtube_client_secrets_path"].trace_add("write", lambda *_: self._changed())
+        self._add("Client secrets file",
+                   ctk.CTkButton(self, text="Browse client secrets file...", command=self._browse_youtube_secrets))
+        self._check("youtube_auto_upload", "Auto-upload finished videos to YouTube")
+        self._option("youtube_privacy", "Privacy", ["public", "unlisted", "private"])
+        self._option("youtube_category_id", "Category", list(_YOUTUBE_CATEGORY_IDS.keys()))
+        self._check("youtube_made_for_kids", "Made for kids")
+        self._slider("youtube_min_days_between_uploads", "Minimum days between uploads", 1, 14, 13,
+                     lambda v: f"{int(v)}d")
+        self._slider("youtube_preferred_upload_hour", "Preferred upload hour", 0, 23, 23,
+                     lambda v: f"{int(v) % 12 or 12}{'AM' if int(v) < 12 else 'PM'}")
+
     def load_from(self, settings: Settings) -> None:
         # Suppressed while populating every var individually -- each .set() below
         # fires its own trace_add callback, so without this a 20-field load (the
@@ -181,6 +211,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._suppress_change = True
         try:
             for name, value in asdict(settings).items():
+                if name == "youtube_category_id":
+                    value = _YOUTUBE_CATEGORY_LABELS.get(value, value)
                 if name in self.vars:
                     self.vars[name].set(value)
         finally:

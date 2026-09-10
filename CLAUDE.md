@@ -274,6 +274,89 @@ and threaded all the way through `run_pipeline()` via
 `pipeline.ordered_unique_chords()`. `Settings.show_chord_legend` toggle (in `render_kwargs()` too) has a
 `SettingsPanel` checkbox and shows up in the live preview pane too.
 
+**YouTube upload + channel management** (shipped 2026-09-10, per
+`docs/superpowers/plans/2026-09-10-youtube-upload-channel-management.md`):
+`lyricvideo/youtube_state.py` tracks each song's own upload (`video_id`,
+`uploaded_at`, `title`) in a `youtube_state.json` alongside that song's
+`lyrics_timed.json`, so the app knows which of its own uploads exist (used
+to skip auto-re-uploading a song on Redo, and to scope comment monitoring
+to only videos this app posted). See
+`docs/superpowers/specs/2026-09-10-youtube-upload-design.md` for the full
+design, including why publishing is scheduled via YouTube's own
+`publishAt` rather than a local queue. `lyricvideo/youtube.py` wraps the
+raw YouTube Data API v3 calls (`upload_video`, `list_new_comments`,
+`post_reply`), each taking an already-built API client as its first
+argument -- same "inject the client, fake it in tests" pattern as
+`imagery.py`'s `anthropic_client`/`http_client`, so nothing here ever
+makes a real network call in tests. New dependencies:
+`google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`.
+`lyricvideo/youtube_metadata.py` spends one small Claude call per upload
+(`generate_video_metadata`, same cost profile as the image prompts) to
+write a title/description/tags, and one more per new comment
+(`draft_comment_reply`) to draft a reply and flag whether it looks like an
+error report -- both parse a labeled-line reply format
+(`TITLE:`/`DESCRIPTION:`/`TAGS:` or `IS_ERROR_REPORT:`/`REPLY:`) that's
+robust to Claude reordering the lines. `lyricvideo/youtube_schedule.py`'s
+`schedule_upload()` is the single upload code path (auto AND manual): for
+a Public target it uploads immediately as YouTube-Private with a computed
+future `publishAt` (`compute_next_publish_slot()` spaces each new slot
+`youtube_min_days_between_uploads` days past whichever slot was reserved
+LAST, snapped to `youtube_preferred_upload_hour` -- not past `now`, so a
+batch of several videos scheduled back-to-back still lands one every N
+days in order); Unlisted/Private upload immediately with that literal
+status, no scheduling at all. `lyricvideo/youtube_auth.py` owns the OAuth
+connection lifecycle: `connect()` opens the owner's browser once for
+consent (using a `client_secret_*.json` downloaded from Google Cloud
+Console) and saves a refresh token to
+`~/.playalongvideoproduction/youtube_token.json`; `load_credentials()`
+returns `None` for "not connected" (never raises) and auto-refreshes an
+expired token; `get_channel_title()` confirms which channel is connected. `Settings`
+gained seven YouTube fields (`youtube_auto_upload`,
+`youtube_client_secrets_path`, `youtube_privacy` default `"public"`,
+`youtube_category_id` default `"26"`, `youtube_made_for_kids` default
+`False`, `youtube_min_days_between_uploads` default `2`,
+`youtube_preferred_upload_hour` default `15`). `SettingsPanel` gained a
+"YouTube" section (client-secrets file picker, auto-upload checkbox,
+privacy/category dropdowns, made-for-kids checkbox, two sliders) --
+the Category dropdown shows friendly labels ("Howto & Style"/"Education"/
+"Music") while `Settings.youtube_category_id` stores the real numeric
+YouTube category id; `values_to_settings()`/`load_from()` translate
+between the two at the Settings boundary. `gui.py`'s module-level
+`_maybe_upload_to_youtube(work_dir, settings)` (testable the same way
+`_slugify`/`_split_log_text` already are) gates every auto-upload trigger
+-- only if enabled, connected, AND this song was never uploaded before --
+and is called from `_run_worker` (shared by both Generate and Redo) and
+per-item inside `_run_batch_worker`. Any upload failure is caught and
+logged as a warning, never raised. A "YouTube: not connected"/"YouTube:
+connected as <channel>" status label + "Connect to YouTube" button sit
+above the Settings panel; a manual "Upload to YouTube" button next to the
+Status line (enabled once a video finishes and YouTube is connected)
+always performs a fresh `schedule_upload()` immediately, bypassing the
+auto-upload skip-checks -- the owner's deliberate override for a
+correction or any other manual re-post. `lyricvideo/youtube_comment_state.py`
+persists which comment ids have already been seen
+(`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies
+are still awaiting the owner's review (`PendingReply` +
+`load_pending_replies`/`add_pending_reply`/`remove_pending_reply`) --
+both flat local JSON files, so pending drafts survive an app restart. A
+"YouTube Comments" panel (bottom of the right-hand column, below Settings)
+lists pending drafts with an editable reply box, an "⚠ possible error
+report" badge, and Approve (posts via `post_reply`)/Dismiss buttons --
+nothing ever posts without that explicit click. A "Check Now" button plus
+a 20-minute `root.after` timer (only while the app is open) scan every
+song with a `youtube_state.json` for new comments, scoped to only videos
+this app uploaded; one Claude call per new comment drafts a reply and
+flags likely error reports. No automated "corrected video"
+re-upload/relinking mechanism exists anywhere in this feature -- a
+correction is always the owner's own manual call via the upload button
+above.
+
+This whole feature (11 tasks) is now complete and tested (363 tests
+passing). What's NOT yet verified: the interactive OAuth `connect()` flow
+and live comment fetch/reply, both of which need the owner's own real
+Google Cloud `client_secret_*.json` and a real connected channel to
+exercise end-to-end.
+
 ## Tests
 
 ```bash

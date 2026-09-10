@@ -12,9 +12,11 @@ import traceback
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
+import anthropic
 import customtkinter as ctk
 import httpx
 from dotenv import load_dotenv
+from googleapiclient.discovery import build
 
 from .batch import (
     find_audio_files,
@@ -39,6 +41,19 @@ from .settings_preview import SettingsPreviewFrame
 from .update.apply import copy_updatable_files, extract_release_archive, requirements_changed
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
+from . import youtube_auth
+from .youtube import list_new_comments, post_reply
+from .youtube_comment_state import (
+    PendingReply,
+    add_pending_reply,
+    load_pending_replies,
+    load_seen_comment_ids,
+    mark_comments_seen,
+    remove_pending_reply,
+)
+from .youtube_metadata import draft_comment_reply
+from .youtube_schedule import schedule_upload
+from .youtube_state import load_youtube_state
 
 _CR_LF_RE = re.compile(r"[\r\n]")
 
@@ -66,6 +81,31 @@ def _split_log_text(pending: str, text: str) -> tuple[str, str]:
         start = idx + 1
     current += text[start:]
     return current, "".join(committed)
+
+
+def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
+    """Uploads work_dir's finished video to YouTube if auto-upload is on,
+    YouTube is connected, and this song has never been uploaded before --
+    Redo of an already-uploaded song is deliberately skipped here to avoid
+    duplicate videos piling up (owner's explicit choice). Any failure is
+    caught and logged -- an upload problem must never make an
+    otherwise-successful video generation look like it failed."""
+    if not settings.youtube_auto_upload:
+        return
+    if load_youtube_state(work_dir) is not None:
+        return
+    credentials = youtube_auth.load_credentials()
+    if credentials is None:
+        return
+
+    try:
+        youtube_client = build("youtube", "v3", credentials=credentials)
+        anthropic_client = anthropic.Anthropic()
+        schedule_upload(youtube_client, anthropic_client, work_dir, settings)
+        print(f"Uploaded to YouTube: {work_dir.name}")
+    except Exception as e:
+        print(f"WARNING: YouTube upload failed for {work_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
@@ -119,6 +159,7 @@ class LyricVideoGUI:
         self._batch_items: list = []  # list[BatchItem] once resolved
         self._batch_index = 0
         self._batch_results = {"succeeded": [], "skipped_already_done": [], "failed": []}
+        self._last_work_dir: Path | None = None
 
         self.title_var.trace_add("write", self._on_title_changed)
 
@@ -126,6 +167,7 @@ class LyricVideoGUI:
         self._suppress_settings_save = False
         self._check_api_keys()
         self._start_update_check()
+        self._refresh_youtube_status()
 
     def _build_widgets(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -201,6 +243,10 @@ class LyricVideoGUI:
         ctk.CTkLabel(status_frame, textvariable=self.status_var, text_color="#3ecf8e").pack(
             side="left", padx=6
         )
+        self.upload_button = ctk.CTkButton(
+            status_frame, text="Upload to YouTube", command=self._on_manual_upload, state="disabled", width=140,
+        )
+        self.upload_button.pack(side="left", padx=(12, 0))
 
         self.progress_bar = ctk.CTkProgressBar(left)
         self.progress_bar.set(0.0)
@@ -247,6 +293,17 @@ class LyricVideoGUI:
         right.grid(row=0, column=1, sticky="nsew")
         self.settings_preview = SettingsPreviewFrame(right, self.settings)
         self.settings_preview.pack(fill="x", padx=6, pady=(6, 0))
+
+        youtube_connect_frame = ctk.CTkFrame(right, fg_color="transparent")
+        youtube_connect_frame.pack(fill="x", padx=4, pady=(6, 0))
+        self.youtube_status_var = tk.StringVar(value="YouTube: not connected")
+        ctk.CTkLabel(youtube_connect_frame, textvariable=self.youtube_status_var, anchor="w").pack(side="left")
+        ctk.CTkButton(
+            youtube_connect_frame, text="Connect to YouTube", command=self._on_connect_youtube, width=160,
+        ).pack(side="right")
+
+        self._build_youtube_panel(right)
+
         self.settings_panel = SettingsPanel(right, self.settings, on_change=self._on_settings_changed)
         self.settings_panel.pack(fill="both", expand=True, padx=6, pady=6)
 
@@ -582,6 +639,7 @@ class LyricVideoGUI:
                             settings=self.settings,
                             progress_callback=lambda stage: self._queue.put(("stage", stage)),
                         )
+                    _maybe_upload_to_youtube(item.work_dir, self.settings)
                     results["succeeded"].append(item.title)
                 except Exception as e:
                     results["failed"].append((item.title, f"{type(e).__name__}: {e}"))
@@ -665,6 +723,7 @@ class LyricVideoGUI:
         self.progress_bar.set(0.0)
         self._clear_log()
 
+        self._last_work_dir = Path(work_dir)
         thread = threading.Thread(
             target=self._run_worker,
             args=(Path(audio), Path(work_dir), title or None),
@@ -712,6 +771,7 @@ class LyricVideoGUI:
         self.progress_bar.set(0.0)
         self._clear_log()
 
+        self._last_work_dir = song_dir
         thread = threading.Thread(
             target=self._run_worker,
             args=(audio_path, song_dir, title, "fetch_lyrics"),
@@ -719,6 +779,154 @@ class LyricVideoGUI:
         )
         thread.start()
         self.root.after(100, self._poll_queue)
+
+    def _refresh_youtube_status(self) -> None:
+        credentials = youtube_auth.load_credentials()
+        if credentials is None:
+            self.youtube_status_var.set("YouTube: not connected")
+            return
+        try:
+            channel = youtube_auth.get_channel_title(credentials)
+            self.youtube_status_var.set(f"YouTube: connected as {channel}")
+        except Exception:
+            self.youtube_status_var.set("YouTube: connected (channel name unavailable)")
+
+    def _on_connect_youtube(self) -> None:
+        secrets_path = self.settings.youtube_client_secrets_path
+        if not secrets_path:
+            messagebox.showerror(
+                "No client secrets file", "Choose your client_secret_*.json file in Settings first.",
+            )
+            return
+
+        def worker():
+            try:
+                youtube_auth.connect(Path(secrets_path))
+                self.root.after(0, self._refresh_youtube_status)
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Could not connect to YouTube", f"{type(e).__name__}: {e}",
+                ))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_manual_upload(self) -> None:
+        if self._last_work_dir is None:
+            return
+        work_dir = self._last_work_dir
+        self.upload_button.configure(state="disabled")
+
+        def worker():
+            credentials = youtube_auth.load_credentials()
+            if credentials is None:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Not connected", "Connect to YouTube in Settings first.",
+                ))
+                self.root.after(0, lambda: self.upload_button.configure(state="normal"))
+                return
+            try:
+                youtube_client = build("youtube", "v3", credentials=credentials)
+                anthropic_client = anthropic.Anthropic()
+                schedule_upload(youtube_client, anthropic_client, work_dir, self.settings)
+                self.root.after(0, lambda: messagebox.showinfo("Uploaded", "Video uploaded to YouTube."))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Upload failed", f"{type(e).__name__}: {e}"))
+            finally:
+                self.root.after(0, lambda: self.upload_button.configure(state="normal"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _build_youtube_panel(self, parent) -> None:
+        frame = ctk.CTkFrame(parent)
+        frame.pack(side="bottom", fill="x", padx=4, pady=(0, 6))
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", padx=8, pady=(8, 4))
+        ctk.CTkLabel(header, text="YouTube Comments", font=ctk.CTkFont(weight="bold")).pack(side="left")
+        ctk.CTkButton(header, text="Check Now", command=self._on_check_youtube_comments, width=100).pack(side="right")
+        self.youtube_replies_frame = ctk.CTkScrollableFrame(frame, height=200)
+        self.youtube_replies_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._render_pending_replies()
+        self.root.after(20 * 60 * 1000, self._schedule_youtube_comment_check)
+
+    def _render_pending_replies(self) -> None:
+        for child in self.youtube_replies_frame.winfo_children():
+            child.destroy()
+        for reply in load_pending_replies():
+            self._render_one_pending_reply(reply)
+
+    def _render_one_pending_reply(self, reply: PendingReply) -> None:
+        row = ctk.CTkFrame(self.youtube_replies_frame)
+        row.pack(fill="x", pady=4)
+        badge = " ⚠ possible error report" if reply.is_error_report else ""
+        ctk.CTkLabel(
+            row, text=f"{reply.author}: {reply.comment_text}{badge}", anchor="w", wraplength=400, justify="left",
+        ).pack(fill="x", padx=6, pady=(6, 2))
+        text_box = ctk.CTkTextbox(row, height=60)
+        text_box.insert("1.0", reply.draft_reply)
+        text_box.pack(fill="x", padx=6, pady=(0, 4))
+        buttons = ctk.CTkFrame(row, fg_color="transparent")
+        buttons.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Approve", width=80, command=lambda: self._on_approve_reply(reply, text_box),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Dismiss", width=80, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_dismiss_reply(reply),
+        ).pack(side="left")
+
+    def _on_approve_reply(self, reply: PendingReply, text_box) -> None:
+        text = text_box.get("1.0", "end").strip()
+
+        def worker():
+            credentials = youtube_auth.load_credentials()
+            if credentials is None:
+                return
+            try:
+                youtube_client = build("youtube", "v3", credentials=credentials)
+                post_reply(youtube_client, reply.comment_id, text)
+                remove_pending_reply(reply.comment_id)
+                self.root.after(0, self._render_pending_replies)
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Could not post reply", f"{type(e).__name__}: {e}",
+                ))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_dismiss_reply(self, reply: PendingReply) -> None:
+        remove_pending_reply(reply.comment_id)
+        self._render_pending_replies()
+
+    def _on_check_youtube_comments(self) -> None:
+        threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()
+
+    def _check_youtube_comments_worker(self) -> None:
+        credentials = youtube_auth.load_credentials()
+        if credentials is None:
+            return
+        youtube_client = build("youtube", "v3", credentials=credentials)
+        anthropic_client = anthropic.Anthropic()
+        seen_ids = load_seen_comment_ids()
+        new_ids = []
+        for work_dir in sorted((PROJECT_ROOT / "work").glob("*")):
+            state = load_youtube_state(work_dir)
+            if state is None:
+                continue
+            for comment in list_new_comments(youtube_client, state.video_id, seen_ids):
+                draft, is_error_report = draft_comment_reply(anthropic_client, comment.text, state.title)
+                add_pending_reply(PendingReply(
+                    comment_id=comment.comment_id, video_id=comment.video_id, author=comment.author,
+                    comment_text=comment.text, draft_reply=draft, is_error_report=is_error_report,
+                ))
+                new_ids.append(comment.comment_id)
+        if new_ids:
+            mark_comments_seen(new_ids)
+        self.root.after(0, self._render_pending_replies)
+
+    def _schedule_youtube_comment_check(self) -> None:
+        if youtube_auth.load_credentials() is not None:
+            threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()
+        self.root.after(20 * 60 * 1000, self._schedule_youtube_comment_check)
 
     def _run_worker(
         self,
@@ -739,6 +947,7 @@ class LyricVideoGUI:
                 settings=self.settings,
                 progress_callback=lambda stage: self._queue.put(("stage", stage)),
             )
+            _maybe_upload_to_youtube(work_dir, self.settings)
             self._queue.put(("done", str(out_path)))
         except Exception as e:
             self._queue.put(("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
@@ -796,6 +1005,9 @@ class LyricVideoGUI:
                 self.generate_button.configure(state="normal")
                 self.redo_button.configure(state="normal")
                 self.batch_button.configure(state="normal")
+                self.upload_button.configure(
+                    state="normal" if youtube_auth.load_credentials() is not None else "disabled"
+                )
                 messagebox.showinfo("Video ready", f"Wrote {payload}")
                 return
             elif kind == "error":

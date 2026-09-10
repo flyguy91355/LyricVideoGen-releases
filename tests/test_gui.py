@@ -1,4 +1,73 @@
-from lyricvideo.gui import _slugify, _split_log_text
+from lyricvideo.gui import _maybe_upload_to_youtube, _slugify, _split_log_text
+from lyricvideo.settings import Settings
+from lyricvideo.youtube_state import YoutubeState, save_youtube_state
+
+
+def test_maybe_upload_to_youtube_skips_when_auto_upload_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.gui.youtube_auth.load_credentials",
+        lambda: (_ for _ in ()).throw(AssertionError("should not check credentials when disabled")),
+    )
+    settings = Settings(youtube_auto_upload=False)
+
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+
+def test_maybe_upload_to_youtube_skips_when_not_connected(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: None)
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda *a, **k: calls.append(True) or (_ for _ in ()).throw(AssertionError("should not upload")),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+    assert calls == []
+
+
+def test_maybe_upload_to_youtube_skips_when_already_uploaded(tmp_path, monkeypatch):
+    save_youtube_state(tmp_path, YoutubeState(video_id="abc", uploaded_at="2026-01-01T00:00:00", title="t"))
+    monkeypatch.setattr(
+        "lyricvideo.gui.youtube_auth.load_credentials",
+        lambda: (_ for _ in ()).throw(AssertionError("should not check credentials once already-uploaded is known")),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+
+def test_maybe_upload_to_youtube_calls_schedule_upload_when_eligible(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(
+            (youtube_client, anthropic_client, work_dir, settings)
+        ),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)
+
+    assert calls == [("fake-youtube-client", "fake-anthropic-client", tmp_path, settings)]
+
+
+def test_maybe_upload_to_youtube_never_raises_on_upload_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+
+    def _raise(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", _raise)
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
 
 
 def test_slugify_lowercases_and_hyphenates():
