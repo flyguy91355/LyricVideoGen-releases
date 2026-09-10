@@ -39,6 +39,22 @@ def test_draw_single_chord_diagram_panel_stays_opaque_against_a_bright_backgroun
     assert sample[0] < 60 and sample[1] < 60 and sample[2] < 60
 
 
+def test_draw_single_chord_diagram_panel_alpha_is_owner_tunable(test_font_path):
+    shape = get_chord_shape("G")
+    diagram = draw_single_chord_diagram(
+        shape, "G", (120, 160), test_font_path, panel_color=(10, 10, 10), panel_alpha=60,
+    )
+
+    bright_bg = Image.new("RGBA", (120, 160), (255, 255, 255, 255))
+    composited = Image.alpha_composite(bright_bg, diagram)
+
+    # A low panel_alpha should let the bright background show through much
+    # more than the near-opaque default -- confirms the parameter is real,
+    # not just accepted and ignored.
+    sample = composited.getpixel((10, 10))
+    assert sample[0] > 150
+
+
 def test_draw_single_chord_diagram_highlighted_differs_from_unhighlighted(test_font_path):
     shape = get_chord_shape("G")
     plain = np.array(draw_single_chord_diagram(shape, "G", (120, 160), test_font_path, highlighted=False))

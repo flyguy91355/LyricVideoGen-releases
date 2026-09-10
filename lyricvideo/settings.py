@@ -31,6 +31,7 @@ class Settings:
     fps: int = 24
     encoder: str = "libx264"
     crf: int = 20
+    countdown_seconds: int = 3  # lead-in before the song starts; 0 disables it
 
     # --- Typography & colors (render.py) --------------------------------
     font_path: str = ""  # "" = auto-detect (today's pipeline.default_font())
@@ -49,6 +50,7 @@ class Settings:
     timeline_window_sec: float = 12.0
     show_chord_legend: bool = True
     chord_legend_size: int = 100  # percent -- 100 = default box size, scaled/shrunk from there
+    chord_diagram_panel_alpha: int = 235  # 0-255 -- near-opaque default, owner-tunable
 
     # --- Chord detection (detect_chords.py) -------------------------------
     snap_chords_to_key: bool = True
@@ -90,6 +92,7 @@ class Settings:
             "timeline_window_sec": self.timeline_window_sec,
             "show_chord_legend": self.show_chord_legend,
             "chord_legend_scale": self.chord_legend_size / 100.0,
+            "chord_diagram_panel_alpha": self.chord_diagram_panel_alpha,
         }
 
     def save(self, path: Path = CONFIG_FILE) -> None:

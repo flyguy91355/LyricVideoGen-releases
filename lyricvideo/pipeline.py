@@ -159,6 +159,7 @@ def run_pipeline(
             "fps": settings.fps,
             "encoder": settings.encoder,
             "crf": settings.crf,
+            "countdown_seconds": settings.countdown_seconds,
         }
 
     def report(stage: str) -> None:

@@ -65,6 +65,7 @@ def render_preview_frame(settings: Settings, preview_size: tuple[int, int] = PRE
         size_scale=render_kwargs["chord_legend_scale"],
         accent_color=render_kwargs["accent_color"], text_color=render_kwargs["text_color"],
         dim_text_color=render_kwargs["dim_text_color"], panel_color=render_kwargs["panel_color"],
+        panel_alpha=render_kwargs["chord_diagram_panel_alpha"],
     )
     if frame.size != preview_size:
         frame = frame.resize(preview_size, Image.LANCZOS)

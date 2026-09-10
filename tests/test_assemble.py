@@ -7,6 +7,10 @@ def _fake_clips(calls):
     class _FakeAudioClip:
         duration = 2.0
 
+        def set_start(self, t):
+            calls["audio_set_start"] = t
+            return self
+
     class _FakeVideoClip:
         def __init__(self, make_frame, duration):
             calls["make_frame"] = make_frame
@@ -39,7 +43,10 @@ def test_assemble_video_invokes_write_videofile(tmp_path, monkeypatch, test_font
     ]
     out_path = tmp_path / "final.mp4"
 
-    assemble_video(lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path)
+    assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=0,
+    )
 
     assert calls["duration"] == 2.0
     assert calls["fps"] == 24
@@ -73,6 +80,7 @@ def test_assemble_video_threads_chord_track_into_scene(tmp_path, monkeypatch, te
 
     assemble_module.assemble_video(
         lines, chord_track, tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=0,
     )
     calls["make_frame"](1.5)
 
@@ -103,6 +111,7 @@ def test_assemble_video_draws_chord_bar_on_every_frame(tmp_path, monkeypatch, te
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=0,
     )
     calls["make_frame"](0.5)
 
@@ -124,7 +133,7 @@ def test_assemble_video_respects_custom_resolution_fps_encoder_crf(tmp_path, mon
 
     assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        frame_size=(1280, 720), fps=30, encoder="libx265", crf=24,
+        frame_size=(1280, 720), fps=30, encoder="libx265", crf=24, countdown_seconds=0,
     )
 
     assert calls["fps"] == 30
@@ -167,6 +176,7 @@ def test_assemble_video_passes_render_style_kwargs_through_to_draw_scene_and_cho
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
         lyric_size=52, text_color=(1, 2, 3), accent_color=(4, 5, 6), show_key_bpm=False,
+        countdown_seconds=0,
     )
     calls["make_frame"](0.5)
 
@@ -201,7 +211,7 @@ def test_assemble_video_draws_chord_legend_with_computed_current_label(tmp_path,
 
     assemble_module.assemble_video(
         lines, chord_track, tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        chord_legend_labels=["G", "D"],
+        chord_legend_labels=["G", "D"], countdown_seconds=0,
     )
     calls["make_frame"](1.5)
 
@@ -232,6 +242,7 @@ def test_assemble_video_chord_legend_defaults_to_no_labels(tmp_path, monkeypatch
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=0,
     )
     calls["make_frame"](0.5)
 
@@ -262,7 +273,7 @@ def test_assemble_video_respects_show_chord_legend_toggle(tmp_path, monkeypatch,
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        show_chord_legend=False,
+        show_chord_legend=False, countdown_seconds=0,
     )
     calls["make_frame"](0.5)
 
@@ -293,8 +304,193 @@ def test_assemble_video_passes_chord_legend_scale_through(tmp_path, monkeypatch,
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        chord_legend_scale=0.6,
+        chord_legend_scale=0.6, countdown_seconds=0,
     )
     calls["make_frame"](0.5)
 
     assert captured["size_scale"] == 0.6
+
+
+def test_assemble_video_passes_chord_diagram_panel_alpha_through(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    captured = {}
+    real_draw_chord_legend = assemble_module.draw_chord_legend
+
+    def spying_draw_chord_legend(frame, chord_labels, current_label, font_path, **kwargs):
+        captured["panel_alpha"] = kwargs.get("panel_alpha")
+        return real_draw_chord_legend(frame, chord_labels, current_label, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_chord_legend", spying_draw_chord_legend)
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    ]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        chord_diagram_panel_alpha=90, countdown_seconds=0,
+    )
+    calls["make_frame"](0.5)
+
+    assert captured["panel_alpha"] == 90
+
+
+def test_assemble_video_default_countdown_extends_total_duration(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+
+    from lyricvideo.assemble import assemble_video
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    ]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_video(lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path)
+
+    # FakeAudioClip.duration is 2.0; default countdown_seconds is 3.
+    assert calls["duration"] == 5.0
+    assert calls["audio_set_start"] == 3
+
+
+def test_assemble_video_countdown_disabled_matches_old_behavior(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo.assemble import assemble_video
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    ]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=0,
+    )
+
+    assert calls["duration"] == 2.0
+    assert "audio_set_start" not in calls  # CompositeAudioClip path never touched
+
+
+def test_assemble_video_frame_during_countdown_uses_draw_countdown_not_the_scene(
+    tmp_path, monkeypatch, test_font_path,
+):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+
+    from lyricvideo import assemble as assemble_module
+
+    countdown_calls = []
+    real_draw_countdown = assemble_module.draw_countdown
+
+    def spying_draw_countdown(frame, seconds_remaining, font_path, **kwargs):
+        countdown_calls.append(seconds_remaining)
+        return real_draw_countdown(frame, seconds_remaining, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_countdown", spying_draw_countdown)
+
+    scene_calls = []
+    real_draw_scene = assemble_module.draw_scene
+
+    def spying_draw_scene(scene, background, font_path, **kwargs):
+        scene_calls.append(True)
+        return real_draw_scene(scene, background, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_scene", spying_draw_scene)
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    ]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=3,
+    )
+    # T=0.5 is still inside the 3-second lead-in (song_t = 0.5 - 3 = -2.5).
+    calls["make_frame"](0.5)
+
+    assert countdown_calls == [3]
+    assert scene_calls == []
+
+
+def test_assemble_video_frame_after_countdown_uses_song_relative_time(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+
+    from lyricvideo import assemble as assemble_module
+
+    draw_calls = []
+    real_draw_chord_bar = assemble_module.draw_chord_bar
+
+    def spying_draw_chord_bar(frame, chord_track, t, font_path, **kwargs):
+        draw_calls.append(t)
+        return real_draw_chord_bar(frame, chord_track, t, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_chord_bar", spying_draw_chord_bar)
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    ]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=3,
+    )
+    # T=3.5 in the outer timeline is 0.5 seconds into the real song.
+    calls["make_frame"](3.5)
+
+    assert draw_calls == [0.5]
+
+
+def test_assemble_video_countdown_number_decreases_each_second(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+
+    from lyricvideo import assemble as assemble_module
+
+    countdown_calls = []
+    real_draw_countdown = assemble_module.draw_countdown
+
+    def spying_draw_countdown(frame, seconds_remaining, font_path, **kwargs):
+        countdown_calls.append(seconds_remaining)
+        return real_draw_countdown(frame, seconds_remaining, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_countdown", spying_draw_countdown)
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    ]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_seconds=3,
+    )
+    for t in (0.0, 0.9, 1.0, 1.9, 2.0, 2.9):
+        calls["make_frame"](t)
+
+    assert countdown_calls == [3, 3, 2, 2, 1, 1]

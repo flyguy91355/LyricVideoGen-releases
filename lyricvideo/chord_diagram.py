@@ -13,10 +13,12 @@ ACCENT_COLOR_DEFAULT = (56, 189, 248)
 TEXT_COLOR_DEFAULT = (255, 255, 255)
 DIM_TEXT_COLOR_DEFAULT = (148, 163, 184)
 PANEL_COLOR_DEFAULT = (11, 18, 32)
-# Fixed, NOT the user's translucent panel_alpha setting -- a fingering chart is
-# reference material that must stay readable regardless of how bright the video
-# background is, same precedent as the chord bar's own NOW/NEXT boxes (BOX_FILL
-# in render.py), which likewise never use the translucent outer-backdrop alpha.
+# Deliberately its OWN setting, separate from the chord bar's translucent
+# panel_alpha -- originally fixed near-opaque (owner-reported 2026-09-09:
+# fingering charts were hard to read against some backgrounds), then made
+# owner-tunable (2026-09-10 request) since the right amount of transparency
+# is a taste call, not a one-size-fits-all legibility fix. 235 preserves the
+# original near-opaque behavior for anyone who never touches the new slider.
 _PANEL_ALPHA = 235
 
 _LABEL_HEIGHT_FRAC = 0.20       # fraction of diagram height reserved for the chord name
@@ -44,6 +46,7 @@ def draw_single_chord_diagram(
     text_color: tuple[int, int, int] = TEXT_COLOR_DEFAULT,
     dim_text_color: tuple[int, int, int] = DIM_TEXT_COLOR_DEFAULT,
     panel_color: tuple[int, int, int] = PANEL_COLOR_DEFAULT,
+    panel_alpha: int = _PANEL_ALPHA,
 ) -> Image.Image:
     """One small fingering diagram: chord name above, 6 vertical string lines,
     a nut line (or a base-fret label, if the shape doesn't start at the nut) +
@@ -54,7 +57,7 @@ def draw_single_chord_diagram(
     img = Image.new("RGBA", box_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    panel_fill = (*panel_color, _PANEL_ALPHA)
+    panel_fill = (*panel_color, panel_alpha)
     draw.rounded_rectangle((0, 0, bw - 1, bh - 1), radius=6, fill=panel_fill)
     if highlighted:
         draw.rounded_rectangle((0, 0, bw - 1, bh - 1), radius=6, outline=(*accent_color, 255), width=3)
@@ -165,6 +168,7 @@ def draw_chord_legend(
     text_color: tuple[int, int, int] = TEXT_COLOR_DEFAULT,
     dim_text_color: tuple[int, int, int] = DIM_TEXT_COLOR_DEFAULT,
     panel_color: tuple[int, int, int] = PANEL_COLOR_DEFAULT,
+    panel_alpha: int = _PANEL_ALPHA,
 ) -> Image.Image:
     """Composites one draw_single_chord_diagram() per chord_labels entry into
     the upper-left corner of `frame`, left to right, wrapping to further rows
@@ -199,7 +203,7 @@ def draw_chord_legend(
             shape, label, (box_w, box_h), font_path,
             highlighted=(label == current_label),
             accent_color=accent_color, text_color=text_color, dim_text_color=dim_text_color,
-            panel_color=panel_color,
+            panel_color=panel_color, panel_alpha=panel_alpha,
         )
         overlay.alpha_composite(diagram, (x, y))
         x += box_w + gap

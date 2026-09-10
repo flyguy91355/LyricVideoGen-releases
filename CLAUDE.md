@@ -147,8 +147,25 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    the chord bar) -- never more than 2 rows, shrinking only as much as needed to
    fit within a reserved upper region, and never growing past `Settings.
    chord_legend_size` (percent, owner-adjustable, default 100%). Each diagram's
-   own panel always renders near-opaque (fixed, NOT the translucent panel_alpha
-   used elsewhere) so it stays legible against any background. Long lyric lines
+   own panel opacity is its own separate owner-tunable slider,
+   `Settings.chord_diagram_panel_alpha` (0-255, default 235/near-opaque) --
+   originally a fixed constant so it would stay legible against any
+   background, then made adjustable (2026-09-10 request) since the right
+   amount of transparency is a taste call the panel_alpha used elsewhere
+   doesn't control. Every video opens with a `Settings.countdown_seconds`
+   lead-in (default 3, owner-adjustable in Output, 0 disables it) before the
+   song starts, so a musician has a moment to get ready: frozen on the first
+   scene's own background (Ken Burns held at its own start position, so
+   there's no visual jump into the real content) with a small centered
+   `render.draw_countdown()` panel counting down -- same rounded-box/
+   accent-color language as the chord bar's own NOW/NEXT boxes (owner
+   feedback: keep it modest, not "gaudy"), never more than ~15% of the
+   frame. `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
+   (countdown-extended) timeline; real content uses `song_t = T -
+   countdown_seconds` throughout. Audio is delayed to match
+   (`CompositeAudioClip([audio_clip.set_start(countdown_seconds)])`), so
+   the song's own audio and the real on-screen content always start at the
+   exact same instant, right as the countdown reaches zero. Long lyric lines
    wrap onto multiple rows at commas (preferred) or by word (fallback) instead of
    running off the frame edges or ever shrinking the font (`render.py`'s
    `_split_line_into_rows`) -- real bug, a 127-character line overflowed both

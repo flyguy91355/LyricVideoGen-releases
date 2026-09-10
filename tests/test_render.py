@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from lyricvideo.render import (
     CHORD_BOX, FRAME_SIZE, KEN_BURNS_PRESETS,
-    apply_ken_burns, compute_chord_bar_layout, draw_chord_bar, draw_scene,
+    apply_ken_burns, compute_chord_bar_layout, draw_chord_bar, draw_countdown, draw_scene,
     ken_burns_preset_for_key, _lane_label_font, _split_line_into_rows,
 )
 from lyricvideo.layout import Scene, SceneLine, SceneWord
@@ -420,3 +420,41 @@ def test_draw_scene_wrapped_line_keeps_the_configured_font_size(test_font_path):
     content_rows = np.where(rows_with_content)[0]
     assert content_rows.size > 0
     assert (content_rows.max() - content_rows.min()) >= (ascent + descent)
+
+
+def test_draw_countdown_renders_without_error(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    frame = draw_countdown(bg, 3, test_font_path)
+
+    assert frame.size == FRAME_SIZE
+    assert frame.getextrema() != ((20, 20), (20, 20), (20, 20))
+
+
+def test_draw_countdown_does_not_mutate_input_frame(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    draw_countdown(bg, 3, test_font_path)
+
+    assert bg.getextrema() == ((20, 20), (20, 20), (20, 20))
+
+
+def test_draw_countdown_stays_modest_in_size(test_font_path):
+    """Owner feedback, 2026-09-10: 'dont make it gawdy' -- the countdown
+    panel must stay a small centered element, not dominate the frame."""
+    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
+
+    frame = draw_countdown(bg, 3, test_font_path)
+
+    changed = np.array(frame).any(axis=2)
+    changed_fraction = changed.sum() / changed.size
+    assert changed_fraction < 0.15
+
+
+def test_draw_countdown_different_numbers_produce_different_frames(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    frame_3 = np.array(draw_countdown(bg, 3, test_font_path))
+    frame_1 = np.array(draw_countdown(bg, 1, test_font_path))
+
+    assert not np.array_equal(frame_3, frame_1)

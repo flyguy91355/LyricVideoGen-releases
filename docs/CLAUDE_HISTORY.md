@@ -583,3 +583,28 @@ get applied). Fixed by reading each file's tracked mode via
 `100755`. Verified for real, not assumed: re-cut v1.3.4 with the fixed
 script, then cloned the releases repo fresh and confirmed the file now
 ships at 775 (was 664 before the fix).
+
+## 2026-09-10 — Countdown lead-in added, so a musician has time to get ready
+
+Owner's real observation: "these song start as soon as the video starts..
+needs a couple seconds after you click on the video to start them. maybe
+a count down?" First proposal (big number over the background) got
+pushback ("im not sure big number.. dont make it gawdy") -- landed on a
+modest centered panel matching the chord bar's own existing NOW/NEXT box
+language (same `BOX_FILL`/rounded-rectangle/accent-color style) instead
+of inventing a new visual idiom.
+
+Implementation: `render.draw_countdown()` composites the number panel;
+`assemble_video()` gained `countdown_seconds` (default 3, `Settings`
+slider in Output, 0 disables it). The video's own total duration is now
+`song_duration + countdown_seconds`; `make_frame(T)` runs on that OUTER
+timeline and derives `song_t = T - countdown_seconds` for everything real
+(scene/chord-bar/legend), rendering the frozen first-scene countdown
+panel instead whenever `song_t < 0`. Audio is delayed to match via
+`CompositeAudioClip([audio_clip.set_start(countdown_seconds)])`, so the
+audio and the on-screen content always start at the same instant. All 10
+pre-existing `test_assemble.py` tests needed `countdown_seconds=0` added
+to their calls (the new default of 3 would have silently redirected their
+existing small-`t` `make_frame()` assertions into the new countdown-frame
+code path instead of the real content path they were written to test) --
+5 new tests cover the countdown behavior itself directly.

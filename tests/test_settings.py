@@ -10,6 +10,7 @@ def test_settings_defaults_match_current_hardcoded_render_behavior():
     assert s.fps == 24
     assert s.encoder == "libx264"
     assert s.crf == 20
+    assert s.countdown_seconds == 3
     assert s.font_path == ""
     assert s.lyric_size == 48
     assert s.chord_now_size == 64
@@ -28,6 +29,7 @@ def test_settings_defaults_match_current_hardcoded_render_behavior():
     assert s.min_chord_seconds == 0.5
     assert s.show_chord_legend is True
     assert s.chord_legend_size == 100
+    assert s.chord_diagram_panel_alpha == 235
 
 
 def test_youtube_settings_defaults():
@@ -147,6 +149,7 @@ def test_render_kwargs_maps_resolution_and_colors():
         "timeline_window_sec": 8.0,
         "show_chord_legend": True,
         "chord_legend_scale": 1.0,
+        "chord_diagram_panel_alpha": 235,
     }
 
 
@@ -166,3 +169,8 @@ def test_render_kwargs_includes_show_chord_legend():
 def test_render_kwargs_includes_chord_legend_scale():
     assert Settings().render_kwargs()["chord_legend_scale"] == 1.0
     assert Settings(chord_legend_size=50).render_kwargs()["chord_legend_scale"] == 0.5
+
+
+def test_render_kwargs_includes_chord_diagram_panel_alpha():
+    assert Settings().render_kwargs()["chord_diagram_panel_alpha"] == 235
+    assert Settings(chord_diagram_panel_alpha=90).render_kwargs()["chord_diagram_panel_alpha"] == 90

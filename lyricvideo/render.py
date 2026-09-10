@@ -47,6 +47,7 @@ DIM_TEXT_COLOR = (148, 163, 184)
 LANE_BLOCK_COLOR = (51, 65, 85, 235)
 TIMELINE_WINDOW_SECONDS = 12.0
 _MIN_LANE_FONT_SIZE = 18  # never shrink a timeline-lane chord label below this
+_COUNTDOWN_BOX_SIZE_FRAC = 0.12  # fraction of frame height -- modest, not "gaudy" (owner feedback)
 
 # (start_x, start_y, end_x, end_y, zoom_start, zoom_end) -- x/y are 0..1
 # fractions of the available pan range (0.5 = centered).
@@ -413,6 +414,37 @@ def draw_chord_bar(
 
     composited = Image.alpha_composite(frame.convert("RGBA"), overlay)
     return composited.convert("RGB")
+
+
+def draw_countdown(
+    frame: Image.Image,
+    seconds_remaining: int,
+    font_path: str,
+    *,
+    frame_size: tuple[int, int] = FRAME_SIZE,
+    accent_color: tuple[int, int, int] = ACCENT_COLOR,
+) -> Image.Image:
+    """Composites a small rounded countdown-number panel centered on `frame`
+    -- same BOX_FILL/rounded-rectangle/accent-color language as the chord
+    bar's own NOW/NEXT boxes, so the lead-in doesn't look like a different
+    visual style bolted onto the video (owner feedback, 2026-09-10: keep it
+    modest, not "gaudy"). Returns a new image; `frame` is not mutated
+    (matches draw_scene/draw_chord_bar's own copy-on-write style)."""
+    w, h = frame_size
+    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    box_side = int(h * _COUNTDOWN_BOX_SIZE_FRAC)
+    cx, cy = w // 2, h // 2
+    box = (cx - box_side // 2, cy - box_side // 2, cx + box_side // 2, cy + box_side // 2)
+    draw.rounded_rectangle(box, radius=int(box_side * 0.18), fill=BOX_FILL, outline=(*accent_color, 255), width=3)
+
+    font = ImageFont.truetype(font_path, int(box_side * 0.5))
+    label = str(seconds_remaining)
+    label_w = draw.textlength(label, font=font)
+    draw.text((cx - label_w / 2, cy - box_side * 0.28), label, font=font, fill=(*accent_color, 255))
+
+    return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
 
 
 CHORD_BOX_LAYOUT_DEFAULT = {
