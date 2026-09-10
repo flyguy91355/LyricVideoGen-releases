@@ -16,7 +16,13 @@ import customtkinter as ctk
 import httpx
 from dotenv import load_dotenv
 
-from .batch import find_audio_files, resolve_batch_items, resolve_existing_folder
+from .batch import (
+    find_audio_files,
+    load_last_batch_folder,
+    resolve_batch_items,
+    resolve_existing_folder,
+    save_last_batch_folder,
+)
 from .identify import extract_metadata
 from .pipeline import (
     STAGES,
@@ -109,7 +115,7 @@ class LyricVideoGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.redo_song_var = tk.StringVar()
         self.redo_new_images_var = tk.BooleanVar(value=False)
-        self.batch_folder_var = tk.StringVar()
+        self.batch_folder_var = tk.StringVar(value=load_last_batch_folder())
         self._batch_items: list = []  # list[BatchItem] once resolved
         self._batch_index = 0
         self._batch_results = {"succeeded": [], "skipped_already_done": [], "failed": []}
@@ -498,9 +504,16 @@ class LyricVideoGUI:
         self._clear_log()
 
     def _on_browse_batch_folder(self) -> None:
-        folder = filedialog.askdirectory()
+        current = self.batch_folder_var.get()
+        initialdir = current if current and Path(current).is_dir() else None
+        folder = filedialog.askdirectory(initialdir=initialdir) if initialdir else filedialog.askdirectory()
         if folder:
+            # resolve_existing_folder recovers a trailing/leading space the dialog
+            # itself silently drops (see resolve_existing_folder's docstring) --
+            # saving the corrected path keeps next time's initialdir usable too.
+            folder = str(resolve_existing_folder(Path(folder)))
             self.batch_folder_var.set(folder)
+            save_last_batch_folder(folder)
 
     def _on_start_batch(self) -> None:
         if self._running:

@@ -1,6 +1,40 @@
 from pathlib import Path
 
-from lyricvideo.batch import BatchItem, find_audio_files, resolve_batch_items, resolve_existing_folder
+from lyricvideo.batch import (
+    BatchItem,
+    find_audio_files,
+    load_last_batch_folder,
+    resolve_batch_items,
+    resolve_existing_folder,
+    save_last_batch_folder,
+)
+
+
+def test_load_last_batch_folder_missing_file_returns_empty(tmp_path):
+    assert load_last_batch_folder(tmp_path / "no_such_state.json") == ""
+
+
+def test_save_then_load_last_batch_folder_round_trips(tmp_path):
+    state_file = tmp_path / "batch_state.json"
+
+    save_last_batch_folder("/mnt/media/batch music ", state_file)
+
+    assert load_last_batch_folder(state_file) == "/mnt/media/batch music "
+
+
+def test_save_last_batch_folder_creates_parent_dir(tmp_path):
+    state_file = tmp_path / "nested" / "batch_state.json"
+
+    save_last_batch_folder("/some/folder", state_file)
+
+    assert load_last_batch_folder(state_file) == "/some/folder"
+
+
+def test_load_last_batch_folder_corrupt_file_returns_empty(tmp_path):
+    state_file = tmp_path / "batch_state.json"
+    state_file.write_text("not json", encoding="utf-8")
+
+    assert load_last_batch_folder(state_file) == ""
 
 
 def test_resolve_existing_folder_returns_real_dir_unchanged(tmp_path):

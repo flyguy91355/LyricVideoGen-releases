@@ -45,7 +45,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   `resolve_existing_folder()` in `lyricvideo/batch.py`, which falls back to
   matching a sibling directory by whitespace-insensitive name when the exact
   path the dialog returned doesn't exist, so the owner never has to rename a
-  folder to work around it. Built with
+  folder to work around it. The batch folder field also remembers the last
+  folder used (`load_last_batch_folder`/`save_last_batch_folder` in
+  `lyricvideo/batch.py`, a tiny separate JSON file at
+  `~/.playalongvideoproduction/batch_state.json` -- deliberately not a
+  `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
+  `Settings` from its own widgets and would silently reset any field with no
+  panel widget behind it) -- prefilled on launch and used as the Browse
+  dialog's `initialdir`. Built with
   CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
   Redo/log console/generation progress bar, right = the scrollable Settings panel

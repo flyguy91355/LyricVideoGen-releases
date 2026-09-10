@@ -5,13 +5,41 @@ docs/superpowers/specs/2026-09-10-batch-folder-processing-design.md."""
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from .identify import extract_metadata
 from .pipeline import slugify
 
+log = logging.getLogger("playalongvideoproduction")
+
 _AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac"}
+
+# Separate from Settings (lyricvideo/settings.py) on purpose: Settings is
+# owner-tunable render config, wholesale-replaced from the Settings panel's
+# widgets on every change (SettingsPanel.collect()) -- a field with no widget
+# behind it would get silently reset to its default the next time any slider
+# moves. This is just remembered GUI convenience state, so it gets its own
+# tiny file instead.
+_STATE_FILE = Path.home() / ".playalongvideoproduction" / "batch_state.json"
+
+
+def load_last_batch_folder(path: Path = _STATE_FILE) -> str:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("last_folder", "")
+    except (OSError, ValueError):
+        return ""
+
+
+def save_last_batch_folder(folder: str, path: Path = _STATE_FILE) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"last_folder": folder}), encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - disk issues
+        log.warning("Could not save last batch folder: %s", exc)
 
 
 def resolve_existing_folder(folder: Path) -> Path:
