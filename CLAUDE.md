@@ -34,7 +34,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or
   regenerated (backing up each one first, like Redo) for the whole batch; a
-  file that errors is logged and skipped, never aborting the rest. Built with
+  file that errors is logged and skipped, never aborting the rest. The chosen
+  folder's path is never `.strip()`'d (real bug found live, 2026-09-10: a
+  folder literally named "batch music " with a trailing space had that space
+  silently stripped, so the app looked for a folder that didn't exist) --
+  unlike the typed title/audio/work-dir fields, this value comes verbatim from
+  the OS file dialog, and a real folder name can legitimately have leading or
+  trailing whitespace. Built with
   CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
   Redo/log console/generation progress bar, right = the scrollable Settings panel

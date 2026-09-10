@@ -505,8 +505,14 @@ class LyricVideoGUI:
     def _on_start_batch(self) -> None:
         if self._running:
             return
-        folder = self.batch_folder_var.get().strip()
-        if not folder:
+        # NOT .strip()'d -- unlike the typed title/audio/work-dir fields, this
+        # value comes verbatim from a real folder the OS file dialog resolved,
+        # and a real folder name can legitimately have leading/trailing
+        # whitespace (confirmed live, 2026-09-10: a folder literally named
+        # "batch music " with a trailing space -- stripping it here made the
+        # app look for a folder that doesn't exist).
+        folder = self.batch_folder_var.get()
+        if not folder.strip():
             messagebox.showerror("No folder selected", "Choose a folder to batch-process first.")
             return
 
