@@ -313,7 +313,12 @@ returns `None` for "not connected" (never raises) and auto-refreshes an
 expired token; `get_channel_title()` confirms which channel is connected. `Settings`
 gained seven YouTube fields (`youtube_auto_upload`,
 `youtube_client_secrets_path`, `youtube_privacy` default `"public"`,
-`youtube_category_id` default `"26"`, `youtube_made_for_kids` default
+`youtube_category_id` default `"27"` ("Education" -- real 2026-09-10
+finding: YouTube Studio's "How-to" *subcategory* only appears under the
+Education top-level category and isn't reachable through the Data API at
+all, so the owner sets it manually per video in Studio; the app just
+needs to leave the video on Education for that option to be there),
+`youtube_made_for_kids` default
 `False`, `youtube_min_days_between_uploads` default `2`,
 `youtube_preferred_upload_hour` default `15`). `SettingsPanel` gained a
 "YouTube" section (client-secrets file picker, auto-upload checkbox,

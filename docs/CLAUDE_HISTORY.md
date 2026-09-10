@@ -517,3 +517,24 @@ auto-posted, matching how this owner already operates the AITrading project
 scoped only to videos this app itself uploaded and only runs while the GUI
 is open (no always-on service, matching how every other feature here already
 works).
+
+## 2026-09-10 — Wrong claim about YouTube categories, corrected by the owner
+
+Told the owner "YouTube doesn't nest categories" when explaining why picking
+"Education" in the app's Category dropdown didn't reveal a further "how-to"
+option to click. Owner pushed back ("not true.. go look at it") instead of
+accepting it. Checked YouTube's real docs and the owner was right: YouTube
+Studio's own upload page has a genuine nested subcategory picker under
+Education specifically (How-to, Lecture, Tips, Concept overview, etc.) —
+this exists, just not through the API. Verified against the actual YouTube
+Data API v3 `videos` resource docs (`snippet`/`status` field lists) that this
+subcategory is Studio-web-UI-only; no REST API field exposes it at all, so
+setting it programmatically would require full browser automation (scripting
+a real logged-in browser to click through Studio), not an API call — judged
+not worth building for one metadata field given the fragility (breaks on any
+Studio redesign) and cost (a real browser session separate from the OAuth
+token already in place). Owner chose to set the subcategory manually per
+video in Studio instead. Since that subcategory only appears under the
+Education top-level category, `Settings.youtube_category_id` default changed
+from `"26"` (Howto & Style) to `"27"` (Education) so the option is actually
+there for the owner to pick when they go set it by hand.

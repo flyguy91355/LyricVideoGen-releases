@@ -33,7 +33,7 @@ def _raw_defaults() -> dict:
         "youtube_auto_upload": False,
         "youtube_client_secrets_path": "",
         "youtube_privacy": "public",
-        "youtube_category_id": "Howto & Style",
+        "youtube_category_id": "Education",
         "youtube_made_for_kids": False,
         "youtube_min_days_between_uploads": 2.0,
         "youtube_preferred_upload_hour": 15.0,
@@ -46,9 +46,9 @@ def test_values_to_settings_produces_the_defaults_from_default_raw_values():
 
 def test_values_to_settings_translates_category_label_to_id():
     raw = _raw_defaults()
-    raw["youtube_category_id"] = "Education"
+    raw["youtube_category_id"] = "Howto & Style"
 
-    assert values_to_settings(raw).youtube_category_id == "27"
+    assert values_to_settings(raw).youtube_category_id == "26"
 
 
 def test_values_to_settings_coerces_string_fps_to_int():

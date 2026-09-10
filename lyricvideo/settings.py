@@ -60,7 +60,10 @@ class Settings:
     youtube_auto_upload: bool = False
     youtube_client_secrets_path: str = ""
     youtube_privacy: str = "public"          # "public" | "unlisted" | "private"
-    youtube_category_id: str = "26"          # YouTube's own category id -- 26 = "Howto & Style"
+    youtube_category_id: str = "27"          # YouTube's own category id -- 27 = "Education" (owner
+                                              # sets the "How-to" subcategory manually in Studio per
+                                              # video -- that field only appears under Education, and
+                                              # isn't reachable through the Data API at all)
     youtube_made_for_kids: bool = False      # COPPA declaration, required on every upload
     youtube_min_days_between_uploads: int = 2
     youtube_preferred_upload_hour: int = 15  # 24h local time (0-23); 3 PM matches research

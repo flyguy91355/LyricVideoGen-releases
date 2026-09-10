@@ -35,7 +35,7 @@ def test_youtube_settings_defaults():
     assert s.youtube_auto_upload is False
     assert s.youtube_client_secrets_path == ""
     assert s.youtube_privacy == "public"
-    assert s.youtube_category_id == "26"
+    assert s.youtube_category_id == "27"
     assert s.youtube_made_for_kids is False
     assert s.youtube_min_days_between_uploads == 2
     assert s.youtube_preferred_upload_hour == 15
