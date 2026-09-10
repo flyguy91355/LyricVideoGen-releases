@@ -19,6 +19,21 @@ from .render import (
 )
 
 FPS = 24
+DEFAULT_COUNTDOWN_BPM = 120.0  # used only if a song's own BPM wasn't detected (0 or missing)
+
+
+def _first_available_image_key(image_dir: Path, preferred_key: str) -> str | None:
+    """The countdown needs a guaranteed-real background, never a plain
+    fallback color -- real owner complaint, 2026-09-10 ("dont have a blank
+    screen"). `preferred_key` (whatever the real first moment of the song
+    would show, for visual continuity into it) is used if its file actually
+    exists; otherwise falls back to ANY real image already generated for
+    this song rather than a flat color. Returns None only if the song has
+    no images at all yet."""
+    if (image_dir / f"{preferred_key}.png").exists():
+        return preferred_key
+    candidates = sorted(image_dir.glob("*.png"))
+    return candidates[0].stem if candidates else None
 
 
 def assemble_video(
@@ -49,11 +64,18 @@ def assemble_video(
     show_chord_legend: bool = True,
     chord_legend_scale: float = 1.0,
     chord_diagram_panel_alpha: int = 235,
-    countdown_seconds: int = 3,
+    countdown_beats: int = 4,
 ) -> None:
     image_cache: dict[str, Image.Image] = {}
     audio_clip = AudioFileClip(str(audio_path))
     duration = audio_clip.duration
+
+    # A real band's count-in is always N beats, not N seconds -- how long
+    # that actually takes depends on the song's own tempo (owner request,
+    # 2026-09-10: "should count down 4, and be in tempo with the song").
+    bpm = chord_track.bpm if chord_track.bpm and chord_track.bpm > 0 else DEFAULT_COUNTDOWN_BPM
+    beat_duration = 60.0 / bpm
+    countdown_duration = countdown_beats * beat_duration
 
     def get_image(key: str) -> Image.Image:
         if key not in image_cache:
@@ -65,22 +87,29 @@ def assemble_video(
         return image_cache[key]
 
     def make_frame(T: float):
-        # T is the OUTER video's own timeline, which runs countdown_seconds
+        # T is the OUTER video's own timeline, which runs countdown_duration
         # longer than the song itself -- song_t < 0 means we're still in the
-        # lead-in, frozen on the very first scene's background (progress=0.0,
-        # i.e. the Ken Burns pan's own starting position, so there's no visual
-        # jump the instant the real content begins right after).
-        song_t = T - countdown_seconds
+        # lead-in, frozen on the real first moment's own background
+        # (progress=0.0, i.e. the Ken Burns pan's own starting position, so
+        # there's no visual jump the instant the real content begins right
+        # after), guaranteed to be a real generated image, never a flat
+        # placeholder color.
+        song_t = T - countdown_duration
         if song_t < 0:
             scene = build_scene(lines, 0.0, chord_track=chord_track, audio_duration=duration)
-            start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(scene.image_key)
-            bg = apply_ken_burns(
-                get_image(scene.image_key), 0.0,
-                start_x, start_y, end_x, end_y, zoom_start, zoom_end,
-                frame_size=frame_size,
-            )
-            seconds_remaining = countdown_seconds - int(T)
-            frame = draw_countdown(bg, seconds_remaining, font_path, frame_size=frame_size, accent_color=accent_color)
+            countdown_key = _first_available_image_key(image_dir, scene.image_key)
+            if countdown_key is not None:
+                start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(countdown_key)
+                bg = apply_ken_burns(
+                    get_image(countdown_key), 0.0,
+                    start_x, start_y, end_x, end_y, zoom_start, zoom_end,
+                    frame_size=frame_size,
+                )
+            else:
+                bg = Image.new("RGB", frame_size, fallback_color)
+            beat_index = min(countdown_beats - 1, int(T / beat_duration))
+            beats_remaining = countdown_beats - beat_index
+            frame = draw_countdown(bg, beats_remaining, font_path, frame_size=frame_size, accent_color=accent_color)
             return np.array(frame)
 
         scene = build_scene(lines, song_t, chord_track=chord_track, audio_duration=duration)
@@ -109,9 +138,9 @@ def assemble_video(
         )
         return np.array(frame)
 
-    total_duration = duration + countdown_seconds
+    total_duration = duration + countdown_duration
     final_audio = (
-        CompositeAudioClip([audio_clip.set_start(countdown_seconds)]) if countdown_seconds > 0 else audio_clip
+        CompositeAudioClip([audio_clip.set_start(countdown_duration)]) if countdown_beats > 0 else audio_clip
     )
     video_clip = VideoClip(make_frame, duration=total_duration).set_audio(final_audio)
     video_clip.write_videofile(

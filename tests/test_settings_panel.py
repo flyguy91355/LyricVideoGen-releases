@@ -12,7 +12,7 @@ def _raw_defaults() -> dict:
         "fps": "24",
         "encoder": "libx264",
         "crf": 20.0,
-        "countdown_seconds": 3.0,
+        "countdown_beats": 4.0,
         "font_path": "",
         "lyric_size": 48.0,
         "chord_now_size": 64.0,

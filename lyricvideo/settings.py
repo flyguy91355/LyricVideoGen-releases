@@ -31,7 +31,7 @@ class Settings:
     fps: int = 24
     encoder: str = "libx264"
     crf: int = 20
-    countdown_seconds: int = 3  # lead-in before the song starts; 0 disables it
+    countdown_beats: int = 4  # beat count-in before the song starts, tempo-synced to its own BPM; 0 disables it
 
     # --- Typography & colors (render.py) --------------------------------
     font_path: str = ""  # "" = auto-detect (today's pipeline.default_font())

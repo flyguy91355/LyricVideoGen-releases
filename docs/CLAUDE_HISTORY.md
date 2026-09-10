@@ -635,3 +635,48 @@ never calling the Python method directly. This is now the standing
 pattern for any future `WM_DELETE_WINDOW`-style binding in this app --
 proving a handler's own logic is correct is not the same as proving it's
 actually wired to the thing that's supposed to call it.
+
+## 2026-09-10 — Countdown reworked: beat-synced 4-count, guaranteed real background
+
+Owner reported "Come As You Are" was extremely out of sync, then narrowed
+it to specifically the chord sync, then reported the countdown's own
+background was blank ("its in the countdown"), then asked for a 4-count
+"in tempo with the song" instead of a flat number of seconds.
+
+Investigated the chord-sync claim directly: extracted a real frame at
+video-time 65.5s and confirmed the chord bar's own timing math was
+already correct (NOW: Cmaj7, NEXT: Em7 in 1.7s, matching the underlying
+chord_track data exactly) -- the countdown's `song_t = T -
+countdown_seconds` remapping was NOT the cause. Whether the detected
+chords themselves are musically accurate for this song is a separate,
+unresolved question (Come As You Are's chorus/flanger guitar tone is a
+known hard case for the chroma-based detector).
+
+The blank-background report was real, though: `_first_available_image_key()`
+was written to make it structurally impossible to happen again -- if the
+real first moment's own image key has no cached file, it falls back to
+ANY real image already generated for the song rather than the flat
+`fallback_color`, only returning None (flat color) if literally no image
+exists at all for that song yet. Confirmed intermittent, not universal,
+against the owner's own real batch: "Where the Streets Have No Name"
+(same batch) had a real countdown image; this song did not -- consistent
+with a missing-cache-file gap on specific songs, not a systemic bug.
+
+Also reworked the countdown from a flat N-seconds duration to N *beats*
+at the song's own detected tempo (`beat_duration = 60 / chord_track.bpm`,
+falling back to 120 BPM if undetected), matching how a real band's
+count-in actually works and directly answering "should count down 4, and
+be in tempo with the song." `Settings.countdown_seconds` renamed to
+`countdown_beats` (default 4) throughout.
+
+Separately, while investigating the lyric-sync half of the original
+complaint, found a real forced-alignment outlier in this song's own data:
+the repeated word "Memoria" got assigned durations up to 6.86 seconds in
+`lyrics_timed.json` (word timestamps direct from alignment, unrelated to
+any of the above) -- the same class of bug as the earlier "Breathe," 105
+second outlier (2026-09-09), which was fixed for Ken-Burns/image-follow
+purposes only (`_plausible_sung_intervals()`) but never extended to the
+actual lyric-highlight display timing itself. Owner is removing this
+video from YouTube and will redo it once fixed; the underlying
+"cap implausible per-word durations for display too, not just Ken-Burns"
+fix has not been scoped or implemented yet.

@@ -45,7 +45,7 @@ def test_assemble_video_invokes_write_videofile(tmp_path, monkeypatch, test_font
 
     assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=0,
+        countdown_beats=0,
     )
 
     assert calls["duration"] == 2.0
@@ -80,7 +80,7 @@ def test_assemble_video_threads_chord_track_into_scene(tmp_path, monkeypatch, te
 
     assemble_module.assemble_video(
         lines, chord_track, tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=0,
+        countdown_beats=0,
     )
     calls["make_frame"](1.5)
 
@@ -111,7 +111,7 @@ def test_assemble_video_draws_chord_bar_on_every_frame(tmp_path, monkeypatch, te
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=0,
+        countdown_beats=0,
     )
     calls["make_frame"](0.5)
 
@@ -133,7 +133,7 @@ def test_assemble_video_respects_custom_resolution_fps_encoder_crf(tmp_path, mon
 
     assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        frame_size=(1280, 720), fps=30, encoder="libx265", crf=24, countdown_seconds=0,
+        frame_size=(1280, 720), fps=30, encoder="libx265", crf=24, countdown_beats=0,
     )
 
     assert calls["fps"] == 30
@@ -176,7 +176,7 @@ def test_assemble_video_passes_render_style_kwargs_through_to_draw_scene_and_cho
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
         lyric_size=52, text_color=(1, 2, 3), accent_color=(4, 5, 6), show_key_bpm=False,
-        countdown_seconds=0,
+        countdown_beats=0,
     )
     calls["make_frame"](0.5)
 
@@ -211,7 +211,7 @@ def test_assemble_video_draws_chord_legend_with_computed_current_label(tmp_path,
 
     assemble_module.assemble_video(
         lines, chord_track, tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        chord_legend_labels=["G", "D"], countdown_seconds=0,
+        chord_legend_labels=["G", "D"], countdown_beats=0,
     )
     calls["make_frame"](1.5)
 
@@ -242,7 +242,7 @@ def test_assemble_video_chord_legend_defaults_to_no_labels(tmp_path, monkeypatch
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=0,
+        countdown_beats=0,
     )
     calls["make_frame"](0.5)
 
@@ -273,7 +273,7 @@ def test_assemble_video_respects_show_chord_legend_toggle(tmp_path, monkeypatch,
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        show_chord_legend=False, countdown_seconds=0,
+        show_chord_legend=False, countdown_beats=0,
     )
     calls["make_frame"](0.5)
 
@@ -304,7 +304,7 @@ def test_assemble_video_passes_chord_legend_scale_through(tmp_path, monkeypatch,
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        chord_legend_scale=0.6, countdown_seconds=0,
+        chord_legend_scale=0.6, countdown_beats=0,
     )
     calls["make_frame"](0.5)
 
@@ -335,7 +335,7 @@ def test_assemble_video_passes_chord_diagram_panel_alpha_through(tmp_path, monke
 
     assemble_module.assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        chord_diagram_panel_alpha=90, countdown_seconds=0,
+        chord_diagram_panel_alpha=90, countdown_beats=0,
     )
     calls["make_frame"](0.5)
 
@@ -358,9 +358,11 @@ def test_assemble_video_default_countdown_extends_total_duration(tmp_path, monke
 
     assemble_video(lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path)
 
-    # FakeAudioClip.duration is 2.0; default countdown_seconds is 3.
-    assert calls["duration"] == 5.0
-    assert calls["audio_set_start"] == 3
+    # FakeAudioClip.duration is 2.0. ChordTrack() has no bpm (0.0), so the
+    # DEFAULT_COUNTDOWN_BPM (120) fallback applies -> beat_duration 0.5s;
+    # default countdown_beats is 4 -> countdown_duration 4 * 0.5 = 2.0s.
+    assert calls["duration"] == 4.0
+    assert calls["audio_set_start"] == 2.0
 
 
 def test_assemble_video_countdown_disabled_matches_old_behavior(tmp_path, monkeypatch, test_font_path):
@@ -378,7 +380,7 @@ def test_assemble_video_countdown_disabled_matches_old_behavior(tmp_path, monkey
 
     assemble_video(
         lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=0,
+        countdown_beats=0,
     )
 
     assert calls["duration"] == 2.0
@@ -420,10 +422,11 @@ def test_assemble_video_frame_during_countdown_uses_draw_countdown_not_the_scene
     out_path = tmp_path / "final.mp4"
 
     assemble_module.assemble_video(
-        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=3,
+        lines, ChordTrack(bpm=120.0), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=4,
     )
-    # T=0.5 is still inside the 3-second lead-in (song_t = 0.5 - 3 = -2.5).
+    # beat_duration = 60/120 = 0.5s; countdown_duration = 4 * 0.5 = 2.0s.
+    # T=0.5 is still inside the lead-in (song_t = 0.5 - 2.0 = -1.5).
     calls["make_frame"](0.5)
 
     assert countdown_calls == [3]
@@ -454,16 +457,17 @@ def test_assemble_video_frame_after_countdown_uses_song_relative_time(tmp_path, 
     out_path = tmp_path / "final.mp4"
 
     assemble_module.assemble_video(
-        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=3,
+        lines, ChordTrack(bpm=120.0), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=4,
     )
-    # T=3.5 in the outer timeline is 0.5 seconds into the real song.
-    calls["make_frame"](3.5)
+    # countdown_duration = 4 beats * 0.5s = 2.0s; T=2.5 in the outer
+    # timeline is 0.5 seconds into the real song.
+    calls["make_frame"](2.5)
 
     assert draw_calls == [0.5]
 
 
-def test_assemble_video_countdown_number_decreases_each_second(tmp_path, monkeypatch, test_font_path):
+def test_assemble_video_countdown_number_decreases_each_beat(tmp_path, monkeypatch, test_font_path):
     calls = {}
     FakeAudioClip, FakeVideoClip = _fake_clips(calls)
     monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
@@ -487,10 +491,77 @@ def test_assemble_video_countdown_number_decreases_each_second(tmp_path, monkeyp
     out_path = tmp_path / "final.mp4"
 
     assemble_module.assemble_video(
-        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
-        countdown_seconds=3,
+        lines, ChordTrack(bpm=120.0), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=4,
     )
-    for t in (0.0, 0.9, 1.0, 1.9, 2.0, 2.9):
+    # beat_duration = 0.5s: beat 0 = [0, 0.5), beat 1 = [0.5, 1.0),
+    # beat 2 = [1.0, 1.5), beat 3 (clamped, last) = [1.5, 2.0).
+    for t in (0.0, 0.4, 0.5, 0.9, 1.0, 1.4, 1.5, 1.9):
         calls["make_frame"](t)
 
-    assert countdown_calls == [3, 3, 2, 2, 1, 1]
+    assert countdown_calls == [4, 4, 3, 3, 2, 2, 1, 1]
+
+
+def test_first_available_image_key_prefers_the_preferred_key_when_it_exists(tmp_path):
+    from lyricvideo.assemble import _first_available_image_key
+    from PIL import Image
+
+    Image.new("RGB", (4, 4)).save(tmp_path / "preferred.png")
+    Image.new("RGB", (4, 4)).save(tmp_path / "other.png")
+
+    assert _first_available_image_key(tmp_path, "preferred") == "preferred"
+
+
+def test_first_available_image_key_falls_back_to_any_real_image(tmp_path):
+    from lyricvideo.assemble import _first_available_image_key
+    from PIL import Image
+
+    Image.new("RGB", (4, 4)).save(tmp_path / "some_other_image.png")
+
+    # "missing" was never generated for this song, but a real image exists --
+    # owner explicitly asked for the beginning frame, never a blank/flat one.
+    assert _first_available_image_key(tmp_path, "missing") == "some_other_image"
+
+
+def test_first_available_image_key_returns_none_when_truly_no_images_exist(tmp_path):
+    from lyricvideo.assemble import _first_available_image_key
+
+    assert _first_available_image_key(tmp_path, "missing") is None
+
+
+def test_assemble_video_countdown_uses_a_real_image_not_the_missing_preferred_one(
+    tmp_path, monkeypatch, test_font_path,
+):
+    """Real owner complaint, 2026-09-10: the countdown background showed as
+    blank. Simulates exactly that setup -- the scene's own preferred image
+    key has no file, but a real image was generated for the song -- and
+    confirms the countdown background comes from that real file, not the
+    flat fallback_color."""
+    from PIL import Image
+    import numpy as np
+
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+
+    distinctive_color = (10, 200, 30)
+    Image.new("RGB", (1920, 1080), distinctive_color).save(tmp_path / "some_real_image.png")
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    ]
+    out_path = tmp_path / "final.mp4"
+
+    from lyricvideo import assemble as assemble_module
+    assemble_module.assemble_video(
+        lines, ChordTrack(bpm=120.0), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=4, fallback_color=(1, 2, 3),
+    )
+    frame = calls["make_frame"](0.1)  # inside the countdown lead-in
+
+    # The frame must show the real generated image's color somewhere, and
+    # must NOT be uniformly the flat fallback_color.
+    assert not np.all(frame.reshape(-1, 3) == (1, 2, 3))
+    assert np.any(np.all(np.abs(frame.astype(int) - np.array(distinctive_color)) < 10, axis=-1))

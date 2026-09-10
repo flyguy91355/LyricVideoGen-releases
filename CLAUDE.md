@@ -164,18 +164,32 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    originally a fixed constant so it would stay legible against any
    background, then made adjustable (2026-09-10 request) since the right
    amount of transparency is a taste call the panel_alpha used elsewhere
-   doesn't control. Every video opens with a `Settings.countdown_seconds`
-   lead-in (default 3, owner-adjustable in Output, 0 disables it) before the
-   song starts, so a musician has a moment to get ready: frozen on the first
-   scene's own background (Ken Burns held at its own start position, so
-   there's no visual jump into the real content) with a small centered
-   `render.draw_countdown()` panel counting down -- same rounded-box/
-   accent-color language as the chord bar's own NOW/NEXT boxes (owner
-   feedback: keep it modest, not "gaudy"), never more than ~15% of the
-   frame. `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
+   doesn't control. Every video opens with a `Settings.countdown_beats`
+   lead-in (default 4, owner-adjustable in Output, 0 disables it) before the
+   song starts, so a musician has a moment to get ready -- a real band's
+   count-in is N *beats*, not N seconds, so `assemble_video()` computes
+   `beat_duration = 60 / bpm` from the song's own detected
+   `chord_track.bpm` (falling back to 120 if undetected/zero) and the
+   countdown's actual real-time length is `countdown_beats * beat_duration`
+   (owner request, 2026-09-10: "should count down 4, and be in tempo with
+   the song"). Frozen on a GUARANTEED-real background (Ken Burns held at
+   its own start position, so there's no visual jump into the real content)
+   with a small centered `render.draw_countdown()` panel counting down --
+   same rounded-box/accent-color language as the chord bar's own NOW/NEXT
+   boxes (owner feedback: keep it modest, not "gaudy"), never more than
+   ~15% of the frame. `_first_available_image_key()` picks the real first
+   moment's own image when its file exists, otherwise ANY real image
+   already generated for the song, NEVER the flat `fallback_color` -- real
+   owner complaint, 2026-09-10 ("dont have a blank screen... fill it with
+   the beginning frame"): some songs' own first-moment image key had no
+   cached file, so the countdown fell through to a plain color. Confirmed
+   intermittent, not universal, against the owner's own real batch (one
+   song's countdown was blank, another in the same batch was fine) --
+   consistent with a missing-file gap on specific songs, not every song.
+   `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
    (countdown-extended) timeline; real content uses `song_t = T -
-   countdown_seconds` throughout. Audio is delayed to match
-   (`CompositeAudioClip([audio_clip.set_start(countdown_seconds)])`), so
+   countdown_duration` throughout. Audio is delayed to match
+   (`CompositeAudioClip([audio_clip.set_start(countdown_duration)])`), so
    the song's own audio and the real on-screen content always start at the
    exact same instant, right as the countdown reaches zero. Long lyric lines
    wrap onto multiple rows at commas (preferred) or by word (fallback) instead of

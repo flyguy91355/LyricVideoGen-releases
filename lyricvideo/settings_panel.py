@@ -16,7 +16,7 @@ import customtkinter as ctk
 from .settings import ENCODERS, FPS_OPTIONS, RESOLUTIONS, Settings, hex_to_rgb
 
 _INT_FIELDS = {
-    "fps", "crf", "countdown_seconds", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
+    "fps", "crf", "countdown_beats", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
     "chord_legend_size", "chord_diagram_panel_alpha", "youtube_min_days_between_uploads",
     "youtube_preferred_upload_hour",
 }
@@ -163,8 +163,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._option("fps", "Frame rate", FPS_OPTIONS)
         self._option("encoder", "Encoder", ENCODERS)
         self._slider("crf", "Quality (CRF, lower = better)", 14, 32, 18, lambda v: f"{int(v)}")
-        self._slider("countdown_seconds", "Countdown before song starts", 0, 10, 10,
-                     lambda v: "off" if int(v) == 0 else f"{int(v)}s")
+        self._slider("countdown_beats", "Countdown before song starts (beats)", 0, 8, 8,
+                     lambda v: "off" if int(v) == 0 else f"{int(v)} beats")
 
         self._section("Typography & colors")
         self.vars["font_path"] = tk.StringVar()

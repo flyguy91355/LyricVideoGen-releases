@@ -10,7 +10,7 @@ def test_settings_defaults_match_current_hardcoded_render_behavior():
     assert s.fps == 24
     assert s.encoder == "libx264"
     assert s.crf == 20
-    assert s.countdown_seconds == 3
+    assert s.countdown_beats == 4
     assert s.font_path == ""
     assert s.lyric_size == 48
     assert s.chord_now_size == 64
