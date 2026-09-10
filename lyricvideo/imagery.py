@@ -14,6 +14,7 @@ REPLICATE_API_BASE = "https://api.replicate.com/v1"
 REPLICATE_POLL_INTERVAL_SECONDS = 1.0
 REPLICATE_POLL_TIMEOUT_SECONDS = 120.0
 _TERMINAL_STATUSES = ("succeeded", "failed", "canceled")
+_MAX_GENERATION_ATTEMPTS = 3
 
 
 class ImageGenError(Exception):
@@ -168,22 +169,77 @@ def get_or_generate_image(
             return cached_path
 
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(_MAX_GENERATION_ATTEMPTS):
         try:
             prompt = build_image_prompt(anthropic_client, song_gist, line_text)
             return generate_line_image(replicate_token, prompt, cached_path)
         except Exception as e:
             last_error = e
             print(
-                f"WARNING: image generation attempt {attempt + 1}/2 failed for "
-                f"line {key}: {type(e).__name__}: {e}",
+                f"WARNING: image generation attempt {attempt + 1}/{_MAX_GENERATION_ATTEMPTS} "
+                f"failed for line {key}: {type(e).__name__}: {e}",
                 file=sys.stderr,
             )
 
     print(
         f"WARNING: falling back to a plain-color background for line {key} "
-        f"after 2 failed attempts (last error: {last_error})",
+        f"after {_MAX_GENERATION_ATTEMPTS} failed attempts (last error: {last_error}) -- "
+        "substitute_fallback_images() will replace this with a real neighboring "
+        "image once the whole song's images have been generated, unless every "
+        "single one of them failed",
         file=sys.stderr,
     )
     Image.new("RGB", FRAME_SIZE, fallback_color).save(cached_path)
     return cached_path
+
+
+def is_fallback_image(path: Path, fallback_color: tuple[int, int, int] = (30, 30, 40)) -> bool:
+    """True if the PNG at `path` is get_or_generate_image's own last-resort
+    plain-color placeholder -- a real AI-generated image is never a single
+    solid color, so this is an unambiguous signature, not a heuristic."""
+    try:
+        img = Image.open(path).convert("RGB")
+    except Exception:
+        return False
+    if img.size != FRAME_SIZE:
+        return False
+    extrema = img.getextrema()
+    return all(lo == hi for lo, hi in extrema) and img.getpixel((0, 0)) == fallback_color
+
+
+def substitute_fallback_images(
+    image_paths: list[Path], fallback_color: tuple[int, int, int] = (30, 30, 40)
+) -> None:
+    """Called once after a full images-stage pass (every line's + every
+    instrumental caption's image already generated or fallen back). A flat
+    placeholder color visibly breaks a finished video even though the
+    pipeline itself never crashes on a generation failure -- so any fallback
+    found here is replaced with a copy of the *nearest real, successfully
+    generated* image in the song's own sequence (previous line preferred,
+    falling back to the next one for a fallback that leads the whole list).
+    Only when every single image in the song is a fallback (the API was down
+    for the whole run) is anything left as the plain-color placeholder --
+    there is no real image anywhere left to substitute in that case."""
+    existing = [p for p in image_paths if p.exists()]
+    if not existing or all(is_fallback_image(p, fallback_color) for p in existing):
+        return
+
+    last_real: Path | None = None
+    for path in image_paths:
+        if not path.exists():
+            continue
+        if is_fallback_image(path, fallback_color):
+            if last_real is not None:
+                path.write_bytes(last_real.read_bytes())
+        else:
+            last_real = path
+
+    next_real: Path | None = None
+    for path in reversed(image_paths):
+        if not path.exists():
+            continue
+        if is_fallback_image(path, fallback_color):
+            if next_real is not None:
+                path.write_bytes(next_real.read_bytes())
+        else:
+            next_real = path

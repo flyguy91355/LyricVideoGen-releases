@@ -7,6 +7,8 @@ from lyricvideo.imagery import (
     build_image_prompt,
     generate_line_image,
     get_or_generate_image,
+    is_fallback_image,
+    substitute_fallback_images,
     summarize_song_gist,
     ImageGenError,
 )
@@ -114,6 +116,99 @@ def test_get_or_generate_image_falls_back_on_failure(tmp_path, capsys):
     assert "WARNING" in captured.err
     assert "boom" in captured.err
     assert "falling back to a plain-color background" in captured.err
+
+
+def test_get_or_generate_image_retries_three_times_before_falling_back(tmp_path, capsys):
+    class _FailingMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("boom")
+
+    class _FailingAnthropicClient:
+        def __init__(self):
+            self.messages = _FailingMessages()
+
+    get_or_generate_image(_FailingAnthropicClient(), "fake-token", "full lyrics", "a broken line", tmp_path)
+
+    captured = capsys.readouterr()
+    assert "attempt 1/3" in captured.err
+    assert "attempt 2/3" in captured.err
+    assert "attempt 3/3" in captured.err
+
+
+def test_is_fallback_image_detects_the_solid_color_placeholder(tmp_path):
+    from PIL import Image
+
+    fallback_path = tmp_path / "fallback.png"
+    Image.new("RGB", (1920, 1080), (30, 30, 40)).save(fallback_path)
+
+    assert is_fallback_image(fallback_path) is True
+
+
+def test_is_fallback_image_false_for_a_real_varied_image(tmp_path):
+    from PIL import Image
+
+    real_path = tmp_path / "real.png"
+    img = Image.new("RGB", (1920, 1080), (30, 30, 40))
+    img.putpixel((0, 0), (200, 100, 50))  # one differing pixel -- not uniform
+    img.save(real_path)
+
+    assert is_fallback_image(real_path) is False
+
+
+def test_is_fallback_image_false_for_solid_color_that_isnt_the_fallback_color(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "solid_but_different.png"
+    Image.new("RGB", (1920, 1080), (10, 200, 10)).save(path)
+
+    assert is_fallback_image(path) is False
+
+
+def _make_image(path: Path, color: tuple[int, int, int]) -> Path:
+    from PIL import Image
+
+    Image.new("RGB", (1920, 1080), color).save(path)
+    return path
+
+
+def test_substitute_fallback_images_forward_fills_from_previous_real_image(tmp_path):
+    real1 = _make_image(tmp_path / "1.png", (10, 20, 30))
+    fallback = _make_image(tmp_path / "2.png", (30, 30, 40))
+    real2 = _make_image(tmp_path / "3.png", (40, 50, 60))
+
+    substitute_fallback_images([real1, fallback, real2])
+
+    assert not is_fallback_image(fallback)
+    assert fallback.read_bytes() == real1.read_bytes()
+
+
+def test_substitute_fallback_images_backward_fills_a_leading_fallback(tmp_path):
+    fallback = _make_image(tmp_path / "1.png", (30, 30, 40))
+    real = _make_image(tmp_path / "2.png", (10, 20, 30))
+
+    substitute_fallback_images([fallback, real])
+
+    assert not is_fallback_image(fallback)
+    assert fallback.read_bytes() == real.read_bytes()
+
+
+def test_substitute_fallback_images_leaves_fallback_when_every_image_failed(tmp_path):
+    fallback1 = _make_image(tmp_path / "1.png", (30, 30, 40))
+    fallback2 = _make_image(tmp_path / "2.png", (30, 30, 40))
+
+    substitute_fallback_images([fallback1, fallback2])
+
+    assert is_fallback_image(fallback1)
+    assert is_fallback_image(fallback2)
+
+
+def test_substitute_fallback_images_ignores_missing_paths(tmp_path):
+    missing = tmp_path / "does-not-exist.png"
+    real = _make_image(tmp_path / "2.png", (10, 20, 30))
+
+    substitute_fallback_images([missing, real])  # must not raise
+
+    assert not missing.exists()
 
 
 class _FakeHttpResponse:

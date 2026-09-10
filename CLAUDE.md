@@ -116,6 +116,17 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    content hash so a repeated chorus or a repeated chord anywhere in the song
    reuses one image instead of paying to regenerate it. Also reuses any
    `images_backup_*/` archive left in the work dir before generating new images.
+   `get_or_generate_image` retries a failed generation up to
+   `_MAX_GENERATION_ATTEMPTS` (3) times before falling back to a plain-color
+   placeholder -- but a flat placeholder visibly breaks a finished video (real
+   owner complaint, 2026-09-10), so it's never left as the final answer for a
+   line unless every single image in the whole song failed: once every line's
+   and instrumental caption's image has been generated for the run,
+   `substitute_fallback_images` (also in `imagery.py`, called from the images
+   stage in `pipeline.py`) replaces any remaining fallback with a copy of the
+   nearest real, successfully-generated image in the song's own sequence
+   (`is_fallback_image` detects one by its unmistakable signature -- a single
+   perfectly solid color, which a real AI-generated image never is).
 7. **render** — `assemble.py`/`layout.py`/`render.py`: composites scrolling lyrics
    (karaoke word-highlight sweep, Ken Burns pans), a NOW/NEXT/segmented-timeline
    chord bar, a Key/BPM badge, and a chord fingering legend

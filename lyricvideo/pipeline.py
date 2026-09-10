@@ -19,7 +19,7 @@ from .combine import combine_alignment
 from .detect_chords import detect_chords
 from .fetch_lyrics import fetch_lyric_lines
 from .identify import extract_metadata
-from .imagery import get_or_generate_image, summarize_song_gist
+from .imagery import get_or_generate_image, substitute_fallback_images, summarize_song_gist
 from .layout import _in_a_line
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals
@@ -259,20 +259,26 @@ def run_pipeline(
         # Reuse already-paid-for images from any prior images_backup_*/ archive
         # before spending on a new one (unchanged convention).
         backup_dirs = sorted(work_dir.glob("images_backup_*"))
+        image_paths = []
         for line in song.lines:
-            get_or_generate_image(
+            image_paths.append(get_or_generate_image(
                 anthropic_client, replicate_token, song_gist, line.text, images_dir,
                 extra_cache_dirs=backup_dirs,
-            )
+            ))
         # Instrumental-gap images (2026-09-09 owner request): one per distinct
         # chord label that actually occurs during a gap, so the background
         # follows the chord instead of freezing on the last-sung line's image.
         for label in _instrumental_chord_labels(song.lines, song.chord_track):
             caption = f"[Instrumental — chord: {label}]"
-            get_or_generate_image(
+            image_paths.append(get_or_generate_image(
                 anthropic_client, replicate_token, song_gist, caption, images_dir,
                 extra_cache_dirs=backup_dirs,
-            )
+            ))
+        # A flat placeholder color would visibly break the finished video even
+        # though a generation failure never crashes the pipeline -- substitute
+        # a real neighboring image in for any fallback, as an absolute last
+        # resort only after every real generation attempt has already failed.
+        substitute_fallback_images(image_paths)
 
     if start_idx <= STAGES.index("render"):
         report("render")

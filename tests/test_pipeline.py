@@ -156,6 +156,33 @@ def test_run_pipeline_resuming_past_identify_bootstraps_missing_song_info(tmp_pa
     assert (work_dir / "song_info.json").exists()  # bootstrapped for next time
 
 
+def test_run_pipeline_calls_substitute_fallback_images_with_every_generated_path(tmp_path, monkeypatch):
+    """A flat placeholder color left in the final video was a real live
+    complaint -- run_pipeline must hand every image it generated this run
+    (lines + instrumental captions, in order) to substitute_fallback_images
+    so any fallback gets a real neighboring image substituted in instead."""
+    _patch_common(monkeypatch, tmp_path)
+    counter = {"n": 0}
+
+    def _fake_generate(*a, **k):
+        counter["n"] += 1
+        return Path(f"generated-{counter['n']}.png")
+
+    monkeypatch.setattr("lyricvideo.pipeline.get_or_generate_image", _fake_generate)
+    substitute_calls = []
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.substitute_fallback_images",
+        lambda paths: substitute_calls.append(paths),
+    )
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert len(substitute_calls) == 1
+    assert len(substitute_calls[0]) == counter["n"]
+    assert substitute_calls[0] == [Path(f"generated-{i}.png") for i in range(1, counter["n"] + 1)]
+
+
 def test_run_pipeline_detect_chords_writes_chord_track_onto_song(tmp_path, monkeypatch):
     _patch_common(monkeypatch, tmp_path)
     work_dir = tmp_path / "work"
