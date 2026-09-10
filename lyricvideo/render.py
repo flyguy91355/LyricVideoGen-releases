@@ -46,6 +46,7 @@ ACCENT_COLOR = (56, 189, 248)      # current-chord highlight
 DIM_TEXT_COLOR = (148, 163, 184)
 LANE_BLOCK_COLOR = (51, 65, 85, 235)
 TIMELINE_WINDOW_SECONDS = 12.0
+_MIN_LANE_FONT_SIZE = 18  # never shrink a timeline-lane chord label below this
 
 # (start_x, start_y, end_x, end_y, zoom_start, zoom_end) -- x/y are 0..1
 # fractions of the available pan range (0.5 = centered).
@@ -285,6 +286,25 @@ def compute_chord_bar_layout(frame_size: tuple[int, int]) -> dict[str, tuple[int
             "lane_box": lane_box, "badge_xy": badge_xy}
 
 
+def _lane_label_font(label: str, draw, base_font, font_path: str, available_width: float, min_size: int):
+    """The font to draw one timeline-lane chord label with: base_font as-is
+    if the label already fits available_width, otherwise shrunk down
+    proportionally -- but never below min_size. Real owner-reported issue,
+    2026-09-09: a short chord's box was too narrow for its label at the
+    default size, so the label was skipped entirely (a blank colored box).
+    If even min_size doesn't fit, min_size is still returned -- the caller
+    draws the label anyway and lets it overflow into the neighboring segment
+    rather than disappear ('at least can see some of it', per the owner)."""
+    label_w = draw.textlength(label, font=base_font)
+    if label_w <= 0 or label_w + 16 <= available_width:
+        return base_font
+    scale = max(available_width - 4, 1.0) / label_w
+    shrunk_size = max(min_size, int(base_font.size * scale))
+    if shrunk_size >= base_font.size:
+        return base_font
+    return ImageFont.truetype(font_path, shrunk_size)
+
+
 def draw_chord_bar(
     frame: Image.Image,
     chord_track: ChordTrack,
@@ -373,9 +393,12 @@ def draw_chord_bar(
             draw.rounded_rectangle((int(bx0) + 1, ly0 + 6, int(bx1) - 1, ly1 - 6), radius=10, fill=fill)
             label = _display_chord_label(event.label)
             text_color = (11, 18, 32, 255) if is_current else (248, 250, 252, 255)
-            label_w = draw.textlength(label, font=lane_font)
-            if label_w + 16 <= (bx1 - bx0):
-                draw.text(((bx0 + bx1) / 2 - label_w / 2, (ly0 + ly1) / 2 - 15), label, font=lane_font, fill=text_color)
+            seg_font = _lane_label_font(label, draw, lane_font, font_path, bx1 - bx0, _MIN_LANE_FONT_SIZE)
+            label_w = draw.textlength(label, font=seg_font)
+            draw.text(
+                ((bx0 + bx1) / 2 - label_w / 2, (ly0 + ly1) / 2 - seg_font.size / 2),
+                label, font=seg_font, fill=text_color,
+            )
 
     if show_key_bpm and (chord_track.key or chord_track.bpm):
         parts = []

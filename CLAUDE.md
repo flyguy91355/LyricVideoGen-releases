@@ -131,7 +131,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    during a real instrumental stretch also now paces to the active chord's
    own duration (when chord data is available) instead of the current-line-
    to-next-line span, so each chord-driven image gets its own natural pan
-   instead of inheriting a stretched-out one. No song title or artist text is drawn into the frame
+   instead of inheriting a stretched-out one. The scrolling timeline lane's
+   per-segment chord label (`render.py`'s `_lane_label_font`) shrinks to fit a
+   short-duration chord's narrow box instead of being skipped entirely when it
+   doesn't fit at the default size (real owner-reported issue, 2026-09-09) --
+   floored at 18pt; if even that doesn't fit, the label is still drawn and
+   allowed to overflow into the next segment rather than disappear. No song
+   title or artist text is drawn into the frame
    anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
    chord legend were added to the frame.
 

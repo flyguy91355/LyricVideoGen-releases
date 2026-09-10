@@ -4,7 +4,7 @@ from PIL import Image, ImageDraw, ImageFont
 from lyricvideo.render import (
     CHORD_BOX, FRAME_SIZE, KEN_BURNS_PRESETS,
     apply_ken_burns, compute_chord_bar_layout, draw_chord_bar, draw_scene,
-    ken_burns_preset_for_key, _split_line_into_rows,
+    ken_burns_preset_for_key, _lane_label_font, _split_line_into_rows,
 )
 from lyricvideo.layout import Scene, SceneLine, SceneWord
 from lyricvideo.models import ChordEvent, ChordTrack
@@ -194,6 +194,65 @@ def test_draw_chord_bar_respects_custom_timeline_window(test_font_path):
     wide = np.array(draw_chord_bar(bg, chord_track, t=0.0, font_path=test_font_path, timeline_window_sec=25.0))
 
     assert not np.array_equal(narrow, wide)
+
+
+def test_lane_label_font_returns_base_font_when_label_fits(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    base_font = ImageFont.truetype(test_font_path, 30)
+
+    font = _lane_label_font("C", draw, base_font, test_font_path, available_width=500, min_size=18)
+
+    assert font is base_font
+
+
+def test_lane_label_font_shrinks_when_label_does_not_fit(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    base_font = ImageFont.truetype(test_font_path, 30)
+
+    font = _lane_label_font("F#maj7", draw, base_font, test_font_path, available_width=40, min_size=18)
+
+    assert font.size < base_font.size
+    assert font.size >= 18
+
+
+def test_lane_label_font_never_shrinks_below_the_floor(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    base_font = ImageFont.truetype(test_font_path, 30)
+
+    font = _lane_label_font("F#maj7", draw, base_font, test_font_path, available_width=1, min_size=18)
+
+    assert font.size == 18
+
+
+def test_draw_chord_bar_still_draws_a_label_for_a_very_short_chord_segment(test_font_path):
+    """Real owner-reported issue (2026-09-09): a short-duration chord's
+    timeline-lane box was too narrow to fit its label at the default size, so
+    the label was skipped entirely -- a blank colored box with no chord name,
+    even though the highlight/sync was correct. The label must now always be
+    drawn (shrunk to fit, or overflowing into the next segment as a last
+    resort) rather than ever silently disappearing."""
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    # A long label ("F#maj7") crammed into a very short 0.3s slot within a
+    # wide 12s timeline window -- narrow enough that the label cannot fit at
+    # the default lane font size.
+    chord_track = ChordTrack(events=[
+        ChordEvent(0.0, 0.3, "F#maj7"), ChordEvent(0.3, 12.0, "G"),
+    ])
+    layout = compute_chord_bar_layout(FRAME_SIZE)
+    lx0, ly0, lx1, ly1 = layout["lane_box"]
+    pps = (lx1 - lx0) / 12.0
+    bx0, bx1 = int(lx0) + 1, int(lx0 + 0.3 * pps) - 1
+
+    frame = draw_chord_bar(bg, chord_track, t=0.0, font_path=test_font_path, timeline_window_sec=12.0)
+    region = np.array(frame.crop((bx0, ly0 + 6, bx1, ly1 - 6)))
+
+    # More than one distinct color in the segment's own box means something
+    # (the label) was drawn on top of its solid fill -- not just a blank box.
+    unique_colors = {tuple(pixel) for row in region for pixel in row}
+    assert len(unique_colors) > 1
 
 
 def _row_width(row, draw, font):
