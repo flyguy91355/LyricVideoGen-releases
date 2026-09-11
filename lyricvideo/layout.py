@@ -127,6 +127,18 @@ def build_scene(
     idx = find_current_line_index(lines, t)
     current = lines[idx]
 
+    # Computed up front (not just where Ken Burns pacing already used it below)
+    # so the CURRENT line's own text can be blanked during a real instrumental
+    # gap too. Real bug, 2026-09-10 ("Wish You Were Here"): a line's forced-
+    # alignment end_time stretched to the next real line's start_time 85
+    # seconds later (radio-dialogue intro text with nothing to align against
+    # until real singing resumed) -- find_current_line_index keys only on
+    # start_time, so that stale line just sat on screen the entire gap. This
+    # reuses the same plausibility check the Ken Burns pacing below already
+    # trusted, rather than adding a second, possibly-inconsistent notion of
+    # "are we still in this line."
+    in_a_line = _in_a_line(lines, t)
+
     scene_lines: list[SceneLine] = []
     # Only current (0) and upcoming (+1..+window) lines are shown -- no previous line.
     for offset in range(0, window + 1):
@@ -136,9 +148,10 @@ def build_scene(
         line = lines[i]
         is_current = offset == 0
         words = []
-        for w in line.words:
-            word_sung = bool(is_current and w.start_time is not None and w.start_time <= t)
-            words.append(SceneWord(text=w.word, word_active=word_sung))
+        if not (is_current and not in_a_line):
+            for w in line.words:
+                word_sung = bool(is_current and w.start_time is not None and w.start_time <= t)
+                words.append(SceneWord(text=w.word, word_active=word_sung))
         scene_lines.append(SceneLine(words=words, is_current=is_current, distance_from_current=offset))
 
     # Ken Burns progress spans the image's REAL on-screen duration -- until the
@@ -155,8 +168,6 @@ def build_scene(
         kb_end = None
     if kb_end is None or kb_end <= kb_start:
         kb_end = current.end_time if (current.end_time and current.end_time > kb_start) else kb_start + 1.0
-
-    in_a_line = _in_a_line(lines, t)
 
     if not in_a_line and chord_track is not None:
         # Instrumental with real chord data: pace the pan to the ACTIVE

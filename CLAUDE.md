@@ -223,17 +223,30 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    which by itself didn't displace `_in_a_line()`/Ken Burns (that line's
    own start/end weren't wildly wrong the way 2026-09-09's was) but did
    distort how fast that one line's own scroll animation should move.
-   Deliberately scoped to just this one mechanism -- current-line selection
-   (`find_current_line_index`) and word-highlight timing
-   (`word_sung`/`word_active`) are untouched, since both key only on a
-   word's own start time, never a duration, and were never actually
-   affected by this bug. The scrolling timeline lane's
-   per-segment chord label (`render.py`'s `_lane_label_font`) shrinks to fit a
-   short-duration chord's narrow box instead of being skipped entirely when it
-   doesn't fit at the default size (real owner-reported issue, 2026-09-09) --
-   floored at 18pt; if even that doesn't fit, the label is still drawn and
-   allowed to overflow into the next segment rather than disappear. No song
-   title or artist text is drawn into the frame
+   Deliberately scoped to just this one mechanism at the time -- word-highlight
+   timing (`word_sung`/`word_active`) keys only on a word's own start time,
+   never a duration, and is still genuinely unaffected by any of this. But
+   `build_scene()`'s CURRENT-LINE TEXT is now also gated on `_in_a_line()`
+   (real bug found live, 2026-09-10, "Wish You Were Here"): a line whose
+   words were themselves scattered with huge gaps (real spoken radio-intro
+   dialogue, not sung to a rhythm) left `find_current_line_index` treating it
+   as "current" from 9.5s to 94.4s -- 85 seconds -- since that function keys
+   only on start_time and nothing else started in between. The line's own
+   text now blanks during any stretch `_in_a_line()` says isn't plausibly
+   part of it, even mid-line between that same line's own scattered
+   plausible-speech islands, while the upcoming-line preview is unaffected.
+   `find_current_line_index` ITSELF is still untouched -- this is a display
+   gate layered on top of its result, not a change to which index it returns.
+   The scrolling timeline lane's per-segment chord label (`render.py`'s
+   `_lane_label_font`) shrinks to fit a short-duration chord's narrow box
+   instead of being skipped entirely when it doesn't fit at the default size
+   (real owner-reported issue, 2026-09-09) -- floored at 18pt. If even that
+   doesn't fit, the label is now omitted entirely (`_lane_label_visible`) --
+   the colored block itself still draws, so a chord change stays visible,
+   but the text no longer overflows into the neighboring segment's own label
+   (real bug found live, 2026-09-10: a spurious 0.51-second detected chord
+   produced a sliver too narrow for any label, smearing it into the next
+   segment's text). No song title or artist text is drawn into the frame
    anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
    chord legend were added to the frame.
 

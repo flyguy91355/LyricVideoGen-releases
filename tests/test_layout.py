@@ -289,3 +289,41 @@ def test_build_scene_instrumental_ken_burns_paces_to_the_active_chord_not_the_mi
     # both points would barely move. Paced to the 21.92-second chord instead,
     # the difference between t=135 and t=150 is a real, substantial jump.
     assert late.ken_burns_progress - early.ken_burns_progress > 0.3
+
+
+def test_build_scene_blanks_stale_current_line_during_a_real_instrumental_gap():
+    """Real bug, 2026-09-10 ("Wish You Were Here"): a line's forced-alignment
+    end_time stretched 85 seconds past its own real content, all the way to
+    the next real line's start_time (radio-dialogue intro text with nothing
+    to align against until real singing resumed) -- find_current_line_index
+    keys only on start_time, so that stale line's text just sat on screen
+    the entire gap even though _in_a_line already knew nothing was actually
+    being sung there. The upcoming (distance_from_current=1) line must still
+    show normally -- only the CURRENT slot goes blank."""
+    lines = [
+        LyricLine(
+            words=[
+                Word(word="Yes", start_time=9.56, end_time=9.9),
+                Word(word="nonsense", start_time=9.9, end_time=10.2),
+            ],
+            start_time=9.56, end_time=94.36,
+        ),
+        LyricLine(
+            words=[
+                Word(word="Now", start_time=94.98, end_time=95.2),
+                Word(word="which", start_time=95.2, end_time=95.5),
+            ],
+            start_time=94.98, end_time=96.58,
+        ),
+    ]
+
+    mid_gap = build_scene(lines, t=50.0, window=1)
+    current = next(l for l in mid_gap.lines if l.distance_from_current == 0)
+    upcoming = next(l for l in mid_gap.lines if l.distance_from_current == 1)
+    assert current.words == []
+    assert current.text == ""
+    assert [w.text for w in upcoming.words] == ["Now", "which"]
+
+    within_real_content = build_scene(lines, t=9.7, window=1)
+    still_current = next(l for l in within_real_content.lines if l.distance_from_current == 0)
+    assert [w.text for w in still_current.words] == ["Yes", "nonsense"]

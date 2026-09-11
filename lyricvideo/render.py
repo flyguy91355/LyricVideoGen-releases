@@ -293,9 +293,9 @@ def _lane_label_font(label: str, draw, base_font, font_path: str, available_widt
     proportionally -- but never below min_size. Real owner-reported issue,
     2026-09-09: a short chord's box was too narrow for its label at the
     default size, so the label was skipped entirely (a blank colored box).
-    If even min_size doesn't fit, min_size is still returned -- the caller
-    draws the label anyway and lets it overflow into the neighboring segment
-    rather than disappear ('at least can see some of it', per the owner)."""
+    Shrinking still can't guarantee a fit for a razor-thin segment -- see
+    _lane_label_visible, which the caller uses to decide whether to draw
+    this font's label at all."""
     label_w = draw.textlength(label, font=base_font)
     if label_w <= 0 or label_w + 16 <= available_width:
         return base_font
@@ -304,6 +304,21 @@ def _lane_label_font(label: str, draw, base_font, font_path: str, available_widt
     if shrunk_size >= base_font.size:
         return base_font
     return ImageFont.truetype(font_path, shrunk_size)
+
+
+def _lane_label_visible(label: str, draw, font, available_width: float) -> bool:
+    """Whether a timeline-lane label actually fits its own segment box at
+    `font` (already shrunk to the floor size by _lane_label_font). Real bug,
+    2026-09-10 ("Wish You Were Here"): a spurious 0.51-second chord segment
+    was too narrow for even the floor-size label, so the label overflowed
+    into the NEIGHBORING segment's own label -- garbling both together into
+    one unreadable smear. The 2026-09-09 fix's "let it overflow rather than
+    disappear" tradeoff was meant for a single moderately-narrow segment; it
+    doesn't hold up once real chord-detection noise produces several
+    razor-thin segments in a row. The segment's own colored block is still
+    drawn either way -- a chord change stays visible -- only the label text
+    is skipped when it can't actually fit."""
+    return draw.textlength(label, font=font) <= available_width
 
 
 def draw_chord_bar(
@@ -395,11 +410,12 @@ def draw_chord_bar(
             label = _display_chord_label(event.label)
             text_color = (11, 18, 32, 255) if is_current else (248, 250, 252, 255)
             seg_font = _lane_label_font(label, draw, lane_font, font_path, bx1 - bx0, _MIN_LANE_FONT_SIZE)
-            label_w = draw.textlength(label, font=seg_font)
-            draw.text(
-                ((bx0 + bx1) / 2 - label_w / 2, (ly0 + ly1) / 2 - seg_font.size / 2),
-                label, font=seg_font, fill=text_color,
-            )
+            if _lane_label_visible(label, draw, seg_font, bx1 - bx0):
+                label_w = draw.textlength(label, font=seg_font)
+                draw.text(
+                    ((bx0 + bx1) / 2 - label_w / 2, (ly0 + ly1) / 2 - seg_font.size / 2),
+                    label, font=seg_font, fill=text_color,
+                )
 
     if show_key_bpm and (chord_track.key or chord_track.bpm):
         parts = []

@@ -4,7 +4,7 @@ from PIL import Image, ImageDraw, ImageFont
 from lyricvideo.render import (
     CHORD_BOX, FRAME_SIZE, KEN_BURNS_PRESETS,
     apply_ken_burns, compute_chord_bar_layout, draw_chord_bar, draw_countdown, draw_scene,
-    ken_burns_preset_for_key, _lane_label_font, _split_line_into_rows,
+    ken_burns_preset_for_key, _lane_label_font, _lane_label_visible, _split_line_into_rows,
 )
 from lyricvideo.layout import Scene, SceneLine, SceneWord
 from lyricvideo.models import ChordEvent, ChordTrack
@@ -225,6 +225,54 @@ def test_lane_label_font_never_shrinks_below_the_floor(test_font_path):
     font = _lane_label_font("F#maj7", draw, base_font, test_font_path, available_width=1, min_size=18)
 
     assert font.size == 18
+
+
+def test_lane_label_visible_true_when_the_label_fits(test_font_path):
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(test_font_path, 18)
+
+    assert _lane_label_visible("C", draw, font, available_width=500) is True
+
+
+def test_lane_label_visible_false_when_even_the_floor_size_overflows(test_font_path):
+    """Real bug, 2026-09-10: a spurious 0.51-second chord segment was too
+    narrow for even the floor-size label, so the label overflowed into the
+    neighboring segment and garbled both together."""
+    img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(test_font_path, 18)
+
+    assert _lane_label_visible("Gmaj7", draw, font, available_width=1) is False
+
+
+def test_draw_chord_bar_omits_label_for_a_razor_thin_segment_instead_of_smearing_it(test_font_path):
+    """Integration-level check on the exact reported scenario: a real chord
+    (Cmaj7) followed by a spurious 0.51s blip (Gmaj7) followed by another
+    real chord (D). The blip's own colored block must still be drawn (still
+    visible that a chord changed), but pixels where ONLY the overflowing
+    "Gmaj7" label would have smeared into the following "D" segment's own
+    label area must match D's plain block color, not a text-colored pixel."""
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[
+        ChordEvent(0.0, 10.0, "Cmaj7"), ChordEvent(10.0, 10.51, "Gmaj7"), ChordEvent(10.51, 20.0, "D"),
+    ])
+
+    frame = np.array(draw_chord_bar(bg, chord_track, t=0.0, font_path=test_font_path, timeline_window_sec=26.0))
+
+    layout = compute_chord_bar_layout(FRAME_SIZE)
+    lx0, ly0, lx1, ly1 = layout["lane_box"]
+    pps = (lx1 - lx0) / 26.0
+    # The pixel column right at the START of the "D" segment's own box --
+    # if "Gmaj7" had overflowed into it (the old behavior), this column
+    # would contain white-ish label-colored pixels instead of the plain
+    # dark block fill.
+    d_start_x = int(lx0 + 10.51 * pps) + 3
+    column = frame[ly0 + 10:ly1 - 10, d_start_x]
+    # LANE_BLOCK_COLOR is (51, 65, 85); text_color for a non-current segment
+    # is (248, 250, 252) -- near-white. No pixel in this column should be
+    # anywhere close to that near-white text color.
+    assert not np.any(np.all(column > 200, axis=-1))
 
 
 def test_draw_chord_bar_still_draws_a_label_for_a_very_short_chord_segment(test_font_path):

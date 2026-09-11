@@ -795,3 +795,58 @@ identified -- caught only by verifying with `grep` after every edit
 instead of trusting the tool's own success report, and fixed by simply
 redoing the same edits a second time, each one confirmed on disk before
 moving to the next.
+
+## 2026-09-10 — "Wish You Were Here" at 1:38: two real bugs, not one
+
+Owner reported "the lyrics go totally messed up" at 1:38 into "Wish You
+Were Here" and couldn't use the video. Investigated with real frame
+extraction (ffmpeg) plus direct inspection of the song's own
+`lyrics_timed.json`, and found two distinct, unrelated bugs both landing
+in the same few seconds:
+
+**Bug A (the visible mess at exactly 1:38):** the chord data has a real
+0.51-second "Gmaj7" segment (98.17-98.68s) sandwiched between two normal
+chords -- almost certainly chord-detection noise, not a real strum. In a
+26-second timeline window, that's a sliver too narrow for its label even
+at `_lane_label_font`'s 18pt floor, and the existing 2026-09-09 behavior
+("let it overflow rather than disappear") smeared "Gmaj7" into the
+following segment's own label, garbling both. Added `_lane_label_visible()`
+in `render.py`: the segment's colored block still always draws (a chord
+change stays visible), but the label itself is now omitted when it can't
+actually fit its own box, rather than overflowing into the neighbor.
+Verified against the real data (`draw_chord_bar` at the real blip's
+timestamp) and by pixel-inspecting the following segment's own label
+region in a targeted integration test -- confirmed clean, no smearing.
+
+**Bug B (the bigger one, found while investigating): a lyric line frozen
+on screen for 85 real seconds.** The song's real, officially-published
+intro lyrics include a snippet of spoken radio dialogue ("Yes and um, I'm
+with you, Derek, this star nonsense" -- confirmed genuine by checking the
+raw fetched lyrics file, not an OCR/ASR error). Forced alignment gave that
+line's own words wildly scattered timestamps (a 28+ second gap between
+"I'm" and "with", and the single word "star" spanning 46 real seconds),
+and because `find_current_line_index` keys only on each line's
+`start_time`, it stayed "current" from 9.56s all the way to the next
+line's `start_time` at 94.36s -- a stretch during which real singing had
+already started elsewhere. This directly contradicts the 2026-09-10
+"Come As You Are" entry above, which stated current-line selection and
+word-highlight were "never actually affected by this bug [class]" --
+true for that narrower case, but not universally: a sufficiently large
+gap between two real lines (common with a long instrumental intro) was
+never actually exercised before. Fixed by reusing the ALREADY-EXISTING
+`_in_a_line()` plausibility check (previously used only to pace the Ken
+Burns image-follow during instrumental gaps) to also blank the CURRENT
+line's own displayed text whenever `t` falls outside every one of that
+line's plausible speech intervals -- `find_current_line_index` itself is
+untouched, this is a display gate layered on its result. The upcoming
+(distance_from_current=1) line preview is deliberately left alone, so the
+next real line still shows up ahead of time as normal. Verified against
+the real song data directly: at song_t=20 (a real silent stretch) the
+current line now blanks; at song_t=46 (inside one of this same line's own
+scattered real speech islands) it still shows correctly -- confirming the
+fix tracks the real islands of speech within the line, not a blunt
+all-or-nothing blank of the whole 85-second span.
+
+Both fixes need the owner to Redo "Wish You Were Here" once applied --
+the bug is baked into the already-rendered `wish-you-were-here.mp4`,
+not something that self-heals on next playback.
