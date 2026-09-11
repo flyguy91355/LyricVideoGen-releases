@@ -355,10 +355,24 @@ class LyricVideoGUI:
         dialog.after(300, lambda: dialog.attributes("-topmost", False))
         self._settings_window = dialog
 
+        # Suppressed while THIS popup's own SettingsPanel populates itself
+        # (SettingsPanel.__init__'s trailing load_from() fires on_change()
+        # once before this method's own `self.settings_panel = ...`
+        # assignment below has completed) -- the same guard startup already
+        # uses for the identical reason, just re-armed here since startup
+        # only resets it once. Real bug found live, 2026-09-11: without
+        # this, on_change -> self.settings_panel.collect() raised
+        # AttributeError (attribute not yet assigned) partway through
+        # SettingsPanel's own __init__, silently swallowed by Tkinter with
+        # no visible error on a desktop-launched app -- aborting
+        # construction before .pack() ever ran, leaving the whole panel
+        # invisible below the live preview.
+        self._suppress_settings_save = True
         self.settings_preview = SettingsPreviewFrame(dialog, self.settings)
         self.settings_preview.pack(fill="x", padx=6, pady=(6, 0))
         self.settings_panel = SettingsPanel(dialog, self.settings, on_change=self._on_settings_changed)
         self.settings_panel.pack(fill="both", expand=True, padx=6, pady=6)
+        self._suppress_settings_save = False
 
         def _on_close() -> None:
             if self.settings_panel.has_unsaved_changes():

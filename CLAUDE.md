@@ -77,7 +77,16 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   building a second `SettingsPanel` bound to the same `Settings` object. Closing the
   popup (its own X button) with unsaved changes prompts the same discard
   confirmation as the panel's own Discard button, then reverts `self.settings` to
-  the on-disk baseline before destroying the window. The scrollable Settings panel
+  the on-disk baseline before destroying the window. `_open_settings_window` wraps
+  its own `SettingsPanel(...)` construction in `self._suppress_settings_save = True`
+  (reset to `False` right after) -- SettingsPanel's own `load_from()` fires
+  `on_change` once before that assignment completes, so without this guard
+  `_on_settings_changed`'s `self.settings_panel.collect()` hits an attribute that
+  doesn't exist yet (real bug found live, 2026-09-11: silently swallowed by
+  Tkinter with no visible error, aborting construction before `.pack()` ever ran --
+  the whole panel invisible below the live preview). Startup uses the identical
+  guard for the identical reason; it only resets the flag once, so a second,
+  later construction needs its own re-arm. The scrollable Settings panel
   (`lyricvideo/settings_panel.py`) is bound to a `Settings` object
   (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
   loaded on launch and saved only on explicit Save). Every field shows its own

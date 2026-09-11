@@ -1014,3 +1014,35 @@ closed first -- confirmed the process had actually exited before writing,
 via `Settings.load()`/modify/`.save()` (not a hand-edited JSON string) so
 every existing field round-tripped untouched and only the new fields were
 added with their real defaults.
+
+## 2026-09-11 — Settings popup was blank on real use (v1.8.0 regression)
+
+Owner applied v1.8.0 and reported the new Settings popup showed the live
+preview fine but the entire panel below it -- Output section, every
+slider, Save/Discard -- was blank gray. Reproduced directly (not just read
+the code) using the owner's own real settings.json: constructing
+`SettingsPanel` with `on_change=self._on_settings_changed` wired the same
+way `_open_settings_window` does raised `AttributeError:
+'...' object has no attribute 'settings_panel'`, confirmed via a script
+that mirrors the exact real call. Root cause: `SettingsPanel.__init__`'s
+own trailing `load_from()` fires `on_change()` once before
+`self.settings_panel = SettingsPanel(...)` in `gui.py` has finished
+assigning -- so `_on_settings_changed`'s `self.settings_panel.collect()`
+hits an attribute that doesn't exist yet. Tkinter swallows the exception
+silently (no console the desktop-launched owner would see), aborting
+`SettingsPanel.__init__` before `.pack()` ever ran, leaving the whole
+panel never added to the window.
+
+This exact hazard already existed at app startup too (`self.settings_panel
+= SettingsPanel(settings_tab, ..., on_change=self._on_settings_changed)`)
+but never manifested there, because `self._suppress_settings_save` starts
+`True` and doesn't flip to `False` until after that first construction
+completes. The popup redesign added a SECOND construction point (whenever
+the button is clicked, well after startup's guard already flipped false)
+without re-arming that same protection. Fixed by wrapping
+`_open_settings_window`'s own `SettingsPanel(...)` construction in
+`self._suppress_settings_save = True` / `False`, mirroring startup's own
+guard. Verified two ways: the same direct reproduction script now
+constructs without raising, and an offscreen screenshot (Xvfb) using the
+owner's real settings.json shows every field populated (including their
+actual saved Lyric size 41 / Chord size 77), not just "no exception."
