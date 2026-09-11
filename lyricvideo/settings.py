@@ -59,14 +59,24 @@ class Settings:
                                           # always real chord onsets, never a fixed timer
     image_transition_seconds: float = 0.25  # crossfade length between any two background images
 
-    # --- Support overlay (render.py / assemble.py / youtube_schedule.py) --
-    support_overlay_text: str = ""  # "" = disabled everywhere (video overlay AND description
-                                     # line both skip it) -- e.g. "Support: ko-fi.com/yourname"
+    # --- Support overlay/description (render.py / assemble.py / youtube_schedule.py) --
+    # Deliberately two SEPARATE fields, not one shared string: the on-screen
+    # overlay is never clickable, so its best wording is a short pointer
+    # ("Support: link in description") -- but that same phrase in the
+    # DESCRIPTION points at nothing, since the description IS where the
+    # real, clickable URL needs to actually live (real mixup found live,
+    # 2026-09-11: a shared field left 10 already-uploaded videos'
+    # descriptions saying "link in description" with no real link anywhere).
+    support_overlay_text: str = ""  # "" = the in-video overlay is disabled -- on-screen
+                                     # wording only, e.g. "Support: link in description"
     support_overlay_size: int = 100  # percent -- 100 = default box size, matches chord_legend_size
     support_overlay_lead_seconds: float = 20.0  # the in-video overlay only shows during this
                                                  # many seconds before the song ends -- not the
                                                  # whole video (owner request, 2026-09-11: less
                                                  # intrusive, and catches a viewer near the end)
+    support_description_text: str = ""  # "" = no line appended to the YouTube description --
+                                         # independent of support_overlay_text; should contain
+                                         # the real https:// link, e.g. "Support: https://ko-fi.com/you"
 
     # --- Chord detection (detect_chords.py) -------------------------------
     snap_chords_to_key: bool = True

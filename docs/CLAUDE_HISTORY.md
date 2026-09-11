@@ -1046,3 +1046,50 @@ guard. Verified two ways: the same direct reproduction script now
 constructs without raising, and an offscreen screenshot (Xvfb) using the
 owner's real settings.json shows every field populated (including their
 actual saved Lyric size 41 / Chord size 77), not just "no exception."
+
+## 2026-09-11 — Split support_overlay_text into two fields; a second, much stranger blank-Settings bug
+
+Owner: the overlay text ("Support: This Channel. Link in Description")
+was never meant to double as the description's own link -- the on-screen
+watermark can't be clickable regardless of wording, but the YouTube
+description needs the REAL `https://ko-fi.com/...` URL somewhere in it,
+and the shared field left 10 already-uploaded videos' descriptions saying
+"link in description" with no actual link anywhere. Split into two fully
+independent `Settings` fields -- `support_overlay_text` (on-screen only)
+and a new `support_description_text` (description only) -- each
+independently blank-disables its own surface. Also built
+`youtube.get_video_snippet()`/`update_video_description()` (fetch-modify-
+send-back, since `videos.update(part="snippet")` replaces the WHOLE
+snippet, the same real gotcha this project already hit with
+`channels.update`) and a one-off `scripts/
+backfill_support_overlay_description.py` to add the line to every
+already-uploaded video's description; ran it live (10 videos updated) once
+before the split existed, so those 10 currently carry the pre-split
+(unlinked) text and will need a second backfill run now that
+`support_description_text` actually holds the real URL.
+
+Separately, the owner reported almost the ENTIRE Settings popup had gone
+uneditable -- every slider/dropdown/button gone, only checkboxes left.
+Live investigation (screenshotting the owner's REAL window via `wmctrl`/
+`xdotool`/`import -window <id>`, not a guess) ruled out CPU load, color
+theme resolution (the resolved fg_color was a normal, correct blue),
+widget geometry (widgets reported correct 272px width), being inside a
+`CTkToplevel` specifically, the `load_from()` mass-variable-update
+cascade, and forced resize/redraw timing -- all tested and eliminated one
+at a time by reproducing against the owner's own real settings.json.
+Root cause, found by bisecting the real `_build()` section by section:
+the two new text fields' labels were ~80 characters (`"On-screen overlay
+text -- blank = off (never clickable, e.g. 'Support: link
+below')"`) -- far longer than any other label in the panel (previous max
+~37 chars). Tkinter's `grid` geometry manager computes ONE width per
+column, shared across every row using that column -- so this one long
+label blew out column 0's width for the WHOLE panel, squeezing columns 1
+(the actual control) and 2 (default-value text) to nothing for every
+OTHER field too, not just the long-labeled ones. Fixed by shortening both
+labels to match every other field's convention (`"Overlay text (blank =
+off)"` / `"Description text (blank = off)"`); a warning comment now sits
+directly on `_add()` so a future field addition doesn't reintroduce this.
+Confirmed fixed by rendering the real, unmodified `SettingsPanel` again
+with the owner's actual settings.json -- every field populated correctly,
+including their real saved overlay text and a 30s hold duration they'd
+already adjusted themselves in the (until-now broken) popup.

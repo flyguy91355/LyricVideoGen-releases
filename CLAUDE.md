@@ -257,11 +257,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    badge, NOT upper-left, which is the chord fingering legend's own corner
    (confirmed by rendering an actual composite frame, not just code review,
    since the original placement directly covered the legend).
-   `Settings.support_overlay_text` (blank = disabled everywhere) drives both
-   this overlay AND a matching line `schedule_upload()` appends to the
-   YouTube description -- one field, two surfaces, never independently
-   configured. NOT clickable (no region of a rendered video frame can be);
-   it points at the real, clickable link in the description.
+   `Settings.support_overlay_text` (blank = off) drives only this overlay;
+   the separate `Settings.support_description_text` (blank = off) is what
+   `schedule_upload()` appends to the YouTube description -- deliberately
+   two independent fields, since the overlay is never clickable (no region
+   of a rendered video frame can be) but the description needs the real
+   `https://` link. Field labels in `settings_panel.py` must stay short --
+   one long label once broke rendering for the WHOLE panel (see `_add()`).
    `build_scene()`'s
    `scroll_progress` (how far the current line's own on-screen scroll
    animation has advanced) uses `_plausible_line_end()` -- the same

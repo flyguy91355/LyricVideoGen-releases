@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lyricvideo.youtube import list_new_comments, post_reply, upload_video, video_exists
+from lyricvideo.youtube import (
+    get_video_snippet, list_new_comments, post_reply, update_video_description, upload_video, video_exists,
+)
 
 
 class _FakeUploadRequest:
@@ -20,19 +22,35 @@ class _FakeListRequest:
         return {"items": self._items}
 
 
+class _FakeUpdateRequest:
+    def execute(self):
+        return {}
+
+
 class _FakeVideosResource:
     def __init__(self, video_id: str):
         self._video_id = video_id
         self.insert_kwargs = None
+        self.update_kwargs = None
         self.existing_video_ids: set[str] = set()
+        self.snippets: dict[str, dict] = {}
 
     def insert(self, **kwargs):
         self.insert_kwargs = kwargs
         return _FakeUploadRequest(self._video_id)
 
     def list(self, part, id):
-        items = [{"id": id}] if id in self.existing_video_ids else []
-        return _FakeListRequest(items)
+        if id not in self.existing_video_ids:
+            return _FakeListRequest([])
+        item = {"id": id}
+        if id in self.snippets:
+            item["snippet"] = self.snippets[id]
+        return _FakeListRequest([item])
+
+    def update(self, **kwargs):
+        self.update_kwargs = kwargs
+        self.snippets[kwargs["body"]["id"]] = kwargs["body"]["snippet"]
+        return _FakeUpdateRequest()
 
 
 class _FakeYoutubeClient:
@@ -180,3 +198,50 @@ def test_video_exists_false_when_the_video_was_deleted():
     client._videos.existing_video_ids = set()
 
     assert video_exists(client, "abc123") is False
+
+
+def test_get_video_snippet_returns_the_real_snippet():
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = {"abc123"}
+    client._videos.snippets["abc123"] = {
+        "title": "T", "description": "D", "tags": ["a"], "categoryId": "10",
+    }
+
+    snippet = get_video_snippet(client, "abc123")
+
+    assert snippet == {"title": "T", "description": "D", "tags": ["a"], "categoryId": "10"}
+
+
+def test_get_video_snippet_returns_none_when_video_is_gone():
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = set()
+
+    assert get_video_snippet(client, "abc123") is None
+
+
+def test_update_video_description_preserves_every_other_snippet_field():
+    """videos.update(part='snippet') REPLACES THE WHOLE snippet -- blindly
+    sending {"description": ...} alone would wipe the title/tags/category,
+    the same real gotcha this project already hit with channels.update."""
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = {"abc123"}
+    client._videos.snippets["abc123"] = {
+        "title": "T", "description": "old", "tags": ["a", "b"], "categoryId": "10",
+    }
+
+    update_video_description(client, "abc123", "new description")
+
+    body = client._videos.update_kwargs["body"]
+    assert body["snippet"]["description"] == "new description"
+    assert body["snippet"]["title"] == "T"
+    assert body["snippet"]["tags"] == ["a", "b"]
+    assert body["snippet"]["categoryId"] == "10"
+
+
+def test_update_video_description_is_a_noop_when_video_no_longer_exists():
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = set()
+
+    update_video_description(client, "abc123", "new description")
+
+    assert client._videos.update_kwargs is None

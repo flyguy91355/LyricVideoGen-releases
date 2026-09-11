@@ -152,28 +152,31 @@ def test_schedule_upload_unlisted_skips_publish_at_and_next_slot_file(tmp_path):
     assert not next_slot_path.exists()
 
 
-def test_schedule_upload_appends_support_overlay_text_to_the_description(tmp_path):
+def test_schedule_upload_appends_support_description_text_to_the_description(tmp_path):
+    """Deliberately a SEPARATE field from support_overlay_text (the on-screen
+    watermark) -- real mixup found live, 2026-09-11: sharing one field left
+    the description saying "link in description" with no real link in it."""
     work_dir = _make_song_work_dir(tmp_path)
     settings = SimpleNamespace(
         youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False,
         youtube_min_days_between_uploads=2, youtube_preferred_upload_hour=15,
-        support_overlay_text="Support: ko-fi.com/x",
+        support_description_text="Support: https://ko-fi.com/x",
     )
     client = _FakeYoutubeClient(video_id="vid999")
 
     schedule_upload(client, _FakeAnthropicClient(), work_dir, settings, next_slot_path=tmp_path / "next_slot.json")
 
     description = client._videos.insert_kwargs["body"]["snippet"]["description"]
-    assert "Support: ko-fi.com/x" in description
+    assert "Support: https://ko-fi.com/x" in description
     assert "A great song." in description  # the AI-written description is still there too
 
 
-def test_schedule_upload_leaves_description_unchanged_when_support_overlay_text_is_blank(tmp_path):
+def test_schedule_upload_leaves_description_unchanged_when_support_description_text_is_blank(tmp_path):
     work_dir = _make_song_work_dir(tmp_path)
     settings = SimpleNamespace(
         youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False,
         youtube_min_days_between_uploads=2, youtube_preferred_upload_hour=15,
-        support_overlay_text="",
+        support_description_text="",
     )
     client = _FakeYoutubeClient(video_id="vid999")
 

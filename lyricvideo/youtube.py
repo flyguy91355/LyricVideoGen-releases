@@ -57,6 +57,29 @@ def upload_video(
     return response["id"]
 
 
+def get_video_snippet(youtube_client, video_id: str) -> dict | None:
+    """The video's current real snippet (title/description/tags/categoryId),
+    straight from the API -- videos.update REPLACES the whole snippet part,
+    so any edit must start from this, never a guessed/partial body. Returns
+    None if the video no longer exists (deleted directly on YouTube)."""
+    response = youtube_client.videos().list(part="snippet", id=video_id).execute()
+    items = response.get("items", [])
+    return items[0]["snippet"] if items else None
+
+
+def update_video_description(youtube_client, video_id: str, description: str) -> None:
+    """Changes ONLY the description, preserving every other snippet field
+    (title, tags, categoryId, etc.) exactly as it is on YouTube right now --
+    videos.update(part='snippet') replaces the ENTIRE snippet, the same real
+    gotcha this project already hit with channels.update's brandingSettings.
+    A no-op if the video no longer exists."""
+    snippet = get_video_snippet(youtube_client, video_id)
+    if snippet is None:
+        return
+    snippet["description"] = description
+    youtube_client.videos().update(part="snippet", body={"id": video_id, "snippet": snippet}).execute()
+
+
 def video_exists(youtube_client, video_id: str) -> bool:
     """Whether video_id is still a real, live video on YouTube -- a locally
     saved video_id (youtube_state.json) can go stale if the owner deletes

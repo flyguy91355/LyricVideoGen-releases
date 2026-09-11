@@ -134,6 +134,14 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         ).grid(row=row, column=2, sticky="w", padx=(8, 6), pady=3)
 
     def _add(self, name: str, label: str, widget) -> None:
+        # Keep `label` short (well under ~40 chars, matching every existing
+        # field here) -- real bug found live, 2026-09-11: a long label on
+        # ONE field made grid_columnconfigure's shared column-0 width blow
+        # out for the WHOLE panel (Tkinter grid computes one width per
+        # column across every row sharing it), squeezing columns 1/2 to
+        # nothing for every OTHER field too, not just the long-labeled one.
+        # Verified by rendering an actual composite before/after -- a code
+        # read alone would never have caught this.
         lbl = ctk.CTkLabel(self, text=label, anchor="w")
         lbl.grid(row=self._row, column=0, sticky="w", padx=(6, 10), pady=3)
         widget.grid(row=self._row, column=1, sticky="ew", pady=3)
@@ -208,9 +216,9 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         var = self._var(name, tk.StringVar)
         self._add(name, label, ColorButton(self, var))
 
-    def _text(self, name: str, label: str, placeholder: str = "") -> None:
+    def _text(self, name: str, label: str) -> None:
         var = self._var(name, tk.StringVar)
-        entry = ctk.CTkEntry(self, textvariable=var, placeholder_text=placeholder)
+        entry = ctk.CTkEntry(self, textvariable=var)
         self._add(name, label, entry)
 
     def _browse_font(self) -> None:
@@ -356,10 +364,11 @@ class SettingsPanel(ctk.CTkScrollableFrame):
                      lambda v: f"{v:.1f}s")
         self._slider("image_transition_seconds", "Crossfade length", 0.0, 1.5, 30, lambda v: f"{v:.2f}s")
 
-        self._section("Support overlay")
-        self._text("support_overlay_text", "Overlay text -- blank = off (e.g. 'Support: ko-fi.com/you')")
+        self._section("Support overlay & description")
+        self._text("support_overlay_text", "Overlay text (blank = off)")
         self._slider("support_overlay_size", "Overlay size", 50, 200, 30, lambda v: f"{int(v)}%")
         self._slider("support_overlay_lead_seconds", "Show during the last...", 5, 60, 55, lambda v: f"{int(v)}s")
+        self._text("support_description_text", "Description text (blank = off)")
 
         self._section("Chord detection")
         self._check("snap_chords_to_key", "Bias detected chords toward the song key")

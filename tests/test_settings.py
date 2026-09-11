@@ -35,6 +35,7 @@ def test_settings_defaults_match_current_hardcoded_render_behavior():
     assert s.support_overlay_text == ""
     assert s.support_overlay_size == 100
     assert s.support_overlay_lead_seconds == 20.0
+    assert s.support_description_text == ""
 
 
 def test_youtube_settings_defaults():

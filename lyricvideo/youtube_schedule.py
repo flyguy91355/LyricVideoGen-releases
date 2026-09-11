@@ -89,7 +89,7 @@ def schedule_upload(
     full_lyrics = "\n".join(line.text for line in song.lines)
     artist = _load_artist(work_dir)
     title, description, tags = generate_video_metadata(anthropic_client, song.title, artist, full_lyrics)
-    support_text = getattr(settings, "support_overlay_text", "").strip()
+    support_text = getattr(settings, "support_description_text", "").strip()
     if support_text:
         description = f"{description}\n\n{support_text}"
     video_path = work_dir / f"{slugify(song.title)}.mp4"
