@@ -3,8 +3,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from lyricvideo.render import (
     CHORD_BOX, FRAME_SIZE, KEN_BURNS_PRESETS,
-    apply_ken_burns, compute_chord_bar_layout, draw_chord_bar, draw_countdown, draw_scene,
-    ken_burns_preset_for_key, _lane_label_font, _lane_label_visible, _split_line_into_rows,
+    apply_ken_burns, compute_chord_bar_layout, crossfade_backgrounds, draw_chord_bar, draw_countdown, draw_scene,
+    draw_support_overlay, ken_burns_preset_for_key, _lane_label_font, _lane_label_visible, _split_line_into_rows,
 )
 from lyricvideo.layout import Scene, SceneLine, SceneWord
 from lyricvideo.models import ChordEvent, ChordTrack
@@ -40,6 +40,29 @@ def test_apply_ken_burns_can_zoom_out():
     tight = apply_ken_burns(img, progress=0.0, zoom_start=1.2, zoom_end=1.0)
     wide = apply_ken_burns(img, progress=1.0, zoom_start=1.2, zoom_end=1.0)
     assert tight.size == wide.size == FRAME_SIZE
+
+
+def test_crossfade_backgrounds_blends_between_two_flat_colors():
+    prev = Image.new("RGB", (10, 10), (0, 0, 0))
+    current = Image.new("RGB", (10, 10), (200, 200, 200))
+
+    mid = crossfade_backgrounds(prev, current, 0.5)
+
+    assert mid.getpixel((5, 5)) == (100, 100, 100)
+
+
+def test_crossfade_backgrounds_returns_prev_unchanged_at_blend_zero():
+    prev = Image.new("RGB", (10, 10), (10, 20, 30))
+    current = Image.new("RGB", (10, 10), (200, 200, 200))
+
+    assert crossfade_backgrounds(prev, current, 0.0).getpixel((0, 0)) == (10, 20, 30)
+
+
+def test_crossfade_backgrounds_returns_current_unchanged_at_blend_one():
+    prev = Image.new("RGB", (10, 10), (10, 20, 30))
+    current = Image.new("RGB", (10, 10), (200, 200, 200))
+
+    assert crossfade_backgrounds(prev, current, 1.0).getpixel((0, 0)) == (200, 200, 200)
 
 
 def test_ken_burns_preset_for_key_is_deterministic():
@@ -506,3 +529,87 @@ def test_draw_countdown_different_numbers_produce_different_frames(test_font_pat
     frame_1 = np.array(draw_countdown(bg, 1, test_font_path))
 
     assert not np.array_equal(frame_3, frame_1)
+
+
+def test_draw_support_overlay_is_a_noop_when_text_is_blank(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    frame = draw_support_overlay(bg, "", test_font_path)
+
+    assert np.array_equal(np.array(frame), np.array(bg))
+
+
+def test_draw_support_overlay_draws_something_in_the_upper_right(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    frame = draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path)
+
+    assert np.array(frame)[130, FRAME_SIZE[0] - 50].tolist() != [20, 20, 20]
+
+
+def test_draw_support_overlay_leaves_the_upper_left_alone(test_font_path):
+    """The chord fingering legend lives upper-left -- real bug caught live,
+    2026-09-11: the overlay's original upper-left placement directly
+    covered the first two chord diagrams' own labels."""
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    frame = draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path)
+
+    assert np.array(frame)[50, 50].tolist() == [20, 20, 20]
+
+
+def test_draw_support_overlay_does_not_collide_with_the_key_bpm_badge(test_font_path):
+    """The Key/BPM badge (draw_chord_bar) also lives upper-right -- the
+    overlay must sit below it, never overwrite its pixels."""
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 4.0, "C")], key="C major", bpm=120)
+
+    badge_only = np.array(draw_chord_bar(bg, chord_track, 1.0, test_font_path))
+    badge_then_overlay = np.array(
+        draw_support_overlay(
+            draw_chord_bar(bg, chord_track, 1.0, test_font_path), "Support: ko-fi.com/x", test_font_path,
+        )
+    )
+
+    badge_row = int(FRAME_SIZE[1] * 0.06) + 15
+    badge_strip_before = badge_only[badge_row, FRAME_SIZE[0] - 300:FRAME_SIZE[0] - 20]
+    badge_strip_after = badge_then_overlay[badge_row, FRAME_SIZE[0] - 300:FRAME_SIZE[0] - 20]
+    assert np.array_equal(badge_strip_before, badge_strip_after)
+
+
+def test_draw_support_overlay_does_not_mutate_input_frame(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path)
+
+    assert bg.getextrema() == ((20, 20), (20, 20), (20, 20))
+
+
+def test_draw_support_overlay_stays_unobtrusive_in_size(test_font_path):
+    """Owner request, 2026-09-11: 'not intrusive' -- must stay a small
+    corner element, same modesty bar as the countdown panel."""
+    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
+
+    frame = draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path)
+
+    changed = np.array(frame).any(axis=2)
+    changed_fraction = changed.sum() / changed.size
+    assert changed_fraction < 0.05
+
+
+def test_draw_support_overlay_leaves_the_center_of_the_frame_alone(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
+
+    frame = draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path)
+
+    cx, cy = FRAME_SIZE[0] // 2, FRAME_SIZE[1] // 2
+    assert np.array(frame)[cy, cx].tolist() == [20, 20, 20]
+
+
+def test_draw_support_overlay_scale_makes_the_overlay_bigger(test_font_path):
+    bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
+
+    small = np.array(draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path, scale=0.5))
+    large = np.array(draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path, scale=2.0))
+
+    assert (large.any(axis=2)).sum() > (small.any(axis=2)).sum()

@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Word
+from PIL import Image
+
+from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Word, line_hash
 
 
 def _fake_clips(calls):
@@ -85,6 +87,45 @@ def test_assemble_video_threads_chord_track_into_scene(tmp_path, monkeypatch, te
     calls["make_frame"](1.5)
 
     assert calls["chord_track"] == chord_track
+
+
+def test_assemble_video_crossfades_between_chord_images_across_the_swap(tmp_path, monkeypatch, test_font_path):
+    """Real owner ask: image swaps during an instrumental should dissolve,
+    not hard-cut. Two solid-colored chord images, min_hold long enough that
+    neither chord gets merged with the other -- a frame mid-transition must
+    be a genuine blend of both colors, a frame well before the swap must be
+    pure C, and a frame well after must be pure Am."""
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    FakeAudioClip.duration = 12.0
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    chord_track = ChordTrack(events=[ChordEvent(1.0, 6.0, "C"), ChordEvent(6.0, 12.0, "Am")])
+    Image.new("RGB", (1920, 1080), (0, 0, 0)).save(
+        tmp_path / f"{line_hash('[Instrumental — chord: C]')}.png"
+    )
+    Image.new("RGB", (1920, 1080), (200, 200, 200)).save(
+        tmp_path / f"{line_hash('[Instrumental — chord: Am]')}.png"
+    )
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, chord_track, tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=0, image_transition_seconds=2.0,
+    )
+
+    pure_c = calls["make_frame"](2.0)
+    mid_transition = calls["make_frame"](6.5)
+    pure_am = calls["make_frame"](11.9)
+
+    assert tuple(pure_c[0, 0]) == (0, 0, 0)
+    assert tuple(pure_am[0, 0]) == (200, 200, 200)
+    r, g, b = mid_transition[0, 0]
+    assert 0 < r < 200 and r == g == b
 
 
 def test_assemble_video_draws_chord_bar_on_every_frame(tmp_path, monkeypatch, test_font_path):
@@ -216,6 +257,134 @@ def test_assemble_video_draws_chord_legend_with_computed_current_label(tmp_path,
     calls["make_frame"](1.5)
 
     assert draw_calls == [(["G", "D"], "D")]
+
+
+def test_assemble_video_draws_support_overlay_within_the_lead_window_before_the_end(
+    tmp_path, monkeypatch, test_font_path,
+):
+    """Owner request, 2026-09-11: not the whole video -- just the last
+    support_overlay_lead_seconds before the song ends."""
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    FakeAudioClip.duration = 100.0
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    draw_calls = []
+    real_draw_support_overlay = assemble_module.draw_support_overlay
+
+    def spying_draw_support_overlay(frame, text, font_path, **kwargs):
+        draw_calls.append((text, kwargs.get("scale")))
+        return real_draw_support_overlay(frame, text, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_support_overlay", spying_draw_support_overlay)
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=0, support_overlay_text="Support: ko-fi.com/x", support_overlay_scale=1.5,
+        support_overlay_lead_seconds=20.0,
+    )
+    calls["make_frame"](90.0)  # 10s from the end -- inside the 20s window
+
+    assert draw_calls == [("Support: ko-fi.com/x", 1.5)]
+
+
+def test_assemble_video_does_not_draw_support_overlay_before_the_lead_window(
+    tmp_path, monkeypatch, test_font_path,
+):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    FakeAudioClip.duration = 100.0
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    draw_calls = []
+    real_draw_support_overlay = assemble_module.draw_support_overlay
+
+    def spying_draw_support_overlay(frame, text, font_path, **kwargs):
+        draw_calls.append(text)
+        return real_draw_support_overlay(frame, text, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_support_overlay", spying_draw_support_overlay)
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=0, support_overlay_text="Support: ko-fi.com/x", support_overlay_lead_seconds=20.0,
+    )
+    calls["make_frame"](50.0)  # well before the last 20s
+
+    assert draw_calls == []
+
+
+def test_assemble_video_support_overlay_defaults_to_blank_text(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    draw_calls = []
+    real_draw_support_overlay = assemble_module.draw_support_overlay
+
+    def spying_draw_support_overlay(frame, text, font_path, **kwargs):
+        draw_calls.append(text)
+        return real_draw_support_overlay(frame, text, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_support_overlay", spying_draw_support_overlay)
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=0,
+    )
+    calls["make_frame"](0.5)
+
+    assert draw_calls == [""]
+
+
+def test_assemble_video_does_not_draw_support_overlay_during_the_countdown(tmp_path, monkeypatch, test_font_path):
+    """Owner request, 2026-09-11: only the last N seconds before the song
+    ends -- never the intro/countdown lead-in."""
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+
+    from lyricvideo import assemble as assemble_module
+
+    draw_calls = []
+    real_draw_support_overlay = assemble_module.draw_support_overlay
+
+    def spying_draw_support_overlay(frame, text, font_path, **kwargs):
+        draw_calls.append(text)
+        return real_draw_support_overlay(frame, text, font_path, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "draw_support_overlay", spying_draw_support_overlay)
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        countdown_beats=4, support_overlay_text="Support: ko-fi.com/x",
+    )
+    calls["make_frame"](0.1)  # well within the countdown lead-in
+
+    assert draw_calls == []
 
 
 def test_assemble_video_chord_legend_defaults_to_no_labels(tmp_path, monkeypatch, test_font_path):

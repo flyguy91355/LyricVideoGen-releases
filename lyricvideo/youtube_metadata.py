@@ -27,8 +27,17 @@ def _parse_labeled_fields(text: str, labels: list[str]) -> dict[str, str]:
 
 
 def generate_video_metadata(
-    anthropic_client, song_title: str, full_lyrics: str, model: str = "claude-sonnet-5",
+    anthropic_client, song_title: str, artist: str, full_lyrics: str, model: str = "claude-sonnet-5",
 ) -> tuple[str, str, list[str]]:
+    # The artist is a known, already-resolved fact (identify.py), never
+    # something Claude should have to guess -- stated explicitly when known,
+    # and simply omitted (never a fabricated placeholder) when identify.py
+    # itself couldn't resolve one.
+    known_artist = artist.strip()
+    artist_line = f'It is performed by "{known_artist}".\n' if known_artist else ""
+    title_instruction = (
+        "a natural YouTube title that includes the artist name" if known_artist else "a natural YouTube title"
+    )
     response = anthropic_client.messages.create(
         model=model,
         max_tokens=400,
@@ -37,10 +46,11 @@ def generate_video_metadata(
                 "role": "user",
                 "content": (
                     f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
+                    f"{artist_line}"
                     "Write YouTube upload metadata for a 'play along' lyric+chord video of "
                     "this song. Reply with EXACTLY three lines, each prefixed with its label "
                     "and nothing else before or after:\n"
-                    "TITLE: <a natural YouTube title>\n"
+                    f"TITLE: <{title_instruction}>\n"
                     "DESCRIPTION: <a 2-4 sentence description of the song>\n"
                     "TAGS: <5-8 relevant search tags, comma-separated>"
                 ),

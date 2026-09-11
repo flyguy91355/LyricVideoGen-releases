@@ -16,9 +16,14 @@ class _FakeResponse:
 class _FakeMessages:
     def __init__(self, text):
         self._text = text
+        self.last_kwargs = None
 
     def create(self, **kwargs):
+        self.last_kwargs = kwargs
         return _FakeResponse(self._text)
+
+    def _prompt_text(self) -> str:
+        return self.last_kwargs["messages"][0]["content"]
 
 
 class _FakeAnthropicClient:
@@ -33,7 +38,9 @@ def test_generate_video_metadata_parses_all_three_labeled_fields():
         "TAGS: pink floyd, play along, guitar chords, lyrics video"
     )
 
-    title, description, tags = generate_video_metadata(client, "Wish You Were Here", "lyrics here")
+    title, description, tags = generate_video_metadata(
+        client, "Wish You Were Here", artist="Pink Floyd", full_lyrics="lyrics here",
+    )
 
     assert title == "Wish You Were Here - Play Along"
     assert description == "A wistful song about absence and longing."
@@ -43,7 +50,7 @@ def test_generate_video_metadata_parses_all_three_labeled_fields():
 def test_generate_video_metadata_falls_back_to_song_title_if_title_missing():
     client = _FakeAnthropicClient("DESCRIPTION: Some description\nTAGS: tag1")
 
-    title, _description, _tags = generate_video_metadata(client, "Original Title", "lyrics")
+    title, _description, _tags = generate_video_metadata(client, "Original Title", artist="", full_lyrics="lyrics")
 
     assert title == "Original Title"
 
@@ -51,11 +58,27 @@ def test_generate_video_metadata_falls_back_to_song_title_if_title_missing():
 def test_generate_video_metadata_tolerates_reordered_labels():
     client = _FakeAnthropicClient("TAGS: a, b\nTITLE: My Title\nDESCRIPTION: My description")
 
-    title, description, tags = generate_video_metadata(client, "fallback", "lyrics")
+    title, description, tags = generate_video_metadata(client, "fallback", artist="", full_lyrics="lyrics")
 
     assert title == "My Title"
     assert "My description" in description
     assert tags == ["a", "b"]
+
+
+def test_generate_video_metadata_states_the_real_artist_in_the_prompt_when_known():
+    client = _FakeAnthropicClient("TITLE: t\nDESCRIPTION: d\nTAGS: a")
+
+    generate_video_metadata(client, "Wish You Were Here", artist="Pink Floyd", full_lyrics="lyrics here")
+
+    assert "Pink Floyd" in client.messages._prompt_text()
+
+
+def test_generate_video_metadata_never_invents_an_artist_when_unknown():
+    client = _FakeAnthropicClient("TITLE: t\nDESCRIPTION: d\nTAGS: a")
+
+    generate_video_metadata(client, "Some Song", artist="", full_lyrics="lyrics here")
+
+    assert "performed by" not in client.messages._prompt_text().lower()
 
 
 def test_draft_comment_reply_detects_error_report():

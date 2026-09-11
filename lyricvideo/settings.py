@@ -52,6 +52,22 @@ class Settings:
     chord_legend_size: int = 100  # percent -- 100 = default box size, scaled/shrunk from there
     chord_diagram_panel_alpha: int = 235  # 0-255 -- near-opaque default, owner-tunable
 
+    # --- Image pacing (layout.py / assemble.py) ---------------------------
+    image_min_hold_seconds: float = 2.0  # instrumental stretch: a background image stays on
+                                          # screen at least this long even if several chords
+                                          # pass within that window -- swap points are still
+                                          # always real chord onsets, never a fixed timer
+    image_transition_seconds: float = 0.25  # crossfade length between any two background images
+
+    # --- Support overlay (render.py / assemble.py / youtube_schedule.py) --
+    support_overlay_text: str = ""  # "" = disabled everywhere (video overlay AND description
+                                     # line both skip it) -- e.g. "Support: ko-fi.com/yourname"
+    support_overlay_size: int = 100  # percent -- 100 = default box size, matches chord_legend_size
+    support_overlay_lead_seconds: float = 20.0  # the in-video overlay only shows during this
+                                                 # many seconds before the song ends -- not the
+                                                 # whole video (owner request, 2026-09-11: less
+                                                 # intrusive, and catches a viewer near the end)
+
     # --- Chord detection (detect_chords.py) -------------------------------
     snap_chords_to_key: bool = True
     prefer_flats: bool = True
@@ -93,6 +109,11 @@ class Settings:
             "show_chord_legend": self.show_chord_legend,
             "chord_legend_scale": self.chord_legend_size / 100.0,
             "chord_diagram_panel_alpha": self.chord_diagram_panel_alpha,
+            "min_hold_seconds": self.image_min_hold_seconds,
+            "image_transition_seconds": self.image_transition_seconds,
+            "support_overlay_text": self.support_overlay_text,
+            "support_overlay_scale": self.support_overlay_size / 100.0,
+            "support_overlay_lead_seconds": self.support_overlay_lead_seconds,
         }
 
     def save(self, path: Path = CONFIG_FILE) -> None:

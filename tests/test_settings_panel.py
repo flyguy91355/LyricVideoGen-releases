@@ -1,5 +1,5 @@
 from lyricvideo.settings import Settings
-from lyricvideo.settings_panel import values_to_settings
+from lyricvideo.settings_panel import _parse_clamped_float, values_to_settings
 
 
 def _raw_defaults() -> dict:
@@ -75,6 +75,16 @@ def test_values_to_settings_coerces_float_sizes_to_int():
     assert settings.chord_now_size == 70
 
 
+def test_values_to_settings_coerces_float_support_overlay_size_to_int():
+    raw = _raw_defaults()
+    raw["support_overlay_size"] = 150.0
+
+    settings = values_to_settings(raw)
+
+    assert settings.support_overlay_size == 150
+    assert isinstance(settings.support_overlay_size, int)
+
+
 def test_values_to_settings_keeps_fractional_seconds_as_float():
     raw = _raw_defaults()
     raw["timeline_window_sec"] = 8.0
@@ -95,3 +105,29 @@ def test_values_to_settings_preserves_toggles_and_colors():
 
     assert settings.show_chord_timeline is False
     assert settings.accent_color == "#ff0000"
+
+
+def test_parse_clamped_float_reads_a_plain_number():
+    assert _parse_clamped_float("70", lo=0.0, hi=100.0) == 70.0
+
+
+def test_parse_clamped_float_strips_a_unit_suffix():
+    assert _parse_clamped_float("70%", lo=0.0, hi=100.0) == 70.0
+    assert _parse_clamped_float("3.5s", lo=0.0, hi=10.0) == 3.5
+
+
+def test_parse_clamped_float_handles_a_negative_number():
+    assert _parse_clamped_float("-2", lo=-5.0, hi=5.0) == -2.0
+
+
+def test_parse_clamped_float_clamps_above_the_range():
+    assert _parse_clamped_float("500", lo=0.0, hi=100.0) == 100.0
+
+
+def test_parse_clamped_float_clamps_below_the_range():
+    assert _parse_clamped_float("-50", lo=0.0, hi=100.0) == 0.0
+
+
+def test_parse_clamped_float_falls_back_to_lo_on_unparseable_text():
+    assert _parse_clamped_float("abc", lo=2.0, hi=100.0) == 2.0
+    assert _parse_clamped_float("", lo=2.0, hi=100.0) == 2.0

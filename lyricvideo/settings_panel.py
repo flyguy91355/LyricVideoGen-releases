@@ -5,6 +5,7 @@ the one piece of real logic here and is unit-tested directly."""
 
 from __future__ import annotations
 
+import re
 import tkinter as tk
 from collections.abc import Callable
 from dataclasses import asdict
@@ -15,10 +16,23 @@ import customtkinter as ctk
 
 from .settings import ENCODERS, FPS_OPTIONS, RESOLUTIONS, Settings, hex_to_rgb
 
+_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _parse_clamped_float(text: str, lo: float, hi: float) -> float:
+    """Pulls a number out of user-typed entry-box text -- tolerating a stray
+    unit suffix like '%' or 's' -- and clamps it into [lo, hi]. Falls back to
+    lo on completely unparseable input rather than raising: a typo in the
+    box must never crash the GUI."""
+    match = _NUMBER_RE.search(text)
+    if not match:
+        return lo
+    return min(max(float(match.group()), lo), hi)
+
 _INT_FIELDS = {
     "fps", "crf", "countdown_beats", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
     "chord_legend_size", "chord_diagram_panel_alpha", "youtube_min_days_between_uploads",
-    "youtube_preferred_upload_hour",
+    "youtube_preferred_upload_hour", "support_overlay_size",
 }
 
 _YOUTUBE_CATEGORY_IDS = {"Howto & Style": "26", "Education": "27", "Music": "10"}
@@ -87,6 +101,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._field_labels: dict[str, str] = {}
         self._field_widgets: dict[str, ctk.CTkBaseClass] = {}
         self._field_default_color: dict[str, object] = {}
+        self._field_default_font: dict[str, object] = {}
         self._field_formatters: dict[str, Callable] = {}
         self.grid_columnconfigure(1, weight=1)
         self._build()
@@ -110,10 +125,19 @@ class SettingsPanel(ctk.CTkScrollableFrame):
             row=self._row, column=0, columnspan=3, sticky="w", padx=6, pady=(14, 4))
         self._row += 1
 
+    def _default_text(self, name: str) -> str:
+        return f"default: {self._format_value(name, getattr(Settings(), name))}"
+
+    def _add_default_label(self, name: str, row: int) -> None:
+        ctk.CTkLabel(
+            self, text=self._default_text(name), text_color="gray50", anchor="w", font=ctk.CTkFont(size=11),
+        ).grid(row=row, column=2, sticky="w", padx=(8, 6), pady=3)
+
     def _add(self, name: str, label: str, widget) -> None:
         lbl = ctk.CTkLabel(self, text=label, anchor="w")
         lbl.grid(row=self._row, column=0, sticky="w", padx=(6, 10), pady=3)
         widget.grid(row=self._row, column=1, sticky="ew", pady=3)
+        self._add_default_label(name, self._row)
         self._row += 1
         self._register_field_label(name, label, lbl)
 
@@ -121,6 +145,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._field_labels[name] = label
         self._field_widgets[name] = widget
         self._field_default_color[name] = widget.cget("text_color")
+        self._field_default_font[name] = widget.cget("font")
 
     def _option(self, name: str, label: str, values: list) -> None:
         var = self._var(name, tk.StringVar)
@@ -131,27 +156,62 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         var = self._var(name, tk.BooleanVar)
         check = ctk.CTkCheckBox(self, text=label, variable=var)
         check.grid(row=self._row, column=0, columnspan=2, sticky="w", padx=6, pady=3)
+        self._add_default_label(name, self._row)
         self._row += 1
         self._register_field_label(name, label, check)
 
     def _slider(self, name: str, label: str, lo: float, hi: float, steps: int, fmt) -> None:
+        # Registered before _add() below so _default_text() can already use
+        # this field's real formatter (e.g. "2.0s") instead of a plain str().
+        self._field_formatters[name] = fmt
         var = self._var(name, tk.DoubleVar)
         frame = ctk.CTkFrame(self, fg_color="transparent")
-        value_label = ctk.CTkLabel(frame, text="", width=56, anchor="e")
+        entry_var = tk.StringVar()
 
-        def _on_move(v):
-            value_label.configure(text=fmt(float(v)))
+        def _refresh_entry_text(*_args) -> None:
+            entry_var.set(fmt(float(var.get())))
 
-        slider = ctk.CTkSlider(frame, from_=lo, to=hi, number_of_steps=steps, variable=var, command=_on_move)
-        slider.pack(side="left", fill="x", expand=True)
-        value_label.pack(side="left", padx=(8, 0))
-        _on_move(var.get())
+        # A trace on the VARIABLE itself, not CTkSlider's own `command=` --
+        # command only fires from a live mouse drag (confirmed by reading
+        # CTkSlider's source: its variable-change path calls plain set(),
+        # never self._command), so relying on it left the entry box showing
+        # 0/off instead of the real loaded value the instant this panel
+        # opened (found via an actual screenshot). A variable trace instead
+        # covers every path that can change the value -- a drag, load_from()
+        # on open, Reset to Defaults, AND the typed-entry commit below --
+        # through the one mechanism, rather than needing each path to
+        # remember to refresh the display itself.
+        var.trace_add("write", _refresh_entry_text)
+
+        def _on_entry_commit(_event=None) -> None:
+            # Typing an exact value (owner request) -- tolerates a stray unit
+            # suffix like '%'/'s' and clamps into this slider's own range,
+            # then re-formats the box so a sloppy typed value (e.g. "500")
+            # visibly snaps to what actually took effect (e.g. "100%").
+            var.set(_parse_clamped_float(entry_var.get(), lo, hi))
+
+        # The fixed-width entry must be packed FIRST, pinned to the right --
+        # packing the expand=True slider first claims the whole frame before
+        # the entry is ever considered, squeezing it to zero width (also
+        # found via screenshot: the entry existed in the widget tree but
+        # never appeared on screen).
+        entry = ctk.CTkEntry(frame, textvariable=entry_var, width=64, justify="right")
+        entry.bind("<Return>", _on_entry_commit)
+        entry.bind("<FocusOut>", _on_entry_commit)
+        entry.pack(side="right")
+        slider = ctk.CTkSlider(frame, from_=lo, to=hi, number_of_steps=steps, variable=var)
+        slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        _refresh_entry_text()
         self._add(name, label, frame)
-        self._field_formatters[name] = fmt
 
     def _color(self, name: str, label: str) -> None:
         var = self._var(name, tk.StringVar)
         self._add(name, label, ColorButton(self, var))
+
+    def _text(self, name: str, label: str, placeholder: str = "") -> None:
+        var = self._var(name, tk.StringVar)
+        entry = ctk.CTkEntry(self, textvariable=var, placeholder_text=placeholder)
+        self._add(name, label, entry)
 
     def _browse_font(self) -> None:
         f = filedialog.askopenfilename(parent=self, title="Choose a font",
@@ -192,18 +252,31 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         current = asdict(self.collect())
         return {name: (baseline[name], current[name]) for name in current if current[name] != baseline[name]}
 
+    def has_unsaved_changes(self) -> bool:
+        """Whether anything differs from the settings actually on disk right
+        now -- used by the popup window's own close handler to decide
+        whether closing needs a discard confirmation."""
+        return bool(self._dirty_fields())
+
     def _refresh_dirty_indicators(self) -> None:
-        """Marks each changed field's own label/checkbox with a small dot so
-        a stray slider move is visible just by scrolling past it -- the
-        first of two chances to notice, the second being the itemized
-        confirmation Save Settings shows before writing anything to disk."""
+        """Marks each changed field's own label/checkbox with a small bold,
+        colored dot so a stray slider move is visible just by scrolling past
+        it -- the first of two chances to notice, the second being the
+        itemized confirmation Save Settings shows before writing anything to
+        disk."""
         dirty = self._dirty_fields()
         for name, widget in self._field_widgets.items():
             base_text = self._field_labels[name]
             if name in dirty:
-                widget.configure(text=f"● {base_text}", text_color="#f0a339")
+                widget.configure(
+                    text=f"● {base_text}", text_color="#f0a339",
+                    font=ctk.CTkFont(weight="bold"),
+                )
             else:
-                widget.configure(text=base_text, text_color=self._field_default_color[name])
+                widget.configure(
+                    text=base_text, text_color=self._field_default_color[name],
+                    font=self._field_default_font[name],
+                )
         state = "normal" if dirty else "disabled"
         self.save_button.configure(state=state)
         self.discard_button.configure(state=state)
@@ -277,6 +350,16 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._slider("chord_legend_size", "Chord chart size", 40, 150, 22, lambda v: f"{int(v)}%")
         self._slider("chord_diagram_panel_alpha", "Chord chart background opacity", 0, 255, 51,
                      lambda v: f"{int(v / 255 * 100)}%")
+
+        self._section("Image pacing")
+        self._slider("image_min_hold_seconds", "Minimum image hold (instrumental sections)", 0.5, 8.0, 15,
+                     lambda v: f"{v:.1f}s")
+        self._slider("image_transition_seconds", "Crossfade length", 0.0, 1.5, 30, lambda v: f"{v:.2f}s")
+
+        self._section("Support overlay")
+        self._text("support_overlay_text", "Overlay text -- blank = off (e.g. 'Support: ko-fi.com/you')")
+        self._slider("support_overlay_size", "Overlay size", 50, 200, 30, lambda v: f"{int(v)}%")
+        self._slider("support_overlay_lead_seconds", "Show during the last...", 5, 60, 55, lambda v: f"{int(v)}s")
 
         self._section("Chord detection")
         self._check("snap_chords_to_key", "Bias detected chords toward the song key")

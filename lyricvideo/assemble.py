@@ -11,11 +11,11 @@ except ImportError:
     from moviepy import AudioFileClip, CompositeAudioClip, VideoClip  # moviepy >= 2.0 dropped .editor
 
 from .chord_diagram import draw_chord_legend
-from .layout import build_scene
+from .layout import build_image_timeline, build_scene
 from .models import ChordTrack, LyricLine, current_chord_at
 from .render import (
-    ACCENT_COLOR, DIM_TEXT_COLOR, FRAME_SIZE, apply_ken_burns, draw_chord_bar, draw_countdown, draw_scene,
-    ken_burns_preset_for_key,
+    ACCENT_COLOR, DIM_TEXT_COLOR, FRAME_SIZE, apply_ken_burns, crossfade_backgrounds, draw_chord_bar, draw_countdown,
+    draw_scene, draw_support_overlay, ken_burns_preset_for_key,
 )
 
 FPS = 24
@@ -65,10 +65,21 @@ def assemble_video(
     chord_legend_scale: float = 1.0,
     chord_diagram_panel_alpha: int = 235,
     countdown_beats: int = 4,
+    min_hold_seconds: float = 2.0,
+    image_transition_seconds: float = 0.25,
+    support_overlay_text: str = "",
+    support_overlay_scale: float = 1.0,
+    support_overlay_lead_seconds: float = 20.0,
 ) -> None:
     image_cache: dict[str, Image.Image] = {}
     audio_clip = AudioFileClip(str(audio_path))
     duration = audio_clip.duration
+
+    # Built once, up front, from the real chord/lyric data -- not recomputed
+    # per frame -- so every image swap point (line change or hold-respecting
+    # instrumental chord block) and the crossfade around it are consistent
+    # across the whole render. See build_image_timeline's own docstring.
+    image_timeline = build_image_timeline(lines, chord_track, duration, min_hold_seconds)
 
     # A real band's count-in is always N beats, not N seconds -- how long
     # that actually takes depends on the song's own tempo (owner request,
@@ -96,7 +107,9 @@ def assemble_video(
         # placeholder color.
         song_t = T - countdown_duration
         if song_t < 0:
-            scene = build_scene(lines, 0.0, chord_track=chord_track, audio_duration=duration)
+            scene = build_scene(
+                lines, 0.0, chord_track=chord_track, audio_duration=duration, image_timeline=image_timeline,
+            )
             countdown_key = _first_available_image_key(image_dir, scene.image_key)
             if countdown_key is not None:
                 start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(countdown_key)
@@ -112,13 +125,29 @@ def assemble_video(
             frame = draw_countdown(bg, beats_remaining, font_path, frame_size=frame_size, accent_color=accent_color)
             return np.array(frame)
 
-        scene = build_scene(lines, song_t, chord_track=chord_track, audio_duration=duration)
+        scene = build_scene(
+            lines, song_t, chord_track=chord_track, audio_duration=duration,
+            image_timeline=image_timeline, image_transition_seconds=image_transition_seconds,
+        )
         start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(scene.image_key)
         bg = apply_ken_burns(
             get_image(scene.image_key), scene.ken_burns_progress,
             start_x, start_y, end_x, end_y, zoom_start, zoom_end,
             frame_size=frame_size,
         )
+        if scene.prev_image_key is not None and scene.image_blend < 1.0:
+            # The outgoing image is frozen at the END of its own Ken Burns pan
+            # (progress=1.0) for its last moments on screen, rather than
+            # continuing to animate a pan nobody will see finish.
+            prev_x, prev_y, prev_end_x, prev_end_y, prev_zoom_start, prev_zoom_end = ken_burns_preset_for_key(
+                scene.prev_image_key
+            )
+            prev_bg = apply_ken_burns(
+                get_image(scene.prev_image_key), 1.0,
+                prev_x, prev_y, prev_end_x, prev_end_y, prev_zoom_start, prev_zoom_end,
+                frame_size=frame_size,
+            )
+            bg = crossfade_backgrounds(prev_bg, bg, scene.image_blend)
         frame = draw_scene(
             scene, bg, font_path, font_size=lyric_size, text_color=text_color, frame_size=frame_size,
         )
@@ -136,6 +165,15 @@ def assemble_video(
             accent_color=accent_color, text_color=text_color, dim_text_color=dim_text_color,
             panel_color=panel_color, panel_alpha=chord_diagram_panel_alpha,
         )
+        # Owner request, 2026-09-11: only the last support_overlay_lead_seconds
+        # before the song ends -- not the whole video, and never the
+        # countdown/intro (that branch returns above and never reaches here).
+        if song_t >= duration - support_overlay_lead_seconds:
+            frame = draw_support_overlay(
+                frame, support_overlay_text, font_path,
+                frame_size=frame_size, accent_color=accent_color, panel_color=panel_color,
+                scale=support_overlay_scale,
+            )
         return np.array(frame)
 
     total_duration = duration + countdown_duration

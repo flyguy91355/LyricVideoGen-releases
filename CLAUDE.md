@@ -67,19 +67,34 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   dialog's `initialdir`. Built with
   CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
-  Redo/log console/generation progress bar, right = a `CTkTabview` (`self.right_tabs`)
-  with a "Settings" tab (live preview + the scrollable Settings panel) and a
-  "YouTube" tab (connect status/button + the comments panel) -- real live-use
-  finding, 2026-09-10: stacking all of that in one column left almost no room
-  for Settings itself; tabs give each its own full-height space instead. The
-  scrollable Settings panel
+  Redo/log console/generation progress bar, right = the YouTube connect status/
+  button/comments panel plus a "⚙ Settings" button. Settings (live preview + the
+  scrollable Settings panel) live in their own popup window (`_open_settings_window`,
+  same transient/grab_set/lift/focus_force/brief-topmost treatment as the Update
+  Available dialog) rather than an embedded tab (owner feedback, 2026-09-11: felt
+  cramped/"ugly"; a bare `CTkTabview` "Settings" tab was the 2026-09-10 fix before
+  that) -- re-opening while already open lifts the existing window instead of
+  building a second `SettingsPanel` bound to the same `Settings` object. Closing the
+  popup (its own X button) with unsaved changes prompts the same discard
+  confirmation as the panel's own Discard button, then reverts `self.settings` to
+  the on-disk baseline before destroying the window. The scrollable Settings panel
   (`lyricvideo/settings_panel.py`) is bound to a `Settings` object
   (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
-  loaded on launch and saved on every control change). `render.py`/`detect_chords.py`/
-  `assemble_video()` all take plain keyword arguments for every Settings-backed value
-  (colors as RGB tuples, sizes as int, toggles as bool) and default to the program's
-  original hardcoded values — they do not import `settings.py`; `run_pipeline()` is
-  the sole integration point that accepts a real `Settings` object and unpacks it.
+  loaded on launch and saved only on explicit Save). Every field shows its own
+  default value next to it (`_default_text`, pulled live from a fresh `Settings()`
+  so it can't drift); every slider has a typeable value box beside it in addition to
+  the draggable slider (parsed/clamped by `_parse_clamped_float`, tolerant of a
+  stray "%"/"s" suffix) -- driven off a trace on the slider's own Tk variable rather
+  than `CTkSlider`'s `command` callback, since that callback only fires on a live
+  drag, never a programmatic `.set()` (real bug found via an actual screenshot,
+  2026-09-11: the box showed "0"/"off" instead of the real loaded value on open). An
+  unsaved field's row label is bold+orange (was plain orange text), still governed
+  by the same `_dirty_fields()`/itemized-confirm-before-Save mechanism as before.
+  `render.py`/`detect_chords.py`/`assemble_video()` all take plain keyword arguments
+  for every Settings-backed value (colors as RGB tuples, sizes as int, toggles as
+  bool) and default to the program's original hardcoded values — they do not import
+  `settings.py`; `run_pipeline()` is the sole integration point that accepts a real
+  `Settings` object and unpacks it.
 - **CLI (staged/resumable, useful for debugging one stage):**
   ```bash
   cd /home/doug/PlayAlongVideoProduction
@@ -209,11 +224,36 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    forced alignment gave one word 105 seconds while the rest of that line's
    words were plausibly clustered together 8 seconds later) and make the next
    ~2 minutes falsely read as "still singing," suppressing both the per-chord
-   image-follow and Ken Burns pacing. `build_scene()`'s Ken Burns window
-   during a real instrumental stretch also now paces to the active chord's
-   own duration (when chord data is available) instead of the current-line-
-   to-next-line span, so each chord-driven image gets its own natural pan
-   instead of inheriting a stretched-out one. `build_scene()`'s
+   image-follow and Ken Burns pacing. `layout.build_image_timeline()` builds
+   the whole song's image schedule once up front (one segment per sung line,
+   unchanged; one per instrumental chord otherwise) and merges consecutive
+   instrumental chords shorter than `Settings.image_min_hold_seconds`
+   (default 2.0s, owner-adjustable) forward into one block until the combined
+   span reaches that minimum -- owner complaint, 2026-09-11: fast chord
+   changes flipped the background too often. Every block boundary is still a
+   real chord onset lifted from the detected chord track (never an
+   independent timer), so a merged block can only show a chord's own image a
+   little LONGER than that chord's raw span, never out of sync with the
+   music. `build_scene()`'s Ken Burns window during an instrumental stretch
+   paces to that block's own span (not a single absorbed chord's), so a
+   merged block's pan doesn't reset partway through. Any image swap (line-to-
+   line included) now crossfades over `Settings.image_transition_seconds`
+   (default 0.25s) via `render.crossfade_backgrounds()` instead of an instant
+   cut, capped to at most 40% of either neighboring segment's own length so a
+   briefly-held image never spends its whole visible life mid-fade.
+   `render.draw_support_overlay()` optionally burns a small, semi-transparent
+   "support this channel" watermark into the LAST `Settings.
+   support_overlay_lead_seconds` (default 20s) of every video only -- never
+   the countdown, never the whole video -- upper-RIGHT, below the Key/BPM
+   badge, NOT upper-left, which is the chord fingering legend's own corner
+   (confirmed by rendering an actual composite frame, not just code review,
+   since the original placement directly covered the legend).
+   `Settings.support_overlay_text` (blank = disabled everywhere) drives both
+   this overlay AND a matching line `schedule_upload()` appends to the
+   YouTube description -- one field, two surfaces, never independently
+   configured. NOT clickable (no region of a rendered video frame can be);
+   it points at the real, clickable link in the description.
+   `build_scene()`'s
    `scroll_progress` (how far the current line's own on-screen scroll
    animation has advanced) uses `_plausible_line_end()` -- the same
    outlier-capped end as `_plausible_sung_intervals()` -- instead of the
@@ -402,7 +442,12 @@ write a title/description/tags, and one more per new comment
 (`draft_comment_reply`) to draft a reply and flag whether it looks like an
 error report -- both parse a labeled-line reply format
 (`TITLE:`/`DESCRIPTION:`/`TAGS:` or `IS_ERROR_REPORT:`/`REPLY:`) that's
-robust to Claude reordering the lines. `lyricvideo/youtube_schedule.py`'s
+robust to Claude reordering the lines. `generate_video_metadata()` takes the
+real artist `identify.py` already resolved (read from `work_dir/
+song_info.json` by `schedule_upload()`, failing soft to `""` on a missing/
+corrupt file) and states it as a known fact in the prompt, asking Claude to
+work it into the title -- never left to guesswork, and never fabricated
+when identify.py itself couldn't resolve one. `lyricvideo/youtube_schedule.py`'s
 `schedule_upload()` is the single upload code path (auto AND manual): for
 a Public target it uploads immediately as YouTube-Private with a computed
 future `publishAt` (`compute_next_publish_slot()` spaces each new slot

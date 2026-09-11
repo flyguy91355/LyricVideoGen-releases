@@ -30,6 +30,11 @@ def test_settings_defaults_match_current_hardcoded_render_behavior():
     assert s.show_chord_legend is True
     assert s.chord_legend_size == 100
     assert s.chord_diagram_panel_alpha == 235
+    assert s.image_min_hold_seconds == 2.0
+    assert s.image_transition_seconds == 0.25
+    assert s.support_overlay_text == ""
+    assert s.support_overlay_size == 100
+    assert s.support_overlay_lead_seconds == 20.0
 
 
 def test_youtube_settings_defaults():
@@ -150,6 +155,11 @@ def test_render_kwargs_maps_resolution_and_colors():
         "show_chord_legend": True,
         "chord_legend_scale": 1.0,
         "chord_diagram_panel_alpha": 235,
+        "min_hold_seconds": 2.0,
+        "image_transition_seconds": 0.25,
+        "support_overlay_text": "",
+        "support_overlay_scale": 1.0,
+        "support_overlay_lead_seconds": 20.0,
     }
 
 
@@ -174,3 +184,28 @@ def test_render_kwargs_includes_chord_legend_scale():
 def test_render_kwargs_includes_chord_diagram_panel_alpha():
     assert Settings().render_kwargs()["chord_diagram_panel_alpha"] == 235
     assert Settings(chord_diagram_panel_alpha=90).render_kwargs()["chord_diagram_panel_alpha"] == 90
+
+
+def test_render_kwargs_includes_image_min_hold_seconds():
+    assert Settings().render_kwargs()["min_hold_seconds"] == 2.0
+    assert Settings(image_min_hold_seconds=5.0).render_kwargs()["min_hold_seconds"] == 5.0
+
+
+def test_render_kwargs_includes_image_transition_seconds():
+    assert Settings().render_kwargs()["image_transition_seconds"] == 0.25
+    assert Settings(image_transition_seconds=1.0).render_kwargs()["image_transition_seconds"] == 1.0
+
+
+def test_render_kwargs_includes_support_overlay_text():
+    assert Settings().render_kwargs()["support_overlay_text"] == ""
+    assert Settings(support_overlay_text="ko-fi.com/x").render_kwargs()["support_overlay_text"] == "ko-fi.com/x"
+
+
+def test_render_kwargs_includes_support_overlay_scale():
+    assert Settings().render_kwargs()["support_overlay_scale"] == 1.0
+    assert Settings(support_overlay_size=50).render_kwargs()["support_overlay_scale"] == 0.5
+
+
+def test_render_kwargs_includes_support_overlay_lead_seconds():
+    assert Settings().render_kwargs()["support_overlay_lead_seconds"] == 20.0
+    assert Settings(support_overlay_lead_seconds=10.0).render_kwargs()["support_overlay_lead_seconds"] == 10.0

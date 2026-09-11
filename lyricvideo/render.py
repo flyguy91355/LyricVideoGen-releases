@@ -64,6 +64,17 @@ KEN_BURNS_PRESETS: list[tuple[float, float, float, float, float, float]] = [
 ]
 
 
+def crossfade_backgrounds(prev: Image.Image, current: Image.Image, blend: float) -> Image.Image:
+    """Dissolves from `prev` to `current` -- blend=0.0 is fully prev, 1.0 is
+    fully current. Both images must already be the same size (the caller
+    applies Ken Burns to each before calling this)."""
+    if blend >= 1.0:
+        return current
+    if blend <= 0.0:
+        return prev
+    return Image.blend(prev.convert("RGB"), current.convert("RGB"), blend)
+
+
 def ken_burns_preset_for_key(image_key: str) -> tuple[float, float, float, float, float, float]:
     idx = int(hashlib.sha256(image_key.encode("utf-8")).hexdigest(), 16) % len(KEN_BURNS_PRESETS)
     return KEN_BURNS_PRESETS[idx]
@@ -459,6 +470,68 @@ def draw_countdown(
     label = str(seconds_remaining)
     label_w = draw.textlength(label, font=font)
     draw.text((cx - label_w / 2, cy - box_side * 0.28), label, font=font, fill=(*accent_color, 255))
+
+    return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
+
+
+_SUPPORT_OVERLAY_MARGIN_X = 40  # from the right edge
+_SUPPORT_OVERLAY_MARGIN_TOP = 110  # clears the Key/BPM badge (drawn by draw_chord_bar,
+                                    # anchored around FRAME_SIZE[1]*0.06 -- roughly 65-95px
+                                    # tall at the default frame size), never the two together
+_SUPPORT_OVERLAY_BASE_FONT_SIZE = 28
+_SUPPORT_OVERLAY_PAD_X = 16
+_SUPPORT_OVERLAY_PAD_Y = 10
+_SUPPORT_OVERLAY_ALPHA = 180  # semi-transparent -- a reminder, not a competing focal point
+
+
+def draw_support_overlay(
+    frame: Image.Image,
+    text: str,
+    font_path: str,
+    *,
+    frame_size: tuple[int, int] = FRAME_SIZE,
+    accent_color: tuple[int, int, int] = ACCENT_COLOR,
+    panel_color: tuple[int, int, int] = (11, 18, 32),
+    scale: float = 1.0,
+) -> Image.Image:
+    """Small, unobtrusive upper-RIGHT watermark pointing viewers at an
+    external support link (owner request, 2026-09-11) -- same rounded-box/
+    accent-color language as the chord bar and countdown panel, semi-
+    transparent so it never competes with the real content. Right-aligned
+    and positioned below the Key/BPM badge (also upper-right, drawn by
+    draw_chord_bar) -- NOT upper-left, which is where the chord fingering
+    legend lives (real bug caught by the owner asking to see a render before
+    trusting it: the original upper-left placement directly covered the
+    first two chord diagrams' labels). NOT clickable -- no region of a
+    rendered video frame can be; this is purely a visual pointer to the
+    real, clickable link in the description. A no-op (`frame` returned
+    untouched) when `text` is blank, so a disabled overlay costs nothing.
+    Copy-on-write, matching every other draw_* here."""
+    if not text.strip():
+        return frame
+
+    font_size = max(1, int(_SUPPORT_OVERLAY_BASE_FONT_SIZE * scale))
+    pad_x = int(_SUPPORT_OVERLAY_PAD_X * scale)
+    pad_y = int(_SUPPORT_OVERLAY_PAD_Y * scale)
+    margin_x = int(_SUPPORT_OVERLAY_MARGIN_X * scale)
+    margin_top = _SUPPORT_OVERLAY_MARGIN_TOP
+
+    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = ImageFont.truetype(font_path, font_size)
+
+    text_w = draw.textlength(text, font=font)
+    ascent, descent = font.getmetrics()
+    text_h = ascent + descent
+
+    box_right = frame_size[0] - margin_x
+    box_left = box_right - (text_w + 2 * pad_x)
+    box_top = margin_top
+    box_bottom = margin_top + text_h + 2 * pad_y
+
+    box = (box_left, box_top, box_right, box_bottom)
+    draw.rounded_rectangle(box, radius=int(pad_y * 1.2), fill=(*panel_color, _SUPPORT_OVERLAY_ALPHA))
+    draw.text((box_left + pad_x, box_top + pad_y), text, font=font, fill=(*accent_color, 255))
 
     return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
 

@@ -40,6 +40,21 @@ def save_next_slot(when: datetime, path: Path = NEXT_SLOT_FILE) -> None:
     path.write_text(json.dumps({"next_slot": when.isoformat()}), encoding="utf-8")
 
 
+def _load_artist(work_dir: Path) -> str:
+    """The real artist identify.py already resolved, straight from
+    song_info.json next to this song's lyrics_timed.json -- so the upload
+    title-writing prompt states a known fact instead of guessing. Missing
+    file, corrupt JSON, or a genuinely unresolved artist (identify.py can
+    legitimately return "") all fail soft to "" -- an upload must never be
+    blocked by this, and "" tells generate_video_metadata to simply not
+    mention an artist rather than fabricate one."""
+    try:
+        data = json.loads((work_dir / "song_info.json").read_text(encoding="utf-8"))
+        return str(data.get("artist") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 def compute_next_publish_slot(
     now: datetime, reserved_slot: datetime | None, min_days_between: int, preferred_hour: int,
 ) -> datetime:
@@ -72,7 +87,11 @@ def schedule_upload(
     now = now or datetime.now().astimezone()
     song = load_song(work_dir / "lyrics_timed.json")
     full_lyrics = "\n".join(line.text for line in song.lines)
-    title, description, tags = generate_video_metadata(anthropic_client, song.title, full_lyrics)
+    artist = _load_artist(work_dir)
+    title, description, tags = generate_video_metadata(anthropic_client, song.title, artist, full_lyrics)
+    support_text = getattr(settings, "support_overlay_text", "").strip()
+    if support_text:
+        description = f"{description}\n\n{support_text}"
     video_path = work_dir / f"{slugify(song.title)}.mp4"
 
     if settings.youtube_privacy == "public":

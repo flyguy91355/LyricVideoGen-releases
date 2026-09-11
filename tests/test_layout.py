@@ -2,7 +2,8 @@ import pytest
 
 from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Word, line_hash
 from lyricvideo.layout import (
-    _in_a_line, _plausible_line_end, _plausible_sung_intervals, build_scene, find_current_line_index,
+    _in_a_line, _plausible_line_end, _plausible_sung_intervals, build_image_timeline, build_scene,
+    find_current_line_index,
 )
 
 
@@ -327,3 +328,94 @@ def test_build_scene_blanks_stale_current_line_during_a_real_instrumental_gap():
     within_real_content = build_scene(lines, t=9.7, window=1)
     still_current = next(l for l in within_real_content.lines if l.distance_from_current == 0)
     assert [w.text for w in still_current.words] == ["Yes", "nonsense"]
+
+
+def test_build_image_timeline_merges_short_chords_until_min_hold_reached():
+    """Real owner complaint: fast chord changes during an instrumental made
+    the background image flip too often. Three chords in a row, each only
+    0.5s, must be merged into one block spanning all three (1.5s) since none
+    of them alone reaches the 2.0s minimum -- but the block's own boundaries
+    still come straight from the real chord onsets (0.0 and 1.5), never an
+    independent timer."""
+    chord_track = ChordTrack(events=[
+        ChordEvent(0.0, 0.5, "C"), ChordEvent(0.5, 1.0, "G"), ChordEvent(1.0, 1.5, "Am"),
+        ChordEvent(1.5, 4.0, "F"),
+    ])
+
+    timeline = build_image_timeline([], chord_track, audio_duration=4.0, min_hold_seconds=2.0)
+
+    assert len(timeline) == 2
+    assert timeline[0].start == 0.0
+    assert timeline[0].end == 1.5
+    assert timeline[0].image_key == line_hash("[Instrumental — chord: C]")
+    assert timeline[1].start == 1.5
+    assert timeline[1].end == 4.0
+    assert timeline[1].image_key == line_hash("[Instrumental — chord: F]")
+
+
+def test_build_image_timeline_leaves_a_trailing_short_run_unmerged_with_anything_after_it():
+    """A short run at the very end of the song (nothing left to merge with)
+    still gets emitted as its own final block rather than being dropped."""
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 3.0, "C"), ChordEvent(3.0, 3.4, "G")])
+
+    timeline = build_image_timeline([], chord_track, audio_duration=3.4, min_hold_seconds=2.0)
+
+    assert len(timeline) == 2
+    assert timeline[1].start == 3.0
+    assert timeline[1].end == 3.4
+    assert timeline[1].image_key == line_hash("[Instrumental — chord: G]")
+
+
+def test_build_image_timeline_does_not_merge_chords_that_already_meet_the_minimum():
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C"), ChordEvent(2.0, 4.0, "Am")])
+
+    timeline = build_image_timeline([], chord_track, audio_duration=4.0, min_hold_seconds=2.0)
+
+    assert [(s.start, s.end) for s in timeline] == [(0.0, 2.0), (2.0, 4.0)]
+
+
+def test_build_image_timeline_with_no_chord_track_is_one_generic_block():
+    timeline = build_image_timeline([], None, audio_duration=5.0, min_hold_seconds=2.0)
+
+    assert len(timeline) == 1
+    assert timeline[0].start == 0.0
+    assert timeline[0].end == 5.0
+    assert timeline[0].image_key == line_hash("[Instrumental]")
+
+
+def test_build_image_timeline_includes_one_segment_per_sung_line():
+    lines = _make_lines()
+
+    timeline = build_image_timeline(lines, None, audio_duration=3.0, min_hold_seconds=2.0)
+
+    line_segments = [s for s in timeline if s.image_key == line_hash("hello there")]
+    assert len(line_segments) == 1
+    assert line_segments[0].start == 0.0
+    assert line_segments[0].end == 1.0
+
+
+def test_build_scene_image_blend_ramps_up_after_a_swap_then_settles_at_one():
+    lines = [
+        LyricLine(words=[Word(word="hello", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0),
+        LyricLine(words=[Word(word="friend", start_time=10.0, end_time=10.5)], start_time=10.0, end_time=10.5),
+    ]
+    chord_track = ChordTrack(events=[ChordEvent(1.0, 5.0, "C"), ChordEvent(5.0, 10.0, "Am")])
+
+    right_at_swap = build_scene(lines, t=5.0, chord_track=chord_track, image_transition_seconds=0.25)
+    mid_transition = build_scene(lines, t=5.1, chord_track=chord_track, image_transition_seconds=0.25)
+    well_after = build_scene(lines, t=6.0, chord_track=chord_track, image_transition_seconds=0.25)
+
+    assert right_at_swap.prev_image_key == line_hash("[Instrumental — chord: C]")
+    assert right_at_swap.image_key == line_hash("[Instrumental — chord: Am]")
+    assert right_at_swap.image_blend == pytest.approx(0.0)
+    assert 0.0 < mid_transition.image_blend < 1.0
+    assert well_after.image_blend == 1.0
+
+
+def test_build_scene_image_blend_is_one_for_the_very_first_segment_of_the_song():
+    lines = [LyricLine(words=[Word(word="hello", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+
+    scene = build_scene(lines, t=0.0)
+
+    assert scene.prev_image_key is None
+    assert scene.image_blend == 1.0

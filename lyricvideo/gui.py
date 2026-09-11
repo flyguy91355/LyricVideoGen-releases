@@ -305,30 +305,77 @@ class LyricVideoGUI:
         right = ctk.CTkFrame(body)
         right.grid(row=0, column=1, sticky="nsew")
 
-        # Real live-use finding, 2026-09-10: Settings (5 sections) + the live
-        # preview + the YouTube connect status + the comments panel all
-        # stacked in this one column left almost no room for Settings itself
-        # -- a CTkTabview instead gives each its own tab the full column
-        # height, with nothing permanently eating space from the other.
-        self.right_tabs = ctk.CTkTabview(right)
-        self.right_tabs.pack(fill="both", expand=True, padx=4, pady=4)
-        settings_tab = self.right_tabs.add("Settings")
-        youtube_tab = self.right_tabs.add("YouTube")
+        # Settings moved into its own popup window (owner feedback,
+        # 2026-09-11: the embedded tab felt cramped/"ugly") -- this column is
+        # now just the YouTube panel plus the button that opens it. The panel
+        # and its live preview are built fresh each time the window opens
+        # (see _open_settings_window) rather than kept around permanently.
+        self._settings_window: ctk.CTkToplevel | None = None
+        settings_button_row = ctk.CTkFrame(right, fg_color="transparent")
+        settings_button_row.pack(fill="x", padx=4, pady=(4, 0))
+        ctk.CTkButton(settings_button_row, text="⚙ Settings", command=self._open_settings_window).pack(
+            side="left"
+        )
 
-        self.settings_preview = SettingsPreviewFrame(settings_tab, self.settings)
-        self.settings_preview.pack(fill="x", padx=6, pady=(6, 0))
-        self.settings_panel = SettingsPanel(settings_tab, self.settings, on_change=self._on_settings_changed)
-        self.settings_panel.pack(fill="both", expand=True, padx=6, pady=6)
-
-        youtube_connect_frame = ctk.CTkFrame(youtube_tab, fg_color="transparent")
-        youtube_connect_frame.pack(fill="x", padx=4, pady=(6, 0))
+        youtube_connect_frame = ctk.CTkFrame(right, fg_color="transparent")
+        youtube_connect_frame.pack(fill="x", padx=4, pady=(10, 0))
         self.youtube_status_var = tk.StringVar(value="YouTube: not connected")
         ctk.CTkLabel(youtube_connect_frame, textvariable=self.youtube_status_var, anchor="w").pack(side="left")
         ctk.CTkButton(
             youtube_connect_frame, text="Connect to YouTube", command=self._on_connect_youtube, width=160,
         ).pack(side="right")
 
-        self._build_youtube_panel(youtube_tab)
+        self._build_youtube_panel(right)
+
+    def _open_settings_window(self) -> None:
+        if self._settings_window is not None:
+            # Already open -- bring it to front rather than building a second
+            # SettingsPanel bound to the same Settings object (which would
+            # double-fire on_change and diverge from the real dirty baseline).
+            self._settings_window.lift()
+            self._settings_window.focus_force()
+            return
+
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Settings")
+        dialog_w, dialog_h = 640, 780
+        self.root.update_idletasks()
+        # Same transient+grab_set+lift/focus_force+brief-topmost treatment as
+        # the Update Available dialog -- a plain Toplevel can open silently
+        # behind the main window on some Linux window managers (Cinnamon
+        # included; a documented recurring bug class on this project).
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_h) // 2
+        dialog.geometry(f"{dialog_w}x{dialog_h}+{max(x, 0)}+{max(y, 0)}")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.lift()
+        dialog.focus_force()
+        dialog.attributes("-topmost", True)
+        dialog.after(300, lambda: dialog.attributes("-topmost", False))
+        self._settings_window = dialog
+
+        self.settings_preview = SettingsPreviewFrame(dialog, self.settings)
+        self.settings_preview.pack(fill="x", padx=6, pady=(6, 0))
+        self.settings_panel = SettingsPanel(dialog, self.settings, on_change=self._on_settings_changed)
+        self.settings_panel.pack(fill="both", expand=True, padx=6, pady=6)
+
+        def _on_close() -> None:
+            if self.settings_panel.has_unsaved_changes():
+                if not messagebox.askyesno(
+                    "Discard changes", "You have unsaved settings changes. Discard them and close?",
+                ):
+                    return
+                # Reverts the widgets (and, via on_change, self.settings
+                # itself) back to what's actually on disk -- calling the
+                # panel's own Discard button would pop a SECOND confirmation
+                # on top of this one, so this reuses its underlying action
+                # directly instead.
+                self.settings_panel.load_from(self.settings_panel._baseline)
+            self._settings_window = None
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", _on_close)
 
     def _add_row(self, frame: ctk.CTkFrame, row: int, label: str, var: tk.StringVar) -> None:
         ctk.CTkLabel(frame, text=label).grid(row=row, column=0, sticky="w")
