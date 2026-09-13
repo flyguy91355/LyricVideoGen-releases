@@ -4,40 +4,30 @@ target -- see docs/superpowers/specs/2026-09-10-youtube-upload-design.md for
 why this replaced an earlier local-queue design (verified against YouTube's
 real videos.insert docs: publishAt requires privacyStatus="private" at
 upload time, and YouTube auto-publishes at that moment, even immediately if
-publishAt is already in the past)."""
+publishAt is already in the past).
+
+Spacing itself is computed from the channel's own real, live schedule
+(youtube.reserved_publish_dates), not a local running counter -- see that
+function's docstring for the 2026-09-13 incident that replaced a local
+youtube_next_slot.json file with this. compute_next_publish_slot below
+also fills gaps in that real schedule (e.g. the owner manually publishing
+an already-scheduled video early) rather than only ever pushing new
+uploads further into the future."""
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from .models import load_song
 from .pipeline import slugify
-from .youtube import upload_video
+from .youtube import reserved_publish_dates, upload_video
 from .youtube_metadata import generate_video_metadata
 from .youtube_state import YoutubeState, save_youtube_state
 
 log = logging.getLogger("playalongvideoproduction")
-
-CREDENTIALS_DIR = Path.home() / ".playalongvideoproduction"
-NEXT_SLOT_FILE = CREDENTIALS_DIR / "youtube_next_slot.json"
-
-
-def load_next_slot(path: Path = NEXT_SLOT_FILE) -> datetime | None:
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return datetime.fromisoformat(data["next_slot"])
-    except (OSError, ValueError, KeyError):
-        return None
-
-
-def save_next_slot(when: datetime, path: Path = NEXT_SLOT_FILE) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"next_slot": when.isoformat()}), encoding="utf-8")
 
 
 def _load_artist(work_dir: Path) -> str:
@@ -56,19 +46,34 @@ def _load_artist(work_dir: Path) -> str:
 
 
 def compute_next_publish_slot(
-    now: datetime, reserved_slot: datetime | None, min_days_between: int, preferred_hour: int,
+    now: datetime, claimed_dates: set[date], min_days_between: int, preferred_hour: int,
 ) -> datetime:
-    """The next publish time to reserve for a newly-scheduled video. The
-    very first video ever scheduled publishes immediately (`now`) -- there's
-    nothing to space it against yet. Every video after that is spaced
-    `min_days_between` days past whichever slot was reserved LAST (never
-    past `now`), so scheduling several videos back-to-back (a batch run)
-    still lands them one every N days on the channel, in the order they
-    were scheduled, landing on `preferred_hour` local time."""
-    if reserved_slot is None:
-        return now
-    candidate = reserved_slot + timedelta(days=min_days_between)
-    return candidate.replace(hour=preferred_hour, minute=0, second=0, microsecond=0)
+    """The next publish time to reserve for a newly-scheduled video --
+    fills gaps in the channel's real, live schedule rather than only ever
+    pushing new uploads further into the future. Walks forward day by day
+    from `now`'s own date, and picks the first date that's at least
+    `min_days_between` days from every date already claimed by an
+    existing video (scheduled OR already-published; see
+    youtube.reserved_publish_dates) -- so if the owner manually publishes
+    an already-scheduled video early, or a batch run's mid-stream settings
+    change once inflated the schedule by extra days (real incident,
+    2026-09-13: a stale local counter compounded a 14-day gap onto every
+    later upload), the very next new upload lands back in that opened-up
+    gap instead of stacking further out past it. With `claimed_dates`
+    empty (the very first video ever), today's date has no conflict and is
+    returned immediately, snapped to `preferred_hour` LOCAL time -- in the
+    past if `now` is already later than that today (YouTube auto-publishes
+    immediately on a past publishAt, so this still means "now", just
+    without a special case for it). `min_days_between=1` (the common case)
+    means simply "any date with no existing video on it, in either
+    direction" -- checked against BOTH neighbors, so filling a gap can
+    never land a new video too close to what's already scheduled on
+    either side of it."""
+    local_now = now.astimezone() if now.tzinfo is not None else now
+    candidate_date = local_now.date()
+    while any(abs((candidate_date - claimed).days) < min_days_between for claimed in claimed_dates):
+        candidate_date += timedelta(days=1)
+    return datetime.combine(candidate_date, time(hour=preferred_hour), tzinfo=local_now.tzinfo)
 
 
 def schedule_upload(
@@ -77,7 +82,6 @@ def schedule_upload(
     work_dir: Path,
     settings,
     now: datetime | None = None,
-    next_slot_path: Path = NEXT_SLOT_FILE,
 ) -> str:
     """The single upload code path used by every trigger (auto-upload AND
     the manual button) -- there is no separate "immediate" vs "queued"
@@ -96,7 +100,7 @@ def schedule_upload(
 
     if settings.youtube_privacy == "public":
         slot = compute_next_publish_slot(
-            now, load_next_slot(next_slot_path),
+            now, reserved_publish_dates(youtube_client),
             settings.youtube_min_days_between_uploads, settings.youtube_preferred_upload_hour,
         )
         video_id = upload_video(
@@ -104,7 +108,6 @@ def schedule_upload(
             privacy="private", publish_at=slot,
             category_id=settings.youtube_category_id, made_for_kids=settings.youtube_made_for_kids,
         )
-        save_next_slot(slot, next_slot_path)
     else:
         # Unlisted/Private have no "publish later" concept on YouTube -- upload
         # immediately with that literal status, no scheduling machinery at all.

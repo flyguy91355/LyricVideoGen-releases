@@ -396,9 +396,8 @@ and changelog stay meaningful, not because Apply Update is the only way
 changes reach this install. `v1.1.0` (2026-09-09) is the first release cut
 since the project rename — it had drifted to reference the pre-rename
 `run_lyricvideogen.sh` (file no longer exists), fixed to
-`run_playalongvideoproduction.sh`. `cut_release.sh`/`apply.py` also guard
-against a stale release reverting newer local commits (CLAUDE_HISTORY,
-2026-09-13).
+`run_playalongvideoproduction.sh`. `cut_release.sh`/`apply.py` guard
+against a stale release reverting newer commits (HISTORY, 9-13).
 
 `Settings.render_kwargs()` centralizes resolution/color unpacking for
 `assemble_video()`; `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`
@@ -465,12 +464,12 @@ work it into the title -- never left to guesswork, and never fabricated
 when identify.py itself couldn't resolve one. `lyricvideo/youtube_schedule.py`'s
 `schedule_upload()` is the single upload code path (auto AND manual): for
 a Public target it uploads immediately as YouTube-Private with a computed
-future `publishAt` (`compute_next_publish_slot()` spaces each new slot
-`youtube_min_days_between_uploads` days past whichever slot was reserved
-LAST, snapped to `youtube_preferred_upload_hour` -- not past `now`, so a
-batch of several videos scheduled back-to-back still lands one every N
-days in order); Unlisted/Private upload immediately with that literal
-status, no scheduling at all. `lyricvideo/youtube_auth.py` owns the OAuth
+future `publishAt` (`compute_next_publish_slot()` gap-fills: first date
+>= `youtube_min_days_between_uploads` days from every already-claimed
+date, snapped to `youtube_preferred_upload_hour` local time). Claimed
+dates are read live from the channel (`reserved_publish_dates()`, not a
+local file -- HISTORY, 9-13); Unlisted/Private upload immediately, no
+scheduling at all. `lyricvideo/youtube_auth.py` owns the OAuth
 connection lifecycle: `connect()` opens the owner's browser once for
 consent (using a `client_secret_*.json` downloaded from Google Cloud
 Console) and saves a refresh token to

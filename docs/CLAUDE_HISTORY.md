@@ -1145,3 +1145,55 @@ unresolvable commit -- since refusing to update on an inconclusive check
 would be worse than the bug this guards against. Also cut release
 `v1.8.3` from the current commit to bring the releases repo back in sync
 with local git history.
+
+## 2026-09-13 — YouTube upload scheduling replaced a local counter with the channel's real, live schedule; then made it gap-fill
+
+Owner-reported: a batch upload's next scheduled publish date looked wrong
+after the owner had manually published several already-scheduled videos
+early directly in YouTube Studio. Investigated live against the real
+channel (`flyguy91355`'s connected account): the local
+`~/.playalongvideoproduction/youtube_next_slot.json` running counter had
+been inflated by 14 days at some point mid-batch (matching this session's
+earlier finding that the owner had changed settings mid-run), and every
+later upload kept compounding that same gap forward since the counter
+only ever remembers "the last slot I personally reserved," with no way to
+notice the owner had since published six of those already-scheduled
+videos early by hand (freeing up 2026-09-14 through 2026-09-19) or that
+one outlier video had landed on 2026-10-03 instead of a normal daily
+slot.
+
+Replaced the whole mechanism: `youtube.py`'s new `reserved_publish_dates()`
+lists every video ever uploaded to the connected channel (via its uploads
+playlist, paginated) and returns the LOCAL calendar date each one already
+claims -- a still-scheduled private video's `publishAt`, or an already-
+public video's real `publishedAt` -- so the schedule is always read from
+YouTube itself, never a local file that can silently drift out of sync
+with manual changes made directly in Studio. `youtube_next_slot.json`,
+`load_next_slot()`, and `save_next_slot()` are deleted outright, not
+deprecated.
+
+Found and fixed a real regression while verifying this against the live
+channel: `compute_next_publish_slot()`'s `.replace(hour=preferred_hour)`
+had always operated on a value that was implicitly LOCAL time (the old
+file always stored local timestamps) -- the new live-API dates are UTC.
+Snapping the hour without converting first silently turned every video's
+intended 2pm-Eastern slot into 2pm UTC (10am Eastern) the moment the data
+source changed. Fixed by converting to local time first; added a
+regression test that fails without the fix.
+
+Then went further per an explicit owner follow-up ("can it fill in the
+spaces too... fill that slot with the newly uploaded songs" rather than
+moving every already-scheduled video's date): rewrote
+`compute_next_publish_slot()` from "reserved-slot-plus-interval" (which
+only ever pushed a new upload further into the future) to a day-by-day
+gap search -- starting from today, it walks forward and picks the first
+date at least `youtube_min_days_between_uploads` days from EVERY already-
+claimed date (checked in both directions, so a gap is never so narrow
+that filling it would land a new video too close to what's already
+scheduled on either side). Verified against the real channel: with
+2026-09-09 through 2026-09-19 and 2026-10-03 all claimed, the old logic
+would have scheduled the next upload for 2026-10-04; the new logic
+correctly proposes 2026-09-20, filling the real 14-day gap instead of
+extending past the outlier. A batch run naturally still spaces multiple
+new uploads apart, since each `schedule_upload()` call re-queries the
+channel live and the previous item's own video is now really on it.

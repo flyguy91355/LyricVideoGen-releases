@@ -7,7 +7,7 @@ call in tests. See docs/superpowers/specs/2026-09-10-youtube-upload-design.md.""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -55,6 +55,59 @@ def upload_video(
     while response is None:
         _status, response = request.next_chunk()
     return response["id"]
+
+
+def _all_uploaded_video_ids(youtube_client) -> list[str]:
+    """Every video id ever uploaded to the connected channel, oldest first,
+    via its own uploads playlist (the standard way to enumerate a channel's
+    full upload history) -- paginated 50 at a time, same page size the
+    Data API caps list calls at."""
+    channel = youtube_client.channels().list(part="contentDetails", mine=True).execute()
+    uploads_playlist_id = channel["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    video_ids: list[str] = []
+    page_token = None
+    while True:
+        response = youtube_client.playlistItems().list(
+            part="contentDetails", playlistId=uploads_playlist_id, maxResults=50, pageToken=page_token,
+        ).execute()
+        video_ids.extend(item["contentDetails"]["videoId"] for item in response["items"])
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    return video_ids
+
+
+def reserved_publish_dates(youtube_client) -> set[date]:
+    """Every LOCAL calendar date already claimed anywhere on this channel --
+    a still-scheduled private video's own publishAt, or an already-public
+    video's real publishedAt, converted from YouTube's UTC into this
+    machine's local date -- across every video ever uploaded. This is the
+    real ground truth for placing the NEXT scheduled upload (see
+    youtube_schedule.compute_next_publish_slot's gap-filling search),
+    used instead of a local running counter that silently drifts the
+    moment anything changes the channel out-of-band: the owner manually
+    publishing an already-scheduled video early, editing a schedule
+    directly in Studio, or even this app's own Apply Update touching
+    local state. Real incident, 2026-09-13: a stale local counter --
+    inflated once by a since-reverted mid-batch settings change -- kept
+    compounding that same 14-day gap onto every future upload instead of
+    resuming a normal cadence, and had no way to notice several already-
+    scheduled videos had since been published early by hand, which is
+    exactly the kind of gap this function lets the scheduler fill back in
+    with a new upload rather than just pushing further into the future.
+    Returns an empty set for a channel with zero uploads."""
+    claimed: set[date] = set()
+    video_ids = _all_uploaded_video_ids(youtube_client)
+    for i in range(0, len(video_ids), 50):
+        batch = video_ids[i:i + 50]
+        response = youtube_client.videos().list(part="snippet,status", id=",".join(batch)).execute()
+        for item in response["items"]:
+            when = item["status"].get("publishAt") or item["snippet"].get("publishedAt")
+            if not when:
+                continue
+            parsed = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            claimed.add(parsed.astimezone().date())
+    return claimed
 
 
 def get_video_snippet(youtube_client, video_id: str) -> dict | None:

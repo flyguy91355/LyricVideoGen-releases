@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+from types import SimpleNamespace
+
 from lyricvideo.youtube import (
-    get_video_snippet, list_new_comments, post_reply, update_video_description, upload_video, video_exists,
+    get_video_snippet, list_new_comments, post_reply, reserved_publish_dates,
+    update_video_description, upload_video, video_exists,
 )
 
 
@@ -245,3 +248,67 @@ def test_update_video_description_is_a_noop_when_video_no_longer_exists():
     update_video_description(client, "abc123", "new description")
 
     assert client._videos.update_kwargs is None
+
+
+class _FakeChannelUploadsClient:
+    """A channel with a fixed uploads-playlist history, for
+    reserved_publish_dates() -- distinct from _FakeYoutubeClient above
+    since that one's videos().list() takes a single id, not a comma-
+    joined batch."""
+
+    def __init__(self, videos: list[dict]):
+        self._videos = videos
+
+    def channels(self):
+        return SimpleNamespace(list=lambda part, mine: SimpleNamespace(execute=lambda: {
+            "items": [{"contentDetails": {"relatedPlaylists": {"uploads": "uploads-playlist"}}}]
+        }))
+
+    def playlistItems(self):
+        videos = self._videos
+
+        def list_(part, playlistId, maxResults, pageToken):
+            return SimpleNamespace(execute=lambda: {
+                "items": [{"contentDetails": {"videoId": v["id"]}} for v in videos],
+            })
+
+        return SimpleNamespace(list=list_)
+
+    def videos(self):
+        videos = self._videos
+
+        def list_(part, id):
+            requested = set(id.split(","))
+            items = [v for v in videos if v["id"] in requested]
+            return SimpleNamespace(execute=lambda: {"items": items})
+
+        return SimpleNamespace(list=list_)
+
+
+def test_reserved_publish_dates_includes_both_scheduled_and_published_videos():
+    client = _FakeChannelUploadsClient([
+        {"id": "old-public", "status": {}, "snippet": {"publishedAt": "2026-09-01T18:00:00Z"}},
+        {"id": "still-scheduled", "status": {"publishAt": "2026-09-20T18:00:00Z"}, "snippet": {}},
+    ])
+
+    result = reserved_publish_dates(client)
+
+    assert result == {
+        datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc).astimezone().date(),
+        datetime(2026, 9, 20, 18, 0, tzinfo=timezone.utc).astimezone().date(),
+    }
+
+
+def test_reserved_publish_dates_returns_empty_set_for_an_empty_channel():
+    assert reserved_publish_dates(_FakeChannelUploadsClient([])) == set()
+
+
+def test_reserved_publish_dates_ignores_videos_with_neither_field():
+    client = _FakeChannelUploadsClient([
+        {"id": "processing", "status": {}, "snippet": {}},
+        {"id": "real", "status": {}, "snippet": {"publishedAt": "2026-09-05T12:00:00Z"}},
+    ])
+
+    result = reserved_publish_dates(client)
+
+    assert result == {datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc).astimezone().date()}

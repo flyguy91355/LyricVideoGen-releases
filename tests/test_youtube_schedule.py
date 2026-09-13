@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -6,35 +6,90 @@ from lyricvideo.models import LyricLine, Song, Word, save_song
 from lyricvideo.youtube_schedule import compute_next_publish_slot, schedule_upload
 
 
-def test_compute_next_publish_slot_returns_now_when_nothing_reserved_yet():
+def test_compute_next_publish_slot_returns_today_when_nothing_reserved_yet():
     now = datetime(2026, 9, 10, 10, 0, 0)
 
-    assert compute_next_publish_slot(now, None, min_days_between=2, preferred_hour=15) == now
+    slot = compute_next_publish_slot(now, set(), min_days_between=2, preferred_hour=15)
+
+    assert slot == datetime(2026, 9, 10, 15, 0, 0)
 
 
-def test_compute_next_publish_slot_spaces_from_the_reserved_slot_not_now():
-    reserved = datetime(2026, 9, 10, 15, 0, 0)
-    now = datetime(2026, 9, 10, 10, 5, 0)  # much earlier than the reserved slot
+def test_compute_next_publish_slot_spaces_past_a_claimed_date():
+    claimed = {date(2026, 9, 10)}
+    now = datetime(2026, 9, 10, 10, 5, 0)
 
-    slot = compute_next_publish_slot(now, reserved, min_days_between=2, preferred_hour=15)
+    slot = compute_next_publish_slot(now, claimed, min_days_between=2, preferred_hour=15)
 
     assert slot == datetime(2026, 9, 12, 15, 0, 0)
 
 
 def test_compute_next_publish_slot_snaps_to_the_preferred_hour():
-    reserved = datetime(2026, 9, 10, 9, 47, 33)
+    claimed = {date(2026, 9, 10)}
 
-    slot = compute_next_publish_slot(datetime(2026, 9, 10), reserved, min_days_between=1, preferred_hour=15)
+    slot = compute_next_publish_slot(datetime(2026, 9, 10), claimed, min_days_between=1, preferred_hour=15)
 
     assert slot == datetime(2026, 9, 11, 15, 0, 0)
 
 
-def test_compute_next_publish_slot_chain_spaces_multiple_batch_items_evenly():
-    slot1 = compute_next_publish_slot(datetime(2026, 9, 10, 8, 0), None, min_days_between=2, preferred_hour=15)
-    slot2 = compute_next_publish_slot(datetime(2026, 9, 10, 8, 1), slot1, min_days_between=2, preferred_hour=15)
-    slot3 = compute_next_publish_slot(datetime(2026, 9, 10, 8, 2), slot2, min_days_between=2, preferred_hour=15)
+def test_compute_next_publish_slot_snaps_to_preferred_hour_in_local_time_not_utc():
+    """Real bug, 2026-09-13: `now` may arrive UTC-aware (as it always does
+    from the real YouTube API's timestamps converted to a local `now`) --
+    snapping the hour without first converting to local time would
+    silently turn a 2pm-Eastern cadence into 2pm UTC (10am Eastern)."""
+    now = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)
 
-    assert slot1 == datetime(2026, 9, 10, 8, 0)
+    slot = compute_next_publish_slot(now, set(), min_days_between=1, preferred_hour=14)
+
+    assert slot.astimezone().hour == 14
+
+
+def test_compute_next_publish_slot_fills_a_gap_between_two_claimed_dates():
+    """Real scenario, 2026-09-13: the owner manually publishes an already-
+    scheduled video early, or a stale counter once inflated the schedule
+    by extra days -- either way, a multi-day gap opens up in the real
+    channel schedule. The next new upload should land IN that gap, not
+    stack on past the furthest-out already-claimed date. Mirrors the real
+    incident's actual dates: today plus a solid run of already-claimed
+    days (9/13-9/19), then a 14-day gap, then one stray far-future claim
+    (10/3, the mis-scheduled video from that incident)."""
+    claimed = {date(2026, 9, d) for d in range(13, 20)} | {date(2026, 10, 3)}
+    now = datetime(2026, 9, 13, 8, 0)
+
+    slot = compute_next_publish_slot(now, claimed, min_days_between=1, preferred_hour=14)
+
+    assert slot == datetime(2026, 9, 20, 14, 0, 0)  # the real opened-up gap, not past 10/3
+
+
+def test_compute_next_publish_slot_skips_every_day_already_claimed():
+    claimed = {date(2026, 9, 14), date(2026, 9, 15), date(2026, 9, 16)}
+    now = datetime(2026, 9, 14, 8, 0)
+
+    slot = compute_next_publish_slot(now, claimed, min_days_between=1, preferred_hour=14)
+
+    assert slot == datetime(2026, 9, 17, 14, 0, 0)
+
+
+def test_compute_next_publish_slot_respects_spacing_on_both_sides_of_a_gap():
+    """min_days_between=2 means a candidate must be 2+ days from EVERY
+    claimed date, not just the nearest one -- so a single-day gap between
+    two claimed dates 2 days apart is too narrow to use."""
+    claimed = {date(2026, 9, 10), date(2026, 9, 12)}  # a 1-day gap on the 11th
+    now = datetime(2026, 9, 10, 8, 0)
+
+    slot = compute_next_publish_slot(now, claimed, min_days_between=2, preferred_hour=15)
+
+    assert slot == datetime(2026, 9, 14, 15, 0, 0)  # the 11th is skipped -- too close to both sides
+
+
+def test_compute_next_publish_slot_chain_spaces_multiple_batch_items_evenly():
+    claimed: set[date] = set()
+    slot1 = compute_next_publish_slot(datetime(2026, 9, 10, 8, 0), claimed, min_days_between=2, preferred_hour=15)
+    claimed = {slot1.date()}
+    slot2 = compute_next_publish_slot(datetime(2026, 9, 10, 8, 1), claimed, min_days_between=2, preferred_hour=15)
+    claimed = {slot1.date(), slot2.date()}
+    slot3 = compute_next_publish_slot(datetime(2026, 9, 10, 8, 2), claimed, min_days_between=2, preferred_hour=15)
+
+    assert slot1 == datetime(2026, 9, 10, 15, 0, 0)
     assert slot2 == datetime(2026, 9, 12, 15, 0, 0)
     assert slot3 == datetime(2026, 9, 14, 15, 0, 0)
 
@@ -47,22 +102,58 @@ class _FakeUploadRequest:
         return None, {"id": self._video_id}
 
 
+class _FakeExecutable:
+    def __init__(self, result):
+        self._result = result
+
+    def execute(self):
+        return self._result
+
+
 class _FakeVideosResource:
-    def __init__(self, video_id):
+    def __init__(self, video_id, existing_videos=()):
         self._video_id = video_id
         self.insert_kwargs = None
+        self._existing_videos = list(existing_videos)
 
     def insert(self, **kwargs):
         self.insert_kwargs = kwargs
         return _FakeUploadRequest(self._video_id)
 
+    def list(self, id, part=None):
+        requested_ids = set(id.split(","))
+        items = [v for v in self._existing_videos if v["id"] in requested_ids]
+        return _FakeExecutable({"items": items})
+
 
 class _FakeYoutubeClient:
-    def __init__(self, video_id="vid123"):
-        self._videos = _FakeVideosResource(video_id)
+    """existing_videos lets a test simulate the channel's real, already-
+    uploaded history: latest_reserved_publish_time() reads this instead of
+    any local file (see the 2026-09-13 fix to youtube_schedule.py). Each
+    entry is a raw videos().list()-shaped dict:
+    {"id": ..., "status": {"publishAt": ...}, "snippet": {"publishedAt": ...}}."""
+
+    def __init__(self, video_id="vid123", existing_videos=()):
+        self._videos = _FakeVideosResource(video_id, existing_videos)
+        self._existing_video_ids = [v["id"] for v in existing_videos]
 
     def videos(self):
         return self._videos
+
+    def channels(self):
+        return SimpleNamespace(list=lambda part, mine: _FakeExecutable(
+            {"items": [{"contentDetails": {"relatedPlaylists": {"uploads": "uploads-playlist"}}}]}
+        ))
+
+    def playlistItems(self):
+        video_ids = self._existing_video_ids
+
+        def list_(part, playlistId, maxResults, pageToken):
+            return _FakeExecutable({
+                "items": [{"contentDetails": {"videoId": vid}} for vid in video_ids],
+            })
+
+        return SimpleNamespace(list=list_)
 
 
 class _FakeTextBlock:
@@ -121,35 +212,75 @@ def test_schedule_upload_public_uses_private_status_with_publish_at(tmp_path):
         youtube_min_days_between_uploads=2, youtube_preferred_upload_hour=15,
     )
     client = _FakeYoutubeClient(video_id="vid123")
-    next_slot_path = tmp_path / "next_slot.json"
 
     video_id = schedule_upload(
         client, _FakeAnthropicClient(), work_dir, settings,
-        now=datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc), next_slot_path=next_slot_path,
+        now=datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc),
     )
 
     assert video_id == "vid123"
     body = client._videos.insert_kwargs["body"]
     assert body["status"]["privacyStatus"] == "private"
     assert "publishAt" in body["status"]
-    assert next_slot_path.exists()
 
 
-def test_schedule_upload_unlisted_skips_publish_at_and_next_slot_file(tmp_path):
+def test_schedule_upload_public_spaces_past_a_date_already_claimed_on_the_real_channel(tmp_path):
+    """The reserved dates come from the channel's own live videos, not any
+    local file -- a video already claiming today's date pushes a new
+    upload to tomorrow, even though nothing local has ever recorded it."""
+    work_dir = _make_song_work_dir(tmp_path)
+    settings = SimpleNamespace(
+        youtube_privacy="public", youtube_category_id="26", youtube_made_for_kids=False,
+        youtube_min_days_between_uploads=1, youtube_preferred_upload_hour=15,
+    )
+    client = _FakeYoutubeClient(video_id="vid123", existing_videos=[
+        {"id": "already-scheduled", "status": {"publishAt": "2026-09-10T18:00:00Z"}, "snippet": {}},
+    ])
+
+    schedule_upload(
+        client, _FakeAnthropicClient(), work_dir, settings,
+        now=datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc),
+    )
+
+    publish_at = client._videos.insert_kwargs["body"]["status"]["publishAt"]
+    assert publish_at.startswith("2026-09-11")
+
+
+def test_schedule_upload_public_fills_a_gap_instead_of_stacking_past_a_far_future_claim(tmp_path):
+    """Real scenario, 2026-09-13: one video is mis-scheduled far in the
+    future (here, three weeks out) while today is wide open -- the new
+    upload must fill today, not queue up behind that far-future outlier."""
+    work_dir = _make_song_work_dir(tmp_path)
+    settings = SimpleNamespace(
+        youtube_privacy="public", youtube_category_id="26", youtube_made_for_kids=False,
+        youtube_min_days_between_uploads=1, youtube_preferred_upload_hour=15,
+    )
+    client = _FakeYoutubeClient(video_id="vid123", existing_videos=[
+        {"id": "far-future-outlier", "status": {"publishAt": "2026-10-01T18:00:00Z"}, "snippet": {}},
+    ])
+
+    schedule_upload(
+        client, _FakeAnthropicClient(), work_dir, settings,
+        now=datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc),
+    )
+
+    publish_at = client._videos.insert_kwargs["body"]["status"]["publishAt"]
+    assert publish_at.startswith("2026-09-10")
+
+
+def test_schedule_upload_unlisted_skips_publish_at(tmp_path):
     work_dir = _make_song_work_dir(tmp_path)
     settings = SimpleNamespace(
         youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False,
         youtube_min_days_between_uploads=2, youtube_preferred_upload_hour=15,
     )
     client = _FakeYoutubeClient(video_id="vid456")
-    next_slot_path = tmp_path / "next_slot.json"
 
-    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings, next_slot_path=next_slot_path)
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
 
     body = client._videos.insert_kwargs["body"]
     assert body["status"]["privacyStatus"] == "unlisted"
     assert "publishAt" not in body["status"]
-    assert not next_slot_path.exists()
 
 
 def test_schedule_upload_appends_support_description_text_to_the_description(tmp_path):
@@ -164,7 +295,7 @@ def test_schedule_upload_appends_support_description_text_to_the_description(tmp
     )
     client = _FakeYoutubeClient(video_id="vid999")
 
-    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings, next_slot_path=tmp_path / "next_slot.json")
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
 
     description = client._videos.insert_kwargs["body"]["snippet"]["description"]
     assert "Support: https://ko-fi.com/x" in description
@@ -180,7 +311,7 @@ def test_schedule_upload_leaves_description_unchanged_when_support_description_t
     )
     client = _FakeYoutubeClient(video_id="vid999")
 
-    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings, next_slot_path=tmp_path / "next_slot.json")
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
 
     description = client._videos.insert_kwargs["body"]["snippet"]["description"]
     assert description == "A great song."
@@ -196,7 +327,7 @@ def test_schedule_upload_saves_youtube_state(tmp_path):
     )
     client = _FakeYoutubeClient(video_id="vid789")
 
-    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings, next_slot_path=tmp_path / "next_slot.json")
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
 
     state = load_youtube_state(work_dir)
     assert state is not None
@@ -217,7 +348,7 @@ def test_schedule_upload_passes_the_real_artist_from_song_info_json(tmp_path):
     client = _FakeAnthropicClient()
 
     schedule_upload(
-        _FakeYoutubeClient(), client, work_dir, settings, next_slot_path=tmp_path / "next_slot.json",
+        _FakeYoutubeClient(), client, work_dir, settings,
     )
 
     assert "Pink Floyd" in client.messages.prompt_text()
@@ -235,7 +366,7 @@ def test_schedule_upload_tolerates_a_missing_song_info_json(tmp_path):
     client = _FakeAnthropicClient()
 
     video_id = schedule_upload(
-        _FakeYoutubeClient(video_id="vidabc"), client, work_dir, settings, next_slot_path=tmp_path / "next_slot.json",
+        _FakeYoutubeClient(video_id="vidabc"), client, work_dir, settings,
     )
 
     assert video_id == "vidabc"
