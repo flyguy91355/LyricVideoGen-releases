@@ -10,6 +10,10 @@ torchaudio>=2.1
 torchcodec>=0.1
 demucs>=4.0
 librosa>=0.10
+# AGPL-3.0 licensed (see docs/CLAUDE_HISTORY.md's 2026-09-13 entry) -- used only
+# for its HPCP chroma feature in detect_chords.py, a real, verified accuracy
+# improvement over librosa's plain CQT chroma for chord detection.
+essentia>=2.1b6.dev1389
 pillow>=10.0
 # moviepy 1.0.3's old-style decorators silently break under decorator>=5.0 (fps
 # resolution returns None instead of the passed value) -- pinned below <5.0 even

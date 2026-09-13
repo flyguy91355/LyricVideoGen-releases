@@ -1,7 +1,9 @@
 import subprocess
 
+import numpy as np
+
 from lyricvideo.audio_decode import find_ffmpeg
-from lyricvideo.detect_chords import ChordEvent, ChordTrack, detect_chords
+from lyricvideo.detect_chords import ChordEvent, ChordTrack, _hpcp_chroma, _sync_chroma_to_segments, detect_chords
 
 
 def _make_test_tone(tmp_path, freq=220, duration=6):
@@ -102,6 +104,49 @@ def test_detect_chords_min_chord_seconds_merges_short_segments(tmp_path):
     # A near-total merge threshold (5s on a 6s clip) can only ever produce the
     # same or fewer segments than no merging at all.
     assert len(strict.events) <= len(loose.events)
+
+
+def test_hpcp_chroma_c_bin_is_rolled_to_chord_theory_pitch_class_zero():
+    """Real bug found live, 2026-09-13: essentia's own HPCP output does NOT
+    use chord_theory's C=0 convention (empirically verified: bin 8, not bin
+    0, is where a pure C4 tone peaks) -- getting this wrong silently
+    transposes every detected chord. A pure sine tone at C4 (261.6256Hz)
+    must, after _hpcp_chroma's internal roll, peak at chroma index 0 (C)."""
+    sr = 22050
+    duration = 1.0
+    t = np.arange(int(sr * duration)) / sr
+    tone = (0.5 * np.sin(2 * np.pi * 261.6256 * t)).astype(np.float32)
+
+    chroma, _times = _hpcp_chroma(tone)
+
+    # Average across frames -- a single frame right at a zero-crossing can be
+    # noisy, but the peak pitch class over the whole tone must be C (index 0).
+    assert int(np.argmax(chroma.mean(axis=1))) == 0
+
+
+def test_sync_chroma_to_segments_aggregates_frames_within_each_segment():
+    chroma = np.array([[1.0, 1.0, 5.0, 5.0]] + [[0.0] * 4] * 11)  # only bin 0 populated
+    frame_times = np.array([0.1, 0.4, 0.6, 0.9])
+    seg_times = np.array([0.0, 0.5, 1.0])
+
+    seg_chroma = _sync_chroma_to_segments(chroma, frame_times, seg_times)
+
+    assert seg_chroma.shape == (12, 2)
+    assert seg_chroma[0, 0] == 1.0  # median of the two frames in [0.0, 0.5)
+    assert seg_chroma[0, 1] == 5.0  # median of the two frames in [0.5, 1.0)
+
+
+def test_sync_chroma_to_segments_falls_back_to_nearest_frame_when_segment_is_empty():
+    """A beat-to-beat segment with no HPCP frame center actually inside it
+    (a narrow gap between two frame times) must not produce an all-zero
+    vector -- it should fall back to the nearest frame by time."""
+    chroma = np.array([[3.0, 7.0]] + [[0.0] * 2] * 11)
+    frame_times = np.array([0.1, 0.9])
+    seg_times = np.array([0.4, 0.6])  # no frame center falls in [0.4, 0.6)
+
+    seg_chroma = _sync_chroma_to_segments(chroma, frame_times, seg_times)
+
+    assert seg_chroma[0, 0] in (3.0, 7.0)  # nearest of the two real frames, not 0
 
 
 def test_detect_chords_defaults_match_module_constants(tmp_path):
