@@ -264,6 +264,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    of a rendered video frame can be) but the description needs the real
    `https://` link. Field labels in `settings_panel.py` must stay short --
    one long label once broke rendering for the WHOLE panel (see `_add()`).
+   `scripts/backfill_support_overlay_description.py` (manual, re-runnable)
+   adds `support_description_text` to already-uploaded videos.
    `build_scene()`'s
    `scroll_progress` (how far the current line's own on-screen scroll
    animation has advanced) uses `_plausible_line_end()` -- the same
@@ -394,7 +396,9 @@ and changelog stay meaningful, not because Apply Update is the only way
 changes reach this install. `v1.1.0` (2026-09-09) is the first release cut
 since the project rename — it had drifted to reference the pre-rename
 `run_lyricvideogen.sh` (file no longer exists), fixed to
-`run_playalongvideoproduction.sh`.
+`run_playalongvideoproduction.sh`. `cut_release.sh`/`apply.py` also guard
+against a stale release reverting newer local commits (CLAUDE_HISTORY,
+2026-09-13).
 
 `Settings.render_kwargs()` centralizes resolution/color unpacking for
 `assemble_video()`; `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`

@@ -2,11 +2,14 @@
 an applied update is permitted to touch, and requirements.txt change
 detection."""
 
+import subprocess
 import tarfile
 from pathlib import Path
 
 from lyricvideo.update.apply import (
     is_path_updatable,
+    is_source_commit_already_applied,
+    read_release_source_commit,
     requirements_changed,
     extract_release_archive,
     copy_updatable_files,
@@ -167,3 +170,51 @@ def test_symlinked_destination_is_never_overwritten(tmp_path):
     copy_updatable_files(str(source_root), str(target_dir))
 
     assert real_env.read_text(encoding="utf-8") == "SECRET=1"
+
+
+def test_read_release_source_commit_returns_marker_contents(tmp_path):
+    (tmp_path / "RELEASE_SOURCE_COMMIT").write_text("abc123\n", encoding="utf-8")
+    assert read_release_source_commit(str(tmp_path)) == "abc123"
+
+
+def test_read_release_source_commit_returns_none_when_marker_missing(tmp_path):
+    assert read_release_source_commit(str(tmp_path)) is None
+
+
+def _init_repo_with_commits(repo_root: Path, n: int) -> list[str]:
+    """Creates a real git repo with n commits, returning each commit's sha
+    oldest-first -- used to build a real ancestor relationship rather than
+    faking git's own graph logic."""
+    subprocess.run(["git", "init", "--quiet"], cwd=repo_root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo_root, check=True)
+    shas = []
+    for i in range(n):
+        (repo_root / "file.txt").write_text(f"version {i}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo_root, check=True)
+        subprocess.run(["git", "commit", "--quiet", "-m", f"commit {i}"], cwd=repo_root, check=True)
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        shas.append(sha)
+    return shas
+
+
+def test_is_source_commit_already_applied_true_for_ancestor(tmp_path):
+    shas = _init_repo_with_commits(tmp_path, 3)
+    assert is_source_commit_already_applied(shas[0], str(tmp_path)) is True
+    assert is_source_commit_already_applied(shas[-1], str(tmp_path)) is True
+
+
+def test_is_source_commit_already_applied_false_for_unknown_future_commit(tmp_path):
+    _init_repo_with_commits(tmp_path, 1)
+    assert is_source_commit_already_applied("0" * 40, str(tmp_path)) is False
+
+
+def test_is_source_commit_already_applied_false_when_no_source_commit(tmp_path):
+    _init_repo_with_commits(tmp_path, 1)
+    assert is_source_commit_already_applied(None, str(tmp_path)) is False
+
+
+def test_is_source_commit_already_applied_false_when_not_a_git_repo(tmp_path):
+    assert is_source_commit_already_applied("abc123", str(tmp_path)) is False

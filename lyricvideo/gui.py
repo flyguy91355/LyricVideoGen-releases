@@ -38,7 +38,13 @@ from .pipeline import (
 from .settings import Settings
 from .settings_panel import SettingsPanel
 from .settings_preview import SettingsPreviewFrame
-from .update.apply import copy_updatable_files, extract_release_archive, requirements_changed
+from .update.apply import (
+    copy_updatable_files,
+    extract_release_archive,
+    is_source_commit_already_applied,
+    read_release_source_commit,
+    requirements_changed,
+)
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 from . import youtube_auth
@@ -494,6 +500,8 @@ class LyricVideoGUI:
                         self._update_status_var.set(payload)
                 elif kind == "apply_done":
                     self._on_apply_update_done(payload)
+                elif kind == "apply_up_to_date":
+                    self._on_apply_update_up_to_date(payload)
                 elif kind == "apply_error":
                     self._on_apply_update_error(payload)
         except queue.Empty:
@@ -613,6 +621,12 @@ class LyricVideoGUI:
                 extract_dir.mkdir()
                 extracted_root = extract_release_archive(str(archive_path), str(extract_dir))
 
+                source_commit = read_release_source_commit(extracted_root)
+                if is_source_commit_already_applied(source_commit, str(PROJECT_ROOT)):
+                    write_local_version(str(_VERSION_FILE_PATH), release["tag_name"])
+                    self._update_queue.put(("apply_up_to_date", release["tag_name"]))
+                    return
+
                 old_requirements_path = PROJECT_ROOT / "requirements.txt"
                 old_requirements = (
                     old_requirements_path.read_text(encoding="utf-8")
@@ -652,6 +666,21 @@ class LyricVideoGUI:
 
     def _on_apply_update_done(self, tag_name: str) -> None:
         self._update_status_var.set(f"Updated to {tag_name}. Relaunch to use it.")
+        self._update_apply_button.pack_forget()
+        ctk.CTkButton(
+            self._update_button_frame, text="Relaunch Now", command=self._on_relaunch_clicked
+        ).pack(side="left")
+
+    def _on_apply_update_up_to_date(self, tag_name: str) -> None:
+        """This checkout's own git history already contains the commit
+        release tag_name was built from -- no files were touched, only
+        VERSION was recorded, so a stale/out-of-order release can never
+        silently revert newer local commits (see
+        is_source_commit_already_applied)."""
+        self._update_status_var.set(
+            f"Already up to date ({tag_name}) -- this checkout's own commits "
+            "already include it, so no files were changed."
+        )
         self._update_apply_button.pack_forget()
         ctk.CTkButton(
             self._update_button_frame, text="Relaunch Now", command=self._on_relaunch_clicked

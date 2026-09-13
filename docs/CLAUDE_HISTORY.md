@@ -1093,3 +1093,55 @@ Confirmed fixed by rendering the real, unmodified `SettingsPanel` again
 with the owner's actual settings.json -- every field populated correctly,
 including their real saved overlay text and a 30s hold duration they'd
 already adjusted themselves in the (until-now broken) popup.
+
+## 2026-09-11 — Backfill script still read the pre-split field; cleaned up 10 live descriptions
+
+`scripts/backfill_support_overlay_description.py` was written before the
+`support_overlay_text`/`support_description_text` split above and never
+updated -- it still read `support_overlay_text`, so re-running it after
+the split silently found the (correct) new text absent from its own
+check and reported "already had it" for all 10 videos without touching
+anything. Fixed to read `support_description_text`. Also hand-cleaned the
+10 videos' real descriptions directly (not through the script, since this
+was a one-off correction for stale content the script was never designed
+to detect): removed a leftover non-`https://`, non-clickable line from an
+even earlier attempt, and replaced the placeholder "This Channel. Link in
+Description" text with the real `https://ko-fi.com/playalongvideos` link.
+Verified by re-fetching two of the ten videos' actual live descriptions
+afterward.
+
+## 2026-09-13 — Apply Update silently reverted a newer local commit's docs; added a staleness guard
+
+Found live: the working tree had uncommitted changes removing the backfill-
+script writeup above (both here and in `CLAUDE.md`) and bumping `VERSION`
+from v1.8.1 to v1.8.2, with no corresponding commit. Root cause: release
+`v1.8.2` was cut (2026-09-11 23:27:35 UTC) from commit `4917284`; commit
+`920cbb2` (the backfill-script fix and this file's writeup of it) landed
+~41 minutes later, but no new release was cut afterward. Clicking Apply
+Update then correctly saw v1.8.2 > the locally-recorded v1.8.1 and copied
+that release's (older) `CLAUDE.md`/`docs/` content over the local files --
+silently discarding `920cbb2`'s documentation changes in the working tree,
+since Apply Update only compares release version numbers and has no idea
+the local git checkout had already moved past the commit a release was
+built from. Recovered by restoring the two docs files from git and keeping
+the (legitimate) VERSION bump.
+
+Fixed the underlying gap rather than just the one-off damage:
+`scripts/cut_release.sh` now writes a `RELEASE_SOURCE_COMMIT` marker (this
+repo's own `git rev-parse HEAD` at cut time, never itself copied into an
+install -- it isn't in `apply.py`'s `ALLOWED_PATH_PREFIXES`) into every
+release snapshot going forward. `lyricvideo/update/apply.py`'s new
+`is_source_commit_already_applied()` checks that marker against the local
+checkout's own git history (`git merge-base --is-ancestor`) before
+`_apply_update_worker` in `gui.py` copies anything; if the release's
+source commit is already an ancestor of local HEAD, no files are touched
+-- only `VERSION` is recorded (via the new `apply_up_to_date` queue event
+and `_on_apply_update_up_to_date`), so a stale-relative-to-git release
+can never silently regress newer local work, but the update banner still
+clears normally. Deliberately fails open (returns `False`, i.e. proceeds
+with the copy as before) whenever it can't *confirm* ancestry -- no
+marker (a release cut before this fix existed), not a git checkout, or an
+unresolvable commit -- since refusing to update on an inconclusive check
+would be worse than the bug this guards against. Also cut release
+`v1.8.3` from the current commit to bring the releases repo back in sync
+with local git history.

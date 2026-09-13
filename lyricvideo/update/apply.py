@@ -10,6 +10,7 @@ docs/superpowers/specs/2026-09-08-update-available-design.md."""
 import logging
 import ntpath
 import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -130,6 +131,53 @@ def _safe_destination(target_root: Path, relative: str) -> Path | None:
     if not is_path_updatable(real_relative):
         return None
     return destination
+
+
+def read_release_source_commit(extracted_root: str) -> str | None:
+    """The git commit (in this program's own repo, not the releases repo)
+    that cut_release.sh built this release from, read from the
+    RELEASE_SOURCE_COMMIT marker file cut_release.sh writes alongside the
+    synced code -- never part of ALLOWED_PATH_PREFIXES, so it's never
+    itself copied into the install. Returns None for a release cut before
+    this marker existed, which simply disables the staleness check below
+    for that release rather than blocking it."""
+    marker = Path(extracted_root) / "RELEASE_SOURCE_COMMIT"
+    if not marker.exists():
+        return None
+    content = marker.read_text(encoding="utf-8").strip()
+    return content or None
+
+
+def is_source_commit_already_applied(source_commit: str | None, repo_root: str) -> bool:
+    """True iff source_commit is already part of this checkout's own git
+    history (as HEAD or an ancestor of it) -- applying a release built
+    from a commit this checkout already contains (or has moved past)
+    would silently revert any local commits made after that point back to
+    the release's older snapshot. Real incident, 2026-09-11: release
+    v1.8.2 was cut from commit 4917284; a further local commit (920cbb2)
+    landed ~41 minutes later; Apply Update then overwrote CLAUDE.md/docs
+    with the older v1.8.2 content, discarding 920cbb2's documentation
+    changes in the working tree (caught and fixed by hand the next day,
+    not by this check, which didn't exist yet). Returns False -- never
+    blocks -- when there's no recorded source_commit (older releases),
+    repo_root isn't a git checkout, or git can't resolve the ancestry
+    (e.g. the commit is unknown here); only a *confirmed* ancestor
+    relationship blocks the apply, since refusing to update over an
+    inconclusive check would be worse than the bug this guards against."""
+    if not source_commit:
+        return False
+    if not (Path(repo_root) / ".git").exists():
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", source_commit, "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def copy_updatable_files(source_dir: str, target_dir: str) -> list[str]:
