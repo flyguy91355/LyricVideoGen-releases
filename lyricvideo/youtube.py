@@ -142,6 +142,19 @@ def video_exists(youtube_client, video_id: str) -> bool:
     return bool(response.get("items"))
 
 
+def is_video_public(youtube_client, video_id: str) -> bool:
+    """Whether video_id is currently a real, fully public video -- a
+    still-scheduled video (private with a future publishAt) or any other
+    non-public status never accepts comment reads: YouTube returns a
+    commentsDisabled HttpError for it, which is normal/expected, not a
+    real failure. Callers should skip checking comments on anything this
+    returns False for, rather than make (and then catch) that call.
+    Returns False, not raises, for a deleted/nonexistent video too."""
+    response = youtube_client.videos().list(part="status", id=video_id).execute()
+    items = response.get("items", [])
+    return bool(items) and items[0]["status"].get("privacyStatus") == "public"
+
+
 def list_new_comments(youtube_client, video_id: str, seen_comment_ids: set[str]) -> list[Comment]:
     response = youtube_client.commentThreads().list(
         part="snippet", videoId=video_id, textFormat="plainText", maxResults=100,

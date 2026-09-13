@@ -48,7 +48,7 @@ from .update.apply import (
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 from . import youtube_auth
-from .youtube import list_new_comments, post_reply, video_exists
+from .youtube import is_video_public, list_new_comments, post_reply, video_exists
 from .youtube_comment_state import (
     PendingReply,
     add_pending_reply,
@@ -1108,6 +1108,12 @@ class LyricVideoGUI:
                 if state is None:
                     continue
                 try:
+                    # A still-scheduled (private) or otherwise non-public video
+                    # always returns commentsDisabled for a comment read -- not
+                    # an error, just not applicable yet -- so skip it instead of
+                    # making (and logging a warning for) a call known to fail.
+                    if not is_video_public(youtube_client, state.video_id):
+                        continue
                     comments = list_new_comments(youtube_client, state.video_id, seen_ids)
                 except Exception as e:
                     # Real live crash, 2026-09-10: a video with comments disabled

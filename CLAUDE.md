@@ -465,11 +465,10 @@ when identify.py itself couldn't resolve one. `lyricvideo/youtube_schedule.py`'s
 `schedule_upload()` is the single upload code path (auto AND manual): for
 a Public target it uploads immediately as YouTube-Private with a computed
 future `publishAt` (`compute_next_publish_slot()` gap-fills: first date
->= `youtube_min_days_between_uploads` days from every already-claimed
-date, snapped to `youtube_preferred_upload_hour` local time). Claimed
-dates are read live from the channel (`reserved_publish_dates()`, not a
-local file -- HISTORY, 9-13); Unlisted/Private upload immediately, no
-scheduling at all. `lyricvideo/youtube_auth.py` owns the OAuth
+>= `youtube_min_days_between_uploads` days from every date the channel
+already claims, live via `reserved_publish_dates()`, not a local file --
+9-13), snapped to `youtube_preferred_upload_hour` local time;
+Unlisted/Private upload immediately, no scheduling at all. `lyricvideo/youtube_auth.py` owns the OAuth
 connection lifecycle: `connect()` opens the owner's browser once for
 consent (using a `client_secret_*.json` downloaded from Google Cloud
 Console) and saves a refresh token to
@@ -540,7 +539,8 @@ crash, 2026-09-10: a video with comments disabled (YouTube returns a
 completely normal `HttpError 403 commentsDisabled`, not a bug) was
 uncaught, silently aborting the check for every OTHER video too, forever,
 since the identical failure recurs on every future 20-minute tick. One
-video's failure must never block the rest. That same 20-minute tick
+video's failure must never block the rest. `is_video_public()` skips a
+still-scheduled video before the call (9-13). That same 20-minute tick
 (`_youtube_periodic_tick`, on a background thread -- both
 `load_credentials()`'s token refresh and `get_channel_title()` can make a
 real network call, never safe on the GUI thread) also refreshes the

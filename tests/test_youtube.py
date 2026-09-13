@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from lyricvideo.youtube import (
-    get_video_snippet, list_new_comments, post_reply, reserved_publish_dates,
+    get_video_snippet, is_video_public, list_new_comments, post_reply, reserved_publish_dates,
     update_video_description, upload_video, video_exists,
 )
 
@@ -37,6 +37,7 @@ class _FakeVideosResource:
         self.update_kwargs = None
         self.existing_video_ids: set[str] = set()
         self.snippets: dict[str, dict] = {}
+        self.statuses: dict[str, dict] = {}
 
     def insert(self, **kwargs):
         self.insert_kwargs = kwargs
@@ -48,6 +49,8 @@ class _FakeVideosResource:
         item = {"id": id}
         if id in self.snippets:
             item["snippet"] = self.snippets[id]
+        if id in self.statuses:
+            item["status"] = self.statuses[id]
         return _FakeListRequest([item])
 
     def update(self, **kwargs):
@@ -201,6 +204,33 @@ def test_video_exists_false_when_the_video_was_deleted():
     client._videos.existing_video_ids = set()
 
     assert video_exists(client, "abc123") is False
+
+
+def test_is_video_public_true_for_a_public_video():
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = {"abc123"}
+    client._videos.statuses["abc123"] = {"privacyStatus": "public"}
+
+    assert is_video_public(client, "abc123") is True
+
+
+def test_is_video_public_false_for_a_still_scheduled_private_video():
+    """Real incident, 2026-09-13: the comment checker was hitting a
+    commentsDisabled 403 on every video that's still private/scheduled --
+    a still-scheduled video can't accept comment reads at all, so callers
+    should check this first instead of catching a call known to fail."""
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = {"abc123"}
+    client._videos.statuses["abc123"] = {"privacyStatus": "private"}
+
+    assert is_video_public(client, "abc123") is False
+
+
+def test_is_video_public_false_for_a_deleted_video():
+    client = _FakeYoutubeClient(video_id="abc123")
+    client._videos.existing_video_ids = set()
+
+    assert is_video_public(client, "abc123") is False
 
 
 def test_get_video_snippet_returns_the_real_snippet():

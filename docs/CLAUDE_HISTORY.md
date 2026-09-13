@@ -1197,3 +1197,20 @@ correctly proposes 2026-09-20, filling the real 14-day gap instead of
 extending past the outlier. A batch run naturally still spaces multiple
 new uploads apart, since each `schedule_upload()` call re-queries the
 channel live and the previous item's own video is now really on it.
+
+## 2026-09-13 — Comment checker was hitting commentsDisabled on every still-scheduled video
+
+Owner-reported, seen live in the log: `_check_youtube_comments_worker`
+was warning `could not check comments for <song> (<video_id>): HttpError:
+... commentsDisabled` for several songs on every 20-minute tick. Those
+were all videos still private/scheduled (a future `publishAt`, not yet
+actually public) -- YouTube always refuses a `commentThreads.list` call
+against a video that isn't public yet, which is normal, expected
+behavior, not a real failure. The per-video try/except already caught it
+so it never blocked checking other videos, but it was pure log noise for
+something entirely predictable in advance.
+
+Added `youtube.is_video_public()` (one cheap `videos().list(part="status")`
+call) and check it before ever calling `list_new_comments()` -- a non-
+public video is skipped silently, no warning printed, since this is an
+expected, normal state for a song mid-schedule, not an error condition.
