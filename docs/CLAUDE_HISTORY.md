@@ -1215,72 +1215,48 @@ call) and check it before ever calling `list_new_comments()` -- a non-
 public video is skipped silently, no warning printed, since this is an
 expected, normal state for a song mid-schedule, not an error condition.
 
-## 2026-09-13 — Chord bar "out of sync": real root cause was flicker, not timing; swapped chroma feature to essentia's HPCP
+## 2026-09-13 — HPCP chord-detection fix reverted: real regression on distorted/riff material
 
-Owner reported the chord bar seeming out of sync with the song, especially
-in roughly the first half. Followed systematic-debugging: first re-verified
-(again) that the render pipeline's `song_t`/countdown-offset math is
-correct -- it is, unchanged since the 2026-09-10 investigation. Then
-gathered real evidence instead of guessing: ran the actual beat-tracking
-grid and chord detection against several real songs already in `work/`
-(Bridge Over Troubled Water, Fire and Rain, Hotel California, all chosen
-for having a quiet intro building to a louder chorus). Beat-tracking itself
-was consistent throughout each song (inter-beat-interval std within ~3%) --
-NOT the cause. The real, measured pattern: "Bridge Over Troubled Water" had
-71 chord segments averaging 2.1s in its first half vs. 42 averaging 3.5s in
-its second -- i.e. real chord-label flicker, concentrated specifically in
-the quieter/sparser passages that happen to dominate the first half of a
-typical quiet-to-loud song structure (confirmed by directly measuring RMS:
-first-half sections in every song checked ran 10-40% of the song's peak
-loudness, second-half sections 40-70%+).
+Earlier the same day, `detect_chords.py` was switched from plain CQT chroma
+to essentia's HPCP after verifying clear improvement on three real songs
+(Bridge Over Troubled Water, Fire and Rain, Hotel California) -- all
+acoustic-leaning, cleanly-strummed material. Owner then redid "Sunshine of
+Your Love" (Cream) with the new code and reported it still wasn't in sync.
+Investigated properly instead of assuming the report was wrong: extracted
+the ACTUAL rendered chord track from `lyrics_timed.json` (not a fresh
+re-run) and separately ran the exact pre-fix code (`git show
+575a651^:lyricvideo/detect_chords.py`) against the identical `no_vocals.wav`
+for a direct, controlled comparison:
 
-Tested three real fixes before choosing one:
-1. Raising the Viterbi decoder's stay-probability (0.85 -> 0.90): a small,
-   safe, real reduction in flicker, but the first/second-half imbalance
-   persisted at every setting tested, including much higher stay values --
-   the underlying chroma OBSERVATIONS were the weak link, not decoder
-   smoothing. Also tested raising `MIN_CHORD_SECONDS` to 1.0s alongside it:
-   unsafe -- it collapsed Fire and Rain's second half from 21 real segments
-   to 6, destroying genuine chord changes there. Neither shipped.
-2. `madmom` (a trained CRF/CNN chord recognizer): free, permissive BSD
-   license, but unmaintained since ~2018 -- fails to build on this Python
-   3.12/numpy 2.5 environment even with Cython/setuptools/build-essential
-   present (needs `python3-dev` system headers at minimum, likely also
-   numpy-2.x source patches). Not pursued further; would need a `sudo apt`
-   system change never taken without the owner's explicit go-ahead.
-3. `essentia` (MTG's open-source MIR library): installs cleanly from a
-   prebuilt manylinux wheel, no compilation. Tried its full default pipeline
-   (own beat tracker + HPCP + ChordsDetectionBeats) first -- worse, not
-   better: its beat tracker locked onto exactly double the true tempo for
-   2 of 3 test songs (164.7 vs the real ~83 BPM for Bridge Over Troubled
-   Water), and its first chord for that song ("Bbm") was wrong (the song
-   opens on Eb/Bb). Isolated the actually-promising variable instead:
-   essentia's HPCP chroma feature (harmonic summation across 8 overtones,
-   vs. librosa's plain per-bin CQT magnitude) combined with THIS project's
-   own already-good librosa beat grid. Found and fixed a real bug in the
-   test script itself along the way -- assumed essentia's chroma bin 0 was
-   pitch class C without checking; empirically verified with a pure 261.63Hz
-   (C4) sine tone that it's actually bin 8. With that corrected, results
-   were a clear, consistent improvement on all three songs: Bridge Over
-   Troubled Water's chords became Bb-F-Eb-Cm-Fm-Eb-Gb-Bb-Eb..., matching the
-   song's real, well-known progression far better than the plain-CQT
-   version; Fire and Rain produced a clean, recognizable G-C-D-F folk
-   progression; Hotel California correctly landed on the song's real
-   B-minor-family tonality with a much more stable second half.
+- **New (HPCP)**: D, E, D#m, D, A, E, D, A, E, D, A, D#m, Dmaj7, D#m,
+  Dmaj7, E, D#, Dmaj7, D#m, Dmaj7, E, D#m, D, C#maj7, D, C#m, D, Amaj7,
+  Gm7, A, C#m7... -- rapid flicker through harmonically implausible jazz
+  chords, nothing like the real song.
+- **Old (plain CQT)**: D (15s), G, D (17s), G, D, F#m, G (6s), D (8s), A,
+  G, A, G, A (5s), D, G#, D... -- long, stable, musically coherent, matches
+  the song's actual well-known simple blues-rock structure.
 
-Confirmed with the owner before shipping, given essentia is AGPL-3.0
-licensed (a real distribution consideration, since this project's own code
-is already synced to a public releases repo for the Apply Update feature)
-and chord correctness can't be automatically verified by ear. Implemented
-as `lyricvideo/detect_chords.py`'s `_hpcp_chroma()` (frame-by-frame HPCP via
-essentia, rolled by `-HPCP_C_BIN` to match `chord_theory`'s C=0 convention)
-and `_sync_chroma_to_segments()` (aggregates HPCP frames into librosa's beat
-segments by TIME, not frame index, since essentia's and librosa's framing
-conventions don't share a frame grid) -- beat tracking, Viterbi decoding,
-key-snapping, and silence detection are all untouched, still librosa. Added
-`essentia` to `requirements.txt`. New regression tests lock in the exact
-pitch-alignment bug found during investigation (a pure C4 tone must peak at
-chroma index 0 after `_hpcp_chroma`'s internal roll) plus the segment-
-aggregation helper's behavior; all pre-existing `detect_chords` tests still
-pass unchanged against the real essentia-backed implementation (no mocking
-needed -- essentia runs for real in tests, same as librosa always has).
+Root cause: the three validation songs were all clean acoustic/ballad
+material; "Sunshine of Your Love" is heavily distorted, riff-driven hard
+rock. HPCP's harmonic summation across 8 overtones (exactly the mechanism
+that helped the quiet acoustic passages) most likely amplifies distortion-
+generated harmonic/intermodulation content into spurious pitch-class
+energy, actively hurting detection on overdriven material -- the opposite
+of what it did for clean signals. The three-song validation set was not
+diverse enough in genre/production style before shipping; this is now a
+confirmed limitation, not a guess.
+
+Reverted outright (`git revert` of the HPCP commit, which also reverted
+that commit's own history entry documenting the original investigation --
+summarized here so the evidence isn't lost: on real songs with a quiet-
+intro-to-loud-chorus structure, plain-CQT chroma produces measurably more
+chord-label flicker in the quieter first half than the louder second half,
+e.g. "Bridge Over Troubled Water" had 71 segments averaging 2.1s in its
+first half vs. 42 averaging 3.5s in its second -- confirmed via real RMS
+measurements, not assumed) rather than leaving a broken default in place
+while a real fix is designed. That original first-half flicker weakness on
+quiet passages is real and still unfixed after this revert. Any genre-
+adaptive or hybrid approach attempted next needs testing across BOTH clean
+acoustic and distorted/riff material before it can be trusted again --
+three same-genre songs was not enough evidence to ship a core-pipeline
+change, which is exactly how this regression shipped in the first place.
