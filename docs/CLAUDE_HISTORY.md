@@ -1379,3 +1379,19 @@ end through the real `detect_chords()` (not just raw `crema.analyze()`)
 against Sunshine of Your Love and Hotel California post-integration,
 confirming the label-simplification and independent key/BPM logic didn't
 regress anything found during raw-crema validation.
+
+## 2026-09-13 — Generate blocked by a blank work directory with no way to fix it
+
+Owner reported Generate erroring "work directory is required" on a fresh
+GUI run, with title also blank. Root cause: `_on_title_changed`/
+`_on_audio_selected`'s background title-identification (a network lookup
+when tags are missing) hadn't completed (or failed silently, by its own
+existing design) by the time Generate was clicked, so `work_dir_var` --
+which only ever gets set via that same title-driven auto-fill trace --
+was still empty, and there's no Browse button for the work-directory
+field itself to work around it. `_on_generate` now falls back to
+`_default_work_dir_from_audio()` (same slug convention, derived from the
+audio filename instead of an identified title) instead of erroring, so a
+slow or failed background identification can never block Generate --
+`run_pipeline`'s own identify stage still re-resolves the real title
+independently either way.

@@ -125,6 +125,18 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
 
+
+def _default_work_dir_from_audio(audio_path: str) -> str:
+    """Fallback work directory derived straight from the audio file's own
+    name, used when Generate is clicked before (or despite) the GUI's own
+    background title-identification (_on_audio_selected/_identify_worker)
+    finishing -- that lookup can take a moment (it can fall back to a real
+    network call when tags are missing) or fail silently by design, and
+    neither should ever block Generate: run_pipeline's own identify stage
+    re-resolves the real title from scratch regardless of what this GUI-side
+    preview did or didn't manage first."""
+    return str(PROJECT_ROOT / "work" / _slugify(Path(audio_path).stem))
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -876,8 +888,8 @@ class LyricVideoGUI:
             messagebox.showerror("Missing input", "Audio file is required.")
             return
         if not work_dir:
-            messagebox.showerror("Missing input", "Work directory is required.")
-            return
+            work_dir = _default_work_dir_from_audio(audio)
+            self.work_dir_var.set(work_dir)
 
         self._running = True
         self.generate_button.configure(state="disabled")

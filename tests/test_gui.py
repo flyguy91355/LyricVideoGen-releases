@@ -1,4 +1,6 @@
-from lyricvideo.gui import _maybe_upload_to_youtube, _slugify, _split_log_text
+from lyricvideo.gui import (
+    PROJECT_ROOT, _default_work_dir_from_audio, _maybe_upload_to_youtube, _slugify, _split_log_text,
+)
 from lyricvideo.settings import Settings
 from lyricvideo.youtube_state import YoutubeState, save_youtube_state
 
@@ -132,6 +134,25 @@ def test_slugify_collapses_whitespace_and_trims_hyphens():
 def test_slugify_falls_back_on_empty_title():
     assert _slugify("") == "untitled-song"
     assert _slugify("   ") == "untitled-song"
+
+
+def test_default_work_dir_from_audio_uses_the_audio_filenames_own_stem():
+    """Real incident, 2026-09-13: Generate clicked before (or despite) the
+    GUI's own background title-identification finishing left both the title
+    and work-directory fields blank, blocking Generate with no way to
+    proceed short of typing something into Title -- since there's no Browse
+    button for the work-directory field itself. This fallback (wired into
+    _on_generate) means a blank work directory never blocks Generate."""
+    result = _default_work_dir_from_audio("/some/path/01 My Song.mp3")
+    assert result == str(PROJECT_ROOT / "work" / "01-my-song")
+
+
+def test_default_work_dir_from_audio_matches_title_based_slug_convention():
+    """Uses the exact same slugify() call _on_title_changed already uses for
+    a real identified title, just fed the filename stem instead."""
+    assert _default_work_dir_from_audio("/x/Some Song.mp3") == str(
+        PROJECT_ROOT / "work" / _slugify("Some Song")
+    )
 
 
 def test_split_log_text_plain_text_with_no_newline_stays_pending():

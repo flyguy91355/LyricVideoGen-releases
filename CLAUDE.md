@@ -28,7 +28,9 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   no activation. Supply just an audio
   file — title/artist/lyrics are identified and fetched automatically, chords are
   detected directly from the audio, and the title field is an editable override, not
-  a required input — then click Generate. A "New Song" button next to Generate
+  a required input — then click Generate; work dir (no Browse) falls back to
+  the filename if identification isn't done (HISTORY). A "New Song"
+  button next to Generate
   clears the form/log/progress bar back to blank without relaunching the app.
   The window's own close (X) button (bound via `root.protocol("WM_DELETE_WINDOW",
   self._on_close_window)` in `__init__` -- the only way to quit) confirms first
@@ -143,12 +145,11 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    the lines. `align_words()` has no idea where its input words came from, so this
    is the same alignment mechanism the original tab-PDF design used.
 5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
-   identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC)
-   analyzes Demucs's `no_vocals.wav` directly; its 602-class vocabulary
-   collapses to this app's 5 qualities (maj/min/7/min7/maj7) via
-   `_simplify_chord_label()`. Replaced CQT-chroma template matching 9-13
-   (HISTORY, real accuracy ceiling). Key/BPM: unchanged librosa. Needs old
-   TF/Keras/sklearn, no 3.12 wheels — **`.venv` runs on Python 3.11**; see
+   identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC) analyzes
+   Demucs's `no_vocals.wav`; its 602-class vocabulary collapses to this
+   app's 5 qualities via `_simplify_chord_label()`. Replaced CQT-chroma
+   template matching 9-13 (HISTORY). Needs old TF/Keras/sklearn, no 3.12
+   wheels — **`.venv` runs on Python 3.11**; see
    `requirements.txt` pins first. Only chord source, no tab/sheet.
 6. **images** — `imagery.py`: one Claude call summarizes the whole song's gist
    once (`summarize_song_gist`), then each *unique* lyric line AND each distinct
