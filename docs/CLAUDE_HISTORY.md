@@ -1395,3 +1395,57 @@ audio filename instead of an identified title) instead of erroring, so a
 slow or failed background identification can never block Generate --
 `run_pipeline`'s own identify stage still re-resolves the real title
 independently either way.
+
+## 2026-09-14 — GUI font silently broken by the crema venv rebuild; deterministic YouTube titles
+
+Owner reported the whole program's font had gotten "really bad" -- small
+and blocky in some areas -- after the 2026-09-13 crema/Python 3.11 work.
+Chased several wrong leads first (a chord-timeline label-shrink feature
+in the rendered VIDEO -- unrelated, owner clarified "not in the final
+video, in the program"; then the native GTK file-picker's own system font
+size, fixed with `gsettings` but reverted once the owner clarified the
+broken font was specific to this app, not system-wide) before finding the
+real cause: rebuilding `.venv` onto Python 3.11 (required for
+`crema`/`tensorflow==2.15.0`, no 3.12 wheels) had used `uv`'s own
+downloaded standalone interpreter, whose bundled Tcl/Tk 9.0 has no
+working Xft/fontconfig on Linux -- confirmed directly
+(`tkinter.font.families()` returned only 48 legacy X11 core fonts, e.g.
+"fixed"/"helvetica"/"nimbus roman", none of them TrueType, and
+CustomTkinter's requested "Roboto" resolved to `{'family': 'fixed',
+'size': 24}`). `fc-cache`/fontconfig-cache fixes could never have worked
+since Tk here was never using fontconfig at all. Fixed by installing
+`python3.11`/`python3.11-venv`/`python3.11-dev`/`python3.11-tk` from the
+`deadsnakes` PPA (verified via Launchpad's API, not just its HTML
+package-listing page, which initially gave a misleading "not available"
+read for the noble series) and rebuilding `.venv` on
+`/usr/bin/python3.11` -- same exact CPython patch version (3.11.15) as
+the `uv` build, so purely a Tcl/Tk linkage fix, zero functional change.
+Confirmed with the same `tkinter.font.families()` check (268 real
+families afterward) and a real screenshot of the running app. All 470
+tests still pass after the full dependency reinstall.
+
+Separately, the owner recalled real uploaded video titles like "November
+Rain - Guns N' Roses - (Play Along Lyrics & Chords)" and wanted that
+format "fixed" into the program -- turned out this was never a fixed
+template: `generate_video_metadata()` always let Claude phrase the
+YouTube title freely, and reading every `work/*/youtube_state.json` on
+disk showed genuinely inconsistent results ("Play Along Lyric + Chord
+Video", "Lyrics & Chords Play Along", etc., across different songs).
+Replaced free-form title generation with a new deterministic
+`build_play_along_title()` in `youtube_metadata.py` -- Claude still
+writes the description/tags, never the title. Deliberately did NOT wire
+the combined "{title} - {artist} - (Play Along Lyrics & Chords)" string
+into the GUI's own "Song title" field: that field doubles as
+`run_pipeline`'s `--title` override, which flows into lyrics search
+(`fetch_lyric_lines`) and the video's own filename via `slugify()` --
+some real song titles already contain their own separators (e.g. "Ready
+For Love / After Lights"), so a composed marketing-style string landing
+there risked breaking lyric lookup or producing a garbled filename.
+Instead added a live, non-editable preview line under the field
+(`gui.py`'s `_update_youtube_title_preview`, driven by a new
+`self._identified_artist` set alongside the title by
+`_apply_identified_title`) showing the exact real upload title without
+touching the override field's value. Verified end-to-end against a real
+audio file ("Angie" by The Rolling Stones, from an existing `work/`
+folder): Song title stayed "Angie", preview correctly read "Angie - The
+Rolling Stones - (Play Along Lyrics & Chords)". All 472 tests pass.

@@ -337,6 +337,10 @@ moviepy 1.0.3's decorators silently break under `decorator>=5.0` (fps
 resolution returns `None`). Don't bump either without re-verifying rendered
 output, not just that imports succeed.
 
+`.venv`'s Python 3.11 must be a real system install (`python3.11-tk` via
+`deadsnakes`), never `uv`'s standalone build -- its bundled Tk lacks Xft
+and silently breaks the GUI's font (HISTORY, 2026-09-14).
+
 ## Update Available Feature
 
 See `docs/superpowers/specs/2026-09-08-update-available-design.md`.
@@ -453,16 +457,17 @@ makes a real network call in tests. New dependencies:
 `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`.
 `lyricvideo/youtube_metadata.py` spends one small Claude call per upload
 (`generate_video_metadata`, same cost profile as the image prompts) to
-write a title/description/tags, and one more per new comment
+write the description/tags, and one more per new comment
 (`draft_comment_reply`) to draft a reply and flag whether it looks like an
 error report -- both parse a labeled-line reply format
-(`TITLE:`/`DESCRIPTION:`/`TAGS:` or `IS_ERROR_REPORT:`/`REPLY:`) that's
-robust to Claude reordering the lines. `generate_video_metadata()` takes the
-real artist `identify.py` already resolved (read from `work_dir/
-song_info.json` by `schedule_upload()`, failing soft to `""` on a missing/
-corrupt file) and states it as a known fact in the prompt, asking Claude to
-work it into the title -- never left to guesswork, and never fabricated
-when identify.py itself couldn't resolve one. `lyricvideo/youtube_schedule.py`'s
+(`DESCRIPTION:`/`TAGS:` or `IS_ERROR_REPORT:`/`REPLY:`) that's robust to
+Claude reordering the lines. The video TITLE is never Claude-authored (HISTORY, 2026-09-14) -- always
+the deterministic `build_play_along_title()`: `"{title} - {artist} -
+(Play Along Lyrics & Chords)"` (artist omitted when unknown). The GUI's
+"Song title" field shows a live, non-editable preview of this string
+underneath it without feeding it into the field's own value, which is
+also `run_pipeline`'s `--title` override (lyrics search + filename).
+`lyricvideo/youtube_schedule.py`'s
 `schedule_upload()` is the single upload code path (auto AND manual): for
 a Public target it uploads immediately as YouTube-Private with a computed
 future `publishAt` (`compute_next_publish_slot()` gap-fills: first date
@@ -515,12 +520,9 @@ swaps that button for a plain "✓ Uploaded to YouTube" label in the same
 spot whenever a saved `youtube_state.json` record's video_id still
 verifiably exists on YouTube (same `video_exists()` check as
 `_maybe_upload_to_youtube`, same fail-closed behavior on a verification
-error -- keep showing "uploaded" rather than flash a possibly-wrong
-button) -- real live feedback found the original "just check the local
-file" version necessary in the first place: an enabled button right after
-an auto-upload already succeeded looked exactly like a pending action
-(the owner assumed auto-upload had silently failed), and clicking it
-again would have created a duplicate video. `lyricvideo/youtube_comment_state.py`
+error -- keeps showing "uploaded" rather than flash a wrong button; a
+stale local file alone once risked a duplicate upload).
+`lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies
 are still awaiting the owner's review (`PendingReply` +

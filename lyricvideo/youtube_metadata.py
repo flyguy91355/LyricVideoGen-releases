@@ -26,6 +26,18 @@ def _parse_labeled_fields(text: str, labels: list[str]) -> dict[str, str]:
     return fields
 
 
+def build_play_along_title(song_title: str, artist: str) -> str:
+    """Deterministic YouTube title -- replaces letting Claude phrase the
+    title freely, which produced inconsistent wording across uploads (real
+    owner complaint, 2026-09-14: "Play Along Lyric + Chord Video" on one
+    song, "Lyrics & Chords Play Along" on another, "Play Along Lyrics &
+    Chords" on a third -- confirmed by reading every work/*/youtube_state.json
+    on disk). Every future upload now gets the exact same pattern."""
+    known_artist = artist.strip()
+    base = f"{song_title} - {known_artist}" if known_artist else song_title
+    return f"{base} - (Play Along Lyrics & Chords)"
+
+
 def generate_video_metadata(
     anthropic_client, song_title: str, artist: str, full_lyrics: str, model: str = "claude-sonnet-5",
 ) -> tuple[str, str, list[str]]:
@@ -35,12 +47,9 @@ def generate_video_metadata(
     # itself couldn't resolve one.
     known_artist = artist.strip()
     artist_line = f'It is performed by "{known_artist}".\n' if known_artist else ""
-    title_instruction = (
-        "a natural YouTube title that includes the artist name" if known_artist else "a natural YouTube title"
-    )
     response = anthropic_client.messages.create(
         model=model,
-        max_tokens=400,
+        max_tokens=300,
         messages=[
             {
                 "role": "user",
@@ -48,17 +57,16 @@ def generate_video_metadata(
                     f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
                     f"{artist_line}"
                     "Write YouTube upload metadata for a 'play along' lyric+chord video of "
-                    "this song. Reply with EXACTLY three lines, each prefixed with its label "
+                    "this song. Reply with EXACTLY two lines, each prefixed with its label "
                     "and nothing else before or after:\n"
-                    f"TITLE: <{title_instruction}>\n"
                     "DESCRIPTION: <a 2-4 sentence description of the song>\n"
                     "TAGS: <5-8 relevant search tags, comma-separated>"
                 ),
             }
         ],
     )
-    fields = _parse_labeled_fields(_extract_text(response), ["TITLE", "DESCRIPTION", "TAGS"])
-    title = fields["TITLE"] or song_title
+    fields = _parse_labeled_fields(_extract_text(response), ["DESCRIPTION", "TAGS"])
+    title = build_play_along_title(song_title, artist)
     description = fields["DESCRIPTION"].strip()
     tags = [t.strip() for t in fields["TAGS"].split(",") if t.strip()]
     return title, description, tags

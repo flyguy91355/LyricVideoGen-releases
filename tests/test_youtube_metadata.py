@@ -1,4 +1,4 @@
-from lyricvideo.youtube_metadata import draft_comment_reply, generate_video_metadata
+from lyricvideo.youtube_metadata import build_play_along_title, draft_comment_reply, generate_video_metadata
 
 
 class _FakeTextBlock:
@@ -31,9 +31,19 @@ class _FakeAnthropicClient:
         self.messages = _FakeMessages(text)
 
 
-def test_generate_video_metadata_parses_all_three_labeled_fields():
+def test_build_play_along_title_with_known_artist():
+    assert (
+        build_play_along_title("November Rain", "Guns N' Roses")
+        == "November Rain - Guns N' Roses - (Play Along Lyrics & Chords)"
+    )
+
+
+def test_build_play_along_title_without_artist():
+    assert build_play_along_title("Some Song", "") == "Some Song - (Play Along Lyrics & Chords)"
+
+
+def test_generate_video_metadata_parses_description_and_tags():
     client = _FakeAnthropicClient(
-        "TITLE: Wish You Were Here - Play Along\n"
         "DESCRIPTION: A wistful song about absence and longing.\n"
         "TAGS: pink floyd, play along, guitar chords, lyrics video"
     )
@@ -42,31 +52,33 @@ def test_generate_video_metadata_parses_all_three_labeled_fields():
         client, "Wish You Were Here", artist="Pink Floyd", full_lyrics="lyrics here",
     )
 
-    assert title == "Wish You Were Here - Play Along"
+    assert title == "Wish You Were Here - Pink Floyd - (Play Along Lyrics & Chords)"
     assert description == "A wistful song about absence and longing."
     assert tags == ["pink floyd", "play along", "guitar chords", "lyrics video"]
 
 
-def test_generate_video_metadata_falls_back_to_song_title_if_title_missing():
-    client = _FakeAnthropicClient("DESCRIPTION: Some description\nTAGS: tag1")
+def test_generate_video_metadata_title_is_deterministic_not_claude_authored():
+    # Even if Claude's reply included a TITLE line, it's ignored -- the real
+    # title is always the fixed build_play_along_title() pattern now.
+    client = _FakeAnthropicClient("TITLE: Some Claude-Written Title\nDESCRIPTION: Some description\nTAGS: tag1")
 
     title, _description, _tags = generate_video_metadata(client, "Original Title", artist="", full_lyrics="lyrics")
 
-    assert title == "Original Title"
+    assert title == "Original Title - (Play Along Lyrics & Chords)"
 
 
 def test_generate_video_metadata_tolerates_reordered_labels():
-    client = _FakeAnthropicClient("TAGS: a, b\nTITLE: My Title\nDESCRIPTION: My description")
+    client = _FakeAnthropicClient("TAGS: a, b\nDESCRIPTION: My description")
 
     title, description, tags = generate_video_metadata(client, "fallback", artist="", full_lyrics="lyrics")
 
-    assert title == "My Title"
+    assert title == "fallback - (Play Along Lyrics & Chords)"
     assert "My description" in description
     assert tags == ["a", "b"]
 
 
 def test_generate_video_metadata_states_the_real_artist_in_the_prompt_when_known():
-    client = _FakeAnthropicClient("TITLE: t\nDESCRIPTION: d\nTAGS: a")
+    client = _FakeAnthropicClient("DESCRIPTION: d\nTAGS: a")
 
     generate_video_metadata(client, "Wish You Were Here", artist="Pink Floyd", full_lyrics="lyrics here")
 
@@ -74,7 +86,7 @@ def test_generate_video_metadata_states_the_real_artist_in_the_prompt_when_known
 
 
 def test_generate_video_metadata_never_invents_an_artist_when_unknown():
-    client = _FakeAnthropicClient("TITLE: t\nDESCRIPTION: d\nTAGS: a")
+    client = _FakeAnthropicClient("DESCRIPTION: d\nTAGS: a")
 
     generate_video_metadata(client, "Some Song", artist="", full_lyrics="lyrics here")
 

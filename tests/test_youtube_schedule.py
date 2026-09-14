@@ -174,9 +174,7 @@ class _FakeMessages:
 
     def create(self, **kwargs):
         self.last_kwargs = kwargs
-        return _FakeAnthropicResponse(
-            "TITLE: My Song - Play Along\nDESCRIPTION: A great song.\nTAGS: tag1, tag2"
-        )
+        return _FakeAnthropicResponse("DESCRIPTION: A great song.\nTAGS: tag1, tag2")
 
     def prompt_text(self) -> str:
         return self.last_kwargs["messages"][0]["content"]
@@ -332,7 +330,7 @@ def test_schedule_upload_saves_youtube_state(tmp_path):
     state = load_youtube_state(work_dir)
     assert state is not None
     assert state.video_id == "vid789"
-    assert state.title == "My Song - Play Along"
+    assert state.title == "My Song - (Play Along Lyrics & Chords)"
 
 
 def test_schedule_upload_passes_the_real_artist_from_song_info_json(tmp_path):

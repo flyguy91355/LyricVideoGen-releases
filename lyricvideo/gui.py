@@ -57,7 +57,7 @@ from .youtube_comment_state import (
     mark_comments_seen,
     remove_pending_reply,
 )
-from .youtube_metadata import draft_comment_reply
+from .youtube_metadata import build_play_along_title, draft_comment_reply
 from .youtube_schedule import schedule_upload
 from .youtube_state import load_youtube_state
 
@@ -171,6 +171,7 @@ class LyricVideoGUI:
         self._current_version = current_version
         self._available_update: dict | None = None
         self._running = False
+        self._identified_artist = ""  # set by _apply_identified_title, used for the YouTube title preview
         self._log_pending = ""
         self._log_has_uncommitted_line = False
         self._suppress_settings_save = True  # True while load_from() is populating widgets on launch
@@ -256,8 +257,14 @@ class LyricVideoGUI:
         )
         note.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 8))
 
+        self.youtube_title_preview_var = tk.StringVar()
+        ctk.CTkLabel(
+            form, textvariable=self.youtube_title_preview_var, text_color="gray60",
+            justify="left", anchor="w",
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(0, 8))
+
         button_row = ctk.CTkFrame(form, fg_color="transparent")
-        button_row.grid(row=4, column=0, columnspan=3, pady=8)
+        button_row.grid(row=5, column=0, columnspan=3, pady=8)
         self.generate_button = ctk.CTkButton(button_row, text="Generate Video", command=self._on_generate)
         self.generate_button.pack(side="left", padx=4)
         self.new_song_button = ctk.CTkButton(
@@ -447,6 +454,23 @@ class LyricVideoGUI:
         if not self._running:
             slug = _slugify(self.title_var.get())
             self.work_dir_var.set(str(PROJECT_ROOT / "work" / slug))
+        self._update_youtube_title_preview()
+
+    def _update_youtube_title_preview(self) -> None:
+        """Shows the exact title that will be used on YouTube upload
+        (build_play_along_title -- see youtube_metadata.py) next to the
+        editable Song title field. This is a PREVIEW only: unlike the Song
+        title field itself, it never feeds into identify/lyrics-search/the
+        video filename -- those all need the bare title, not this combined
+        display string (owner request, 2026-09-14, wants to see the real
+        upload title without the two getting tangled together)."""
+        title = self.title_var.get().strip()
+        if not title:
+            self.youtube_title_preview_var.set("")
+            return
+        self.youtube_title_preview_var.set(
+            f"Will upload to YouTube as: {build_play_along_title(title, self._identified_artist)}"
+        )
 
     def _on_audio_selected(self, path: str) -> None:
         """Best-effort auto-fill of the title once an audio file is picked --
@@ -464,11 +488,14 @@ class LyricVideoGUI:
             info = extract_metadata(Path(path))
         except Exception:
             return
-        self.root.after(0, lambda: self._apply_identified_title(info.title))
+        self.root.after(0, lambda: self._apply_identified_title(info.title, info.artist))
 
-    def _apply_identified_title(self, title: str) -> None:
+    def _apply_identified_title(self, title: str, artist: str = "") -> None:
+        self._identified_artist = artist
         if not self.title_var.get().strip():  # still empty -- no manual edit arrived meanwhile
             self.title_var.set(title)
+        else:
+            self._update_youtube_title_preview()  # title unchanged, but artist just arrived
 
     def _check_api_keys(self) -> None:
         load_dotenv(PROJECT_ROOT / ".env")
@@ -710,6 +737,7 @@ class LyricVideoGUI:
     def _on_new_song(self) -> None:
         if self._running:
             return
+        self._identified_artist = ""
         self.title_var.set("")
         self.audio_var.set("")
         self.work_dir_var.set("")  # after title_var -- overrides its own auto-fill trace
