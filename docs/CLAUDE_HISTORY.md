@@ -1260,3 +1260,122 @@ adaptive or hybrid approach attempted next needs testing across BOTH clean
 acoustic and distorted/riff material before it can be trusted again --
 three same-genre songs was not enough evidence to ship a core-pipeline
 change, which is exactly how this regression shipped in the first place.
+
+## 2026-09-13 — Chord detection replaced entirely with crema, a real trained model; venv rebuilt on Python 3.11
+
+Follow-up to the reverted HPCP attempt above. Owner asked to research what
+real chord-recognition products actually use. Findings: Chordify (a real
+commercial product) confirmed via their own engineering blog that they use
+a trained deep neural network for chords plus a separate one for beat-
+tracking -- not hand-tuned chroma-template matching, which is what this
+project had used since its original LyricChord port. Evaluated real
+options: `madmom` (unmaintained since ~2018, fails to build on this
+Python/numpy version), `essentia`-based `autochord` (inherits AGPL,
+modest ~67% published accuracy), `BTC-ISMIR19` (a real transformer model,
+MIT licensed, but no pretrained weights shipped in the repo), and `crema`
+(Brian McFee, ISC licensed, actively maintained -- last pushed 2024).
+
+`crema` was the only one actually gotten running and tested against real
+audio. Getting there took real, methodical debugging, not a quick pip
+install: `pkg_resources` (setuptools>=81 removed it -- pinned
+`setuptools<81`), Keras 3 vs. the Keras-2-style APIs crema's code uses
+(pinned `tensorflow==2.15.0`, which pulls a matching `keras==2.15.0`
+automatically -- newer TensorFlow defaults to Keras 3), and
+`scikit-learn>=1.6`'s `__sklearn_tags__` API breaking crema's own `pumpp`
+dependency's `LabelEncoder` usage (pinned `scikit-learn<1.6`). None of
+this old stack has wheels for Python 3.12 -- only up through 3.11.
+
+Tested crema directly against 5 of this project's real songs before ever
+touching the pipeline, including the exact song that broke the HPCP
+attempt ("Sunshine of Your Love"). Results, compared against real,
+independently-known chord progressions:
+- **Sunshine of Your Love**: D(24s)-G-D-G-D-G-D(11s)-A-C-G-A-C-G-A... --
+  long, stable, correct. The old algorithm and the reverted HPCP attempt
+  both produced choppy, implausible output on this exact song.
+- **Hotel California**: Bm-F#7-A-E7-G-D-Em-F#7-Bm-F#7-A-E-G-D-Em-F#7... --
+  matches the real, famous Eagles progression exactly, including the
+  correct dominant F#7 (both prior pipelines got this wrong).
+- **Before You Accuse Me**: N-B-E-A-E-A-E-E7-B-A-E7-B7-E7... -- a
+  textbook 12-bar blues shuffle, correct for this real blues standard.
+- **Come As You Are**: a clean, steady D-Em alternation -- this exact
+  song is flagged in this project's own history (2026-09-10) as "a known
+  hard case for the chroma-based detector" (its flanger guitar tone);
+  crema handled it cleanly.
+- **Bridge Over Troubled Water**: more harmonically complex output
+  (half-diminished/6th/slash chords) -- plausibly more accurate given the
+  song's real, sophisticated piano arrangement, but not independently
+  verified by ear.
+
+Owner explicitly declined an on/off fallback toggle ("why would I need a
+fallback -- fall back to something that produces a video I don't want?
+lets just fully change out the program... I can always revert back to an
+older version if I want") -- git history is the safety net, matching how
+the HPCP regression was already handled hours earlier. Full replacement,
+not a Settings-gated option.
+
+**Architecture decision**: crema's old dependency stack conflicts with
+nothing in this project's own requirements once resolved together --
+verified with a real combined install (not just pip's dependency
+resolver on paper): `torch`, `torchaudio`, `demucs`, `librosa`, and
+`tensorflow==2.15.0`/`crema` all installed and ran correctly in the SAME
+environment, with pip settling on `numpy==1.26.4` as the one version
+that satisfies both torch and TensorFlow's constraints simultaneously.
+This ruled out an earlier, more complex plan (a second isolated venv
+with a subprocess boundary) in favor of one environment -- the owner's
+own suggestion ("can you do the entire program in 3.11 or whatever it
+needed?"). The project's `.venv` was rebuilt from scratch on Python 3.11
+(previously 3.12) for this reason; `requirements.txt` gained the four
+pins above with comments explaining why each exists.
+
+**Implementation** (`lyricvideo/detect_chords.py`, fully rewritten): calls
+`crema.analyze.analyze(filename=...)` directly (in-process, no subprocess)
+and converts its JAMS chord annotation into this app's own `ChordEvent`
+list. crema's 602-class vocabulary (with inversions and extended
+tensions) collapses down to this app's deliberately small 5-quality set
+(maj/min/7/min7/maj7, matching `chord_shapes.py`'s existing fingering
+diagram coverage exactly, so the legend needs no changes) via
+`_simplify_chord_label()`: half-diminished sevenths collapse to min7,
+diminished/augmented/sus/6th chords collapse to their closest plain
+triad, extended 9/11/13ths drop to their base 7th quality, slash-chord
+inversions are dropped entirely keeping only the root. crema also
+handles segmentation and silence ("N") detection as part of its own
+trained output, so the old pipeline's separate beat-tracking-based
+segmentation and RMS-relative silence heuristic are both gone entirely.
+Key and BPM are still estimated independently via the same librosa code
+as before (chroma + Krumhansl-Schmuckler for key, `beat_track` for BPM) --
+untouched, since neither was ever implicated in any past incident.
+
+Found one real edge case via the full test suite, not assumed: crema is
+trained on real recordings, which always carry SOME noise floor even in
+quiet passages -- true digital silence (an exact-zero-amplitude test
+tone) is out-of-distribution for it, and it guessed a real chord label
+("F:7/b7") at low confidence (0.26) rather than its own "N" class.
+Investigated whether crema's own per-observation confidence score could
+distinguish this from a real quiet-but-correct passage: no -- a real,
+correctly-detected song's own legitimate quiet segments scored as low as
+0.30, too close to reliably separate from the silence case's 0.26 by a
+threshold. Fixed instead with a narrow ABSOLUTE (not peak-relative) RMS
+floor (`_ABSOLUTE_SILENCE_RMS`) that only catches genuinely near-zero
+audio, deliberately avoiding the old pipeline's own bug (a peak-relative
+threshold that misclassified real quiet passages in loud songs as
+silence).
+
+`snap_chords_to_key` (a real, owner-visible Settings checkbox) is kept in
+`detect_chords()`'s signature for backward compatibility but no longer
+changes chord identity -- it was the old template-matching pipeline's
+per-candidate similarity prior, a mechanism that doesn't exist anymore
+now that a trained model decides chords directly. Removing the dead
+Settings control itself is deliberately left as separate future cleanup,
+not bundled into this change. `chord_theory.py`'s template-matching/
+diatonic-chord functions (`build_templates`, `diatonic_chords`, etc.) are
+no longer called by `detect_chords.py` but were left in place -- they're
+independently tested (`tests/test_chord_theory.py`) and still work;
+removing them is unrelated scope creep for a change already this large.
+
+All 468 tests pass (up from 454 before this session's chord work) against
+the real, rebuilt Python 3.11 environment -- no mocking of crema itself,
+same convention this project already used for librosa. Verified end-to-
+end through the real `detect_chords()` (not just raw `crema.analyze()`)
+against Sunshine of Your Love and Hotel California post-integration,
+confirming the label-simplification and independent key/BPM logic didn't
+regress anything found during raw-crema validation.

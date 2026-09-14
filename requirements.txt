@@ -10,6 +10,20 @@ torchaudio>=2.1
 torchcodec>=0.1
 demucs>=4.0
 librosa>=0.10
+# crema (chord detection, see detect_chords.py's own docstring for why it
+# replaced hand-tuned chroma-template matching -- CLAUDE_HISTORY 2026-09-13)
+# needs an old TensorFlow/Keras/scikit-learn stack that only publishes wheels
+# for Python 3.11 (not 3.12) -- this is why this project's venv is built on
+# 3.11. A real combined-install test confirmed torch/demucs/librosa and this
+# stack coexist correctly in one environment; pinned versions below are the
+# exact ones verified to work together. tensorflow==2.15.0 pulls a matching
+# keras==2.15.0 automatically -- do not add a separate keras pin, and do not
+# bump tensorflow without re-verifying crema still imports (newer TensorFlow
+# defaults to Keras 3, which crema's code does not support).
+tensorflow==2.15.0
+scikit-learn<1.6  # crema's own pumpp dependency breaks on sklearn>=1.6's __sklearn_tags__ API
+setuptools<81     # crema uses pkg_resources internally; removed from setuptools>=81
+crema
 pillow>=10.0
 # moviepy 1.0.3's old-style decorators silently break under decorator>=5.0 (fps
 # resolution returns None instead of the passed value) -- pinned below <5.0 even

@@ -1,13 +1,15 @@
 import subprocess
 
 from lyricvideo.audio_decode import find_ffmpeg
-from lyricvideo.detect_chords import ChordEvent, ChordTrack, detect_chords
+from lyricvideo.detect_chords import (
+    ChordEvent, ChordTrack, _parse_crema_label, _simplify_chord_label, detect_chords,
+)
 
 
 def _make_test_tone(tmp_path, freq=220, duration=6):
     """A simple, single-pitch tone -- not a real chord, but enough to exercise
-    the full pipeline (harmonic separation -> chroma -> beat sync -> template
-    match -> Viterbi -> silence detection) without needing a real song file."""
+    the full pipeline (crema analysis -> label simplification -> merge) without
+    needing a real song file."""
     wav_path = tmp_path / "tone.wav"
     subprocess.run(
         [find_ffmpeg(), "-v", "error", "-f", "lavfi",
@@ -28,6 +30,79 @@ def test_chord_track_defaults_to_empty():
     assert track.events == []
     assert track.key == ""
     assert track.bpm == 0.0
+
+
+def test_parse_crema_label_plain_triad():
+    assert _parse_crema_label("C:maj") == (0, "maj")
+    assert _parse_crema_label("A:min") == (9, "min")
+
+
+def test_parse_crema_label_strips_slash_inversion():
+    assert _parse_crema_label("C:maj/5") == (0, "maj")
+
+
+def test_parse_crema_label_accepts_sharp_and_flat_roots():
+    assert _parse_crema_label("D#:min7") == (3, "min7")
+    assert _parse_crema_label("Eb:min7") == (3, "min7")
+
+
+def test_parse_crema_label_no_chord_and_unknown_return_none():
+    assert _parse_crema_label("N") is None
+    assert _parse_crema_label("X") is None
+
+
+def test_parse_crema_label_bare_root_defaults_to_major():
+    # crema/mir_eval convention: a root with no ":quality" suffix is a major triad.
+    assert _parse_crema_label("G") == (7, "maj")
+
+
+def test_simplify_chord_label_no_chord_becomes_n():
+    assert _simplify_chord_label("N", include_seventh_chords=True, use_flats=False) == "N"
+    assert _simplify_chord_label("X", include_seventh_chords=True, use_flats=False) == "N"
+
+
+def test_simplify_chord_label_plain_triads_unaffected_by_sevenths_flag():
+    assert _simplify_chord_label("C:maj", include_seventh_chords=False, use_flats=False) == "C"
+    assert _simplify_chord_label("C:min", include_seventh_chords=False, use_flats=False) == "Cm"
+
+
+def test_simplify_chord_label_keeps_sevenths_when_enabled():
+    assert _simplify_chord_label("G:7", include_seventh_chords=True, use_flats=False) == "G7"
+    assert _simplify_chord_label("D:min7", include_seventh_chords=True, use_flats=False) == "Dm7"
+    assert _simplify_chord_label("A:maj7", include_seventh_chords=True, use_flats=False) == "Amaj7"
+
+
+def test_simplify_chord_label_collapses_sevenths_to_triads_when_disabled():
+    assert _simplify_chord_label("G:7", include_seventh_chords=False, use_flats=False) == "G"
+    assert _simplify_chord_label("D:min7", include_seventh_chords=False, use_flats=False) == "Dm"
+    assert _simplify_chord_label("A:maj7", include_seventh_chords=False, use_flats=False) == "A"
+
+
+def test_simplify_chord_label_half_diminished_collapses_to_min7():
+    """A half-diminished 7th has a minor third and minor seventh -- closer to
+    min7 than a plain minor triad."""
+    assert _simplify_chord_label("F:hdim7", include_seventh_chords=True, use_flats=False) == "Fm7"
+
+
+def test_simplify_chord_label_diminished_collapses_to_minor():
+    assert _simplify_chord_label("A:dim", include_seventh_chords=True, use_flats=False) == "Am"
+
+
+def test_simplify_chord_label_augmented_and_sus_default_to_major():
+    assert _simplify_chord_label("C:aug", include_seventh_chords=True, use_flats=False) == "C"
+    assert _simplify_chord_label("C:sus4", include_seventh_chords=True, use_flats=False) == "C"
+    assert _simplify_chord_label("C:sus2", include_seventh_chords=True, use_flats=False) == "C"
+
+
+def test_simplify_chord_label_extended_tensions_drop_to_base_seventh_quality():
+    assert _simplify_chord_label("C:9", include_seventh_chords=True, use_flats=False) == "C7"
+    assert _simplify_chord_label("C:maj9", include_seventh_chords=True, use_flats=False) == "Cmaj7"
+    assert _simplify_chord_label("C:min9", include_seventh_chords=True, use_flats=False) == "Cm7"
+
+
+def test_simplify_chord_label_respects_use_flats():
+    assert _simplify_chord_label("D#:maj", include_seventh_chords=False, use_flats=True) == "Eb"
+    assert _simplify_chord_label("D#:maj", include_seventh_chords=False, use_flats=False) == "D#"
 
 
 def test_detect_chords_returns_a_track_covering_the_whole_file(tmp_path):
@@ -68,12 +143,9 @@ def test_detect_chords_on_short_clip_returns_empty_track(tmp_path):
 
 
 def test_detect_chords_include_seventh_chords_can_produce_seventh_labels(tmp_path):
-    # A synthesized dominant-7th-ish chord: root + major third + fifth + minor
-    # seventh, all mixed together. With sevenths disabled the detector can only
-    # ever output a plain triad label; with them enabled a "7"/"m7"/"maj7"
-    # suffix becomes possible. This test only asserts the flag is actually wired
-    # through (no crash, real ChordTrack back either way) -- exact chord-guessing
-    # accuracy on synthetic audio is not what's being tested here.
+    # This only asserts the flag is actually wired through (no crash, real
+    # ChordTrack back either way) -- exact chord-guessing accuracy on a
+    # synthetic single-pitch tone is not what's being tested here.
     wav_path = tmp_path / "chord.wav"
     subprocess.run(
         [find_ffmpeg(), "-v", "error", "-f", "lavfi",

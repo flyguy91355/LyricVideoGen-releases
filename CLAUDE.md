@@ -143,13 +143,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    the lines. `align_words()` has no idea where its input words came from, so this
    is the same alignment mechanism the original tab-PDF design used.
 5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
-   identity, entirely independent of lyrics: harmonic/percussive separation → CQT
-   chroma → beat-sync → template match against 12-root × {maj, min, 7, min7, maj7}
-   → key-aware (Krumhansl-Schmuckler) Viterbi decoding, run on Demucs's own
-   `no_vocals.wav`. Produces one `ChordTrack` (events + key + bpm) covering the
-   whole song, saved onto the `Song`. This is the ONLY chord source in this
-   program — there is no tab/sheet input to defer to, and audio-detected chords
-   always win.
+   identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC)
+   analyzes Demucs's `no_vocals.wav` directly; its 602-class vocabulary
+   collapses to this app's 5 qualities (maj/min/7/min7/maj7) via
+   `_simplify_chord_label()`. Replaced CQT-chroma template matching 9-13
+   (HISTORY, real accuracy ceiling). Key/BPM: unchanged librosa. Needs old
+   TF/Keras/sklearn, no 3.12 wheels — **`.venv` runs on Python 3.11**; see
+   `requirements.txt` pins first. Only chord source, no tab/sheet.
 6. **images** — `imagery.py`: one Claude call summarizes the whole song's gist
    once (`summarize_song_gist`), then each *unique* lyric line AND each distinct
    chord label that occurs during an instrumental gap (`_instrumental_chord_labels`
