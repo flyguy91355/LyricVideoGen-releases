@@ -917,6 +917,11 @@ class LyricVideoGUI:
         if not audio:
             messagebox.showerror("Missing input", "Audio file is required.")
             return
+        if not Path(audio).is_file():
+            # A typo'd/moved path used to surface only minutes later, as an
+            # obscure Demucs or ffmpeg failure deep in the log.
+            messagebox.showerror("Audio file not found", f"No such file:\n{audio}")
+            return
         if not work_dir:
             work_dir = _default_work_dir_from_audio(audio)
             self.work_dir_var.set(work_dir)
@@ -952,6 +957,18 @@ class LyricVideoGUI:
             audio_path, title = load_redo_inputs(song_dir)
         except Exception as e:
             messagebox.showerror("Could not load song", f"{type(e).__name__}: {e}")
+            return
+        if not audio_path.is_file():
+            # The redo re-reads the ORIGINAL audio (sidecar lyrics check, and
+            # the final render muxes it in) -- if the owner has since moved or
+            # renamed that file, fail here with the path, before backing
+            # anything up or starting a run that would die at render time.
+            messagebox.showerror(
+                "Original audio file not found",
+                f'"{title}" was generated from:\n{audio_path}\n\n'
+                "That file no longer exists. Put it back (or generate the song "
+                "again from the moved file as a new song).",
+            )
             return
 
         generate_new_images = self.redo_new_images_var.get()
@@ -1083,9 +1100,15 @@ class LyricVideoGUI:
                 youtube_auth.connect(Path(secrets_path))
                 self.root.after(0, self._refresh_youtube_status)
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Could not connect to YouTube", f"{type(e).__name__}: {e}",
-                ))
+                # The message is formatted HERE, not inside the lambda: Python
+                # unbinds `e` the moment this except block ends, so a lambda
+                # that reads `e` later (from the Tk event loop, via after())
+                # raised NameError instead of ever showing the dialog -- the
+                # owner saw nothing at all when a connect failed (found by
+                # static analysis, 2026-09-14; same latent bug in the manual
+                # upload and Approve-reply workers below).
+                message = f"{type(e).__name__}: {e}"
+                self.root.after(0, lambda: messagebox.showerror("Could not connect to YouTube", message))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1109,7 +1132,8 @@ class LyricVideoGUI:
                 schedule_upload(youtube_client, anthropic_client, work_dir, self.settings)
                 self.root.after(0, lambda: messagebox.showinfo("Uploaded", "Video uploaded to YouTube."))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Upload failed", f"{type(e).__name__}: {e}"))
+                message = f"{type(e).__name__}: {e}"  # see _on_connect_youtube: never read `e` inside the lambda
+                self.root.after(0, lambda: messagebox.showerror("Upload failed", message))
             finally:
                 self.root.after(0, lambda: self._update_upload_button_state(work_dir))
 
@@ -1166,9 +1190,8 @@ class LyricVideoGUI:
                 remove_pending_reply(reply.comment_id)
                 self.root.after(0, self._render_pending_replies)
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Could not post reply", f"{type(e).__name__}: {e}",
-                ))
+                message = f"{type(e).__name__}: {e}"  # see _on_connect_youtube: never read `e` inside the lambda
+                self.root.after(0, lambda: messagebox.showerror("Could not post reply", message))
 
         threading.Thread(target=worker, daemon=True).start()
 

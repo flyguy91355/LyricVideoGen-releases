@@ -5,13 +5,19 @@ syncedlyrics>=1.0
 
 customtkinter>=5.2
 
-# PyPI's torch wheels are CPU-only on Windows/Linux; they run everywhere, so
-# this default install works on machines with no GPU. Demucs is 10-50x faster on
-# an NVIDIA card: after this file installs, optionally swap in the CUDA build with
+# PyPI's torch wheel is CPU-only on Windows and a CUDA build on Linux; either
+# way separate.py sends Demucs to the GPU only when the installed build carries
+# kernels for that GPU, and runs on CPU otherwise, so this default install works
+# on any machine. Demucs is 10-50x faster on an NVIDIA card: after this file
+# installs, optionally swap in the CUDA build with
 #   uv pip install --index-url https://download.pytorch.org/whl/cu130 \
 #       "torch==2.14.0+cu130" "torchaudio==2.11.0+cu130" "torchcodec==0.16.0+cu130"
-# (needs a recent NVIDIA driver; 570+ for cu128, 580+ for cu130). separate.py
-# picks cuda/cpu automatically at run time; LYRICVIDEO_DEVICE=cpu forces CPU.
+# (needs a recent NVIDIA driver; 570+ for cu128, 580+ for cu130). cu130 wheels
+# carry kernels for compute capability 7.5+ only (CUDA 13 dropped Maxwell/
+# Pascal/Volta): a GT 1030-class card needs the cu126 index instead -- torch's
+# own startup warning prints the exact command (issue #5). With a build that
+# lacks kernels for the card, the app runs Demucs on CPU and says so in the log
+# instead of crashing. LYRICVIDEO_DEVICE=cpu|cuda forces a device.
 # torchcodec needs FFmpeg *shared* libraries on PATH (Windows: winget install
 # Gyan.FFmpeg.Shared -- the plain Gyan.FFmpeg build is static and won't load).
 torch>=2.1

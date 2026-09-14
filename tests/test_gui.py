@@ -203,3 +203,167 @@ def test_split_log_text_empty_chunk_is_a_noop():
     pending, to_commit = _split_log_text("partial", "")
     assert pending == "partial"
     assert to_commit == ""
+
+
+# --- GUI worker error paths ------------------------------------------------
+# These drive real LyricVideoGUI methods against a plain stub `self` (no Tk
+# window) with threading.Thread swapped for a synchronous stand-in, so the
+# callbacks a worker schedules via root.after() can be asserted on directly.
+
+from types import SimpleNamespace  # noqa: E402
+
+from lyricvideo.gui import LyricVideoGUI  # noqa: E402
+from lyricvideo.youtube_comment_state import PendingReply  # noqa: E402
+
+
+class _ImmediateThread:
+    """Stands in for threading.Thread: runs the target synchronously on
+    start(), so a worker's after()-scheduled callbacks fire before the test
+    asserts."""
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._target, self._args, self._kwargs = target, args, kwargs or {}
+
+    def start(self):
+        self._target(*self._args, **self._kwargs)
+
+
+class _ImmediateRoot:
+    """A root whose after() runs the callback immediately -- the exact call
+    site where the deferred error-dialog lambdas below used to raise."""
+
+    def after(self, _delay, callback, *args):
+        callback(*args)
+
+
+def _gui_stub(**attrs):
+    attrs.setdefault("settings", Settings())
+    return SimpleNamespace(root=_ImmediateRoot(), **attrs)
+
+
+def _must_not_run(*args, **kwargs):
+    raise AssertionError("this must not be reached")
+
+
+def test_connect_youtube_failure_shows_the_error_dialog(monkeypatch):
+    """Real latent bug (static analysis, 2026-09-14): the worker's except
+    block handed `e` to a lambda that root.after() ran later -- but Python
+    unbinds `e` the moment the except block ends, so that lambda raised
+    NameError inside the Tk event loop and the owner never saw why the
+    connect failed. Same bug in the manual-upload and Approve workers."""
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+
+    def failing_connect(path):
+        raise RuntimeError("consent screen closed")
+
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.connect", failing_connect)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    stub = _gui_stub(settings=Settings(youtube_client_secrets_path="secrets.json"))
+    LyricVideoGUI._on_connect_youtube(stub)
+
+    assert shown == [("Could not connect to YouTube", "RuntimeError: consent screen closed")]
+
+
+def test_connect_youtube_success_refreshes_the_status_label(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.connect", lambda path: "credentials")
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", _must_not_run)
+    refreshed = []
+
+    stub = _gui_stub(
+        settings=Settings(youtube_client_secrets_path="secrets.json"),
+        _refresh_youtube_status=lambda: refreshed.append(True),
+    )
+    LyricVideoGUI._on_connect_youtube(stub)
+
+    assert refreshed == [True]
+
+
+def test_manual_upload_failure_shows_the_error_dialog(monkeypatch, tmp_path):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+
+    def failing_upload(*args, **kwargs):
+        raise RuntimeError("uploadLimitExceeded")
+
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", failing_upload)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+    button_states = []
+    refreshed_for = []
+
+    stub = _gui_stub(
+        _last_work_dir=tmp_path,
+        upload_button=SimpleNamespace(configure=lambda **kw: button_states.append(kw)),
+        _update_upload_button_state=refreshed_for.append,
+    )
+    LyricVideoGUI._on_manual_upload(stub)
+
+    assert shown == [("Upload failed", "RuntimeError: uploadLimitExceeded")]
+    assert button_states == [{"state": "disabled"}]
+    assert refreshed_for == [tmp_path]  # the finally-block refresh still ran
+
+
+def test_approve_reply_failure_shows_the_error_dialog_and_keeps_the_draft(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+
+    def failing_post(client, comment_id, text):
+        raise RuntimeError("commentsDisabled")
+
+    monkeypatch.setattr("lyricvideo.gui.post_reply", failing_post)
+    monkeypatch.setattr("lyricvideo.gui.remove_pending_reply", _must_not_run)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    reply = PendingReply(
+        comment_id="c1", video_id="v1", author="fan", comment_text="wrong chord at 1:02?",
+        draft_reply="Thanks!", is_error_report=True,
+    )
+    text_box = SimpleNamespace(get=lambda start, end: "Thanks for the heads-up!\n")
+    LyricVideoGUI._on_approve_reply(_gui_stub(), reply, text_box)
+
+    assert shown == [("Could not post reply", "RuntimeError: commentsDisabled")]
+
+
+def test_generate_refuses_a_missing_audio_file_before_starting_anything(monkeypatch, tmp_path):
+    """A typo'd or moved path used to surface only minutes later as an
+    obscure Demucs/ffmpeg failure deep in the log."""
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _must_not_run)
+
+    stub = _gui_stub(
+        _running=False,
+        title_var=SimpleNamespace(get=lambda: "Song"),
+        audio_var=SimpleNamespace(get=lambda: str(tmp_path / "gone.mp3")),
+        work_dir_var=SimpleNamespace(get=lambda: "", set=_must_not_run),
+    )
+    LyricVideoGUI._on_generate(stub)
+
+    assert [title for title, _ in shown] == ["Audio file not found"]
+    assert str(tmp_path / "gone.mp3") in shown[0][1]
+
+
+def test_redo_refuses_when_the_original_audio_file_is_gone(monkeypatch, tmp_path):
+    """The redo re-reads the original audio (sidecar lyrics, final render);
+    if the owner moved it since, fail with the path up front -- before
+    backing anything up or starting a run that would die at render time."""
+    monkeypatch.setattr("lyricvideo.gui.load_redo_inputs", lambda song_dir: (tmp_path / "gone.mp3", "Angie"))
+    monkeypatch.setattr("lyricvideo.gui.backup_song_outputs", _must_not_run)
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", _must_not_run)
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _must_not_run)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    stub = _gui_stub(_running=False, redo_song_var=SimpleNamespace(get=lambda: "angie"))
+    LyricVideoGUI._on_redo(stub)
+
+    assert [title for title, _ in shown] == ["Original audio file not found"]
+    assert str(tmp_path / "gone.mp3") in shown[0][1]
+    assert "Angie" in shown[0][1]

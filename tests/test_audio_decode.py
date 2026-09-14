@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from lyricvideo.audio_decode import decode_audio, find_ffmpeg, probe_duration
 

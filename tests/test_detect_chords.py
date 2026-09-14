@@ -198,3 +198,25 @@ def test_detect_chords_defaults_match_module_constants(tmp_path):
     )
 
     assert default_call == explicit_call
+
+
+def test_simplify_chord_label_minor_major_seventh_keeps_its_minor_third():
+    """crema's real vocabulary (pumpp's '3567s' set) includes minmaj7; it was
+    missing from the quality map, so "A:minmaj7" silently became plain A
+    major -- the wrong third (found by code review, 2026-09-14)."""
+    assert _simplify_chord_label("A:minmaj7", include_seventh_chords=False, use_flats=False) == "Am"
+    assert _simplify_chord_label("A:minmaj7", include_seventh_chords=True, use_flats=False) == "Am7"
+
+
+def test_simplify_chord_label_maps_every_quality_crema_can_emit_explicitly():
+    """pumpp's QUALITIES table is the authority on what crema outputs; every
+    entry must be mapped explicitly rather than through the .get() default
+    ('maj'), which is wrong for anything built on a minor third."""
+    from lyricvideo.detect_chords import _QUALITY_TO_TRIAD_OR_SEVENTH
+
+    crema_qualities = {
+        "maj", "min", "dim", "aug", "min7", "maj7", "7", "dim7", "hdim7", "minmaj7",
+        "min6", "maj6", "sus2", "sus4",
+    }
+
+    assert crema_qualities <= set(_QUALITY_TO_TRIAD_OR_SEVENTH)

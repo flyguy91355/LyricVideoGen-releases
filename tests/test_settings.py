@@ -210,3 +210,14 @@ def test_render_kwargs_includes_support_overlay_scale():
 def test_render_kwargs_includes_support_overlay_lead_seconds():
     assert Settings().render_kwargs()["support_overlay_lead_seconds"] == 20.0
     assert Settings(support_overlay_lead_seconds=10.0).render_kwargs()["support_overlay_lead_seconds"] == 10.0
+
+
+def test_render_kwargs_falls_back_to_the_default_resolution_for_an_unknown_label():
+    """A hand-edited or stale settings.json label must not KeyError every
+    render -- and the Settings window, which previews through this same
+    mapping, with it."""
+    from lyricvideo.settings import DEFAULT_RESOLUTION
+
+    kwargs = Settings(resolution="8K (someday)").render_kwargs()
+
+    assert kwargs["frame_size"] == RESOLUTIONS[DEFAULT_RESOLUTION] == (1920, 1080)

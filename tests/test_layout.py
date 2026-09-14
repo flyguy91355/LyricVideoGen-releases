@@ -501,3 +501,42 @@ def test_build_image_timeline_uncovered_sliver_adopts_the_nearest_chord_not_a_ge
         line_hash("[Instrumental — chord: G]"), line_hash("[Instrumental — chord: G]"),
     ]
     assert timeline[0].start == 0.0 and timeline[-1].end == 10.0
+
+
+def test_build_scene_shows_the_first_line_as_upcoming_during_the_intro():
+    """Before the first line starts, find_current_line_index still reports
+    index 0 -- that line is what's ABOUT to be sung, so it must be on screen
+    (unhighlighted), not blanked like a line that's already finished. The
+    2026-09-10 stale-line blanking fix had hidden it for the whole intro,
+    leaving line 2 as the only preview until line 1's first word popped in
+    (found by code review, 2026-09-14)."""
+    lines = [
+        LyricLine(words=[Word(word="first", start_time=10.0, end_time=10.5)], start_time=10.0, end_time=10.5),
+        LyricLine(words=[Word(word="second", start_time=12.0, end_time=12.5)], start_time=12.0, end_time=12.5),
+    ]
+
+    intro = build_scene(lines, t=3.0, window=1)
+    current = next(l for l in intro.lines if l.distance_from_current == 0)
+    upcoming = next(l for l in intro.lines if l.distance_from_current == 1)
+
+    assert [w.text for w in current.words] == ["first"]
+    assert not any(w.word_active for w in current.words)
+    assert [w.text for w in upcoming.words] == ["second"]
+    assert intro.scroll_progress == 0.0
+
+
+def test_build_scene_still_blanks_a_finished_line_in_the_gap_before_the_next_one():
+    """The intro exception above must not weaken the real gap behavior: once
+    a line has started and its plausible content is over, its slot goes
+    blank until the next line begins."""
+    lines = [
+        LyricLine(words=[Word(word="first", start_time=10.0, end_time=10.5)], start_time=10.0, end_time=10.5),
+        LyricLine(words=[Word(word="second", start_time=20.0, end_time=20.5)], start_time=20.0, end_time=20.5),
+    ]
+
+    gap = build_scene(lines, t=15.0, window=1)
+    current = next(l for l in gap.lines if l.distance_from_current == 0)
+    upcoming = next(l for l in gap.lines if l.distance_from_current == 1)
+
+    assert current.words == []
+    assert [w.text for w in upcoming.words] == ["second"]

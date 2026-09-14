@@ -83,6 +83,12 @@ _PITCH_CLASS.update({name: i for i, name in enumerate(theory.NOTES_FLAT)})
 _QUALITY_TO_TRIAD_OR_SEVENTH: dict[str, str] = {
     "maj": "maj", "min": "min", "maj7": "maj7", "min7": "min7", "7": "7",
     "dim": "min", "dim7": "min", "hdim7": "min7", "aug": "maj",
+    # minor-major 7th: a MINOR third with a major seventh. crema's real
+    # vocabulary (pumpp's '3567s' set) does emit it, and it was missing here,
+    # so the .get() default below relabeled e.g. "A:minmaj7" as plain A major
+    # -- the wrong third, the one interval a strummer can't fudge (found by
+    # code review against pumpp's QUALITIES table, 2026-09-14).
+    "minmaj7": "min7",
     "sus2": "maj", "sus4": "maj", "maj6": "maj", "min6": "min",
     "9": "7", "maj9": "maj7", "min9": "min7", "11": "7", "13": "7",
     "1": "maj", "5": "maj",

@@ -338,6 +338,15 @@ def build_scene(
     # trusted, rather than adding a second, possibly-inconsistent notion of
     # "are we still in this line."
     in_a_line = _in_a_line(lines, t)
+    # Before the very first line has begun (the intro), find_current_line_index
+    # still reports index 0 -- but that line is UPCOMING, not stale, so it must
+    # show as the preview of what's about to be sung. The blanking below is
+    # only for a line that has already started and is now past its real
+    # content. Without this distinction the whole intro showed line 2 as
+    # "next" while line 1 stayed invisible until its first word popped in
+    # (regression from the 2026-09-10 blanking fix, found by code review,
+    # 2026-09-14).
+    current_has_started = current.start_time is None or t >= current.start_time
 
     scene_lines: list[SceneLine] = []
     # Only current (0) and upcoming (+1..+window) lines are shown -- no previous line.
@@ -348,7 +357,7 @@ def build_scene(
         line = lines[i]
         is_current = offset == 0
         words = []
-        if not (is_current and not in_a_line):
+        if not (is_current and current_has_started and not in_a_line):
             for w in line.words:
                 word_sung = bool(is_current and w.start_time is not None and w.start_time <= t)
                 words.append(SceneWord(text=w.word, word_active=word_sung))

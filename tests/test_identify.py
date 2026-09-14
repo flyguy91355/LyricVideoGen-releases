@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 
 from lyricvideo.identify import (
     SongInfo,

@@ -1,4 +1,4 @@
-from lyricvideo.chord_shapes import CHORD_SHAPES, ChordShape, get_chord_shape
+from lyricvideo.chord_shapes import CHORD_SHAPES, get_chord_shape
 from lyricvideo.chord_theory import NOTES_FLAT, NOTES_SHARP, QUALITY_SUFFIX
 
 

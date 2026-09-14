@@ -20,6 +20,7 @@ RESOLUTIONS: dict[str, tuple[int, int]] = {
     "1080p (1920x1080)": (1920, 1080),
     "1440p (2560x1440)": (2560, 1440),
 }
+DEFAULT_RESOLUTION = "1080p (1920x1080)"
 ENCODERS = ["libx264", "libx265"]
 FPS_OPTIONS = [24, 30, 60]
 
@@ -27,7 +28,7 @@ FPS_OPTIONS = [24, 30, 60]
 @dataclass
 class Settings:
     # --- Output ---------------------------------------------------------
-    resolution: str = "1080p (1920x1080)"
+    resolution: str = DEFAULT_RESOLUTION
     fps: int = 24
     encoder: str = "libx264"
     crf: int = 20
@@ -103,8 +104,15 @@ class Settings:
         resolved to a real (width, height) and every color hex-decoded to RGB.
         Shared by run_pipeline() and the Settings preview so the two never drift
         out of sync on how a Settings object becomes render arguments."""
+        frame_size = RESOLUTIONS.get(self.resolution)
+        if frame_size is None:
+            # A hand-edited or stale settings.json label must never take down
+            # every render AND the Settings window (which previews via this
+            # same mapping) with a KeyError -- fall back to the default.
+            log.warning("Unknown resolution %r in settings; using %s", self.resolution, DEFAULT_RESOLUTION)
+            frame_size = RESOLUTIONS[DEFAULT_RESOLUTION]
         return {
-            "frame_size": RESOLUTIONS[self.resolution],
+            "frame_size": frame_size,
             "lyric_size": self.lyric_size,
             "text_color": hex_to_rgb(self.text_color),
             "accent_color": hex_to_rgb(self.accent_color),

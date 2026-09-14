@@ -1,7 +1,5 @@
-from pathlib import Path
 
 from lyricvideo.fetch_lyrics import (
-    _LyricLine,
     artist_matches,
     choose_lyrics_candidate,
     fetch_lyric_lines,
@@ -119,3 +117,36 @@ def test_fetch_lyric_lines_returns_empty_when_nothing_found(tmp_path, monkeypatc
     monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", lambda *a, **k: None)
 
     assert fetch_lyric_lines(audio_path, title="Unknown", artist="Unknown", duration=10.0) == []
+
+
+def test_fetch_lyric_lines_keeps_plain_lyrics_even_when_the_duration_is_unknown(tmp_path, monkeypatch):
+    """Plain (unsynced) lyrics used to be routed through plain_to_lines(),
+    which fabricates evenly-spread timing and returns NOTHING for duration
+    0 -- so a file whose length couldn't be probed silently lost lyrics the
+    provider had actually found. Only the text matters here; timing always
+    comes from forced alignment later (found by code review, 2026-09-14)."""
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_lrclib_hit",
+        lambda *a, **k: ("Hello darkness\n\n  My old friend  \n", False, 0.0),
+    )
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", lambda *a, **k: None)
+
+    assert fetch_lyric_lines(audio_path, title="Sound", artist="S&G", duration=0.0) == [
+        "Hello darkness", "My old friend",
+    ]
+
+
+def test_fetch_lyric_lines_plain_sidecar_txt_works_without_a_duration(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    (tmp_path / "song.txt").write_text("Line one\nLine two\n", encoding="utf-8")
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("network lookup should not run when a sidecar exists")
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", fail_if_called)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", fail_if_called)
+
+    assert fetch_lyric_lines(audio_path, title="T", artist="A", duration=0.0) == ["Line one", "Line two"]

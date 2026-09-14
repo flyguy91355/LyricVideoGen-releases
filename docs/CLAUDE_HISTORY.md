@@ -1603,3 +1603,120 @@ for unalignable audio, already enabled by the default
 Guarded by a test that runs every kind of normalized spelling through the
 REAL `MMS_FA.get_tokenizer()` (dictionary only, no model download), since
 an unknown character is exactly the failure class this was.
+
+## 2026-09-14 — Second full codebase review: silent GUI error dialogs, leaked ffmpeg readers, hidden intro line
+
+A second complete read-through of every module, script, launcher and test
+(the first was earlier the same day, above), this time backed by ruff
+(`--select F,E9,B,PLE`) for the mechanical checks a read can miss. Baseline
+before: 503 passed, 2 skipped. After: 522 passed, 2 skipped, 0 failed; ruff
+reports nothing but optional `zip(strict=)` hints, deliberately left.
+
+- **Three GUI error dialogs could never appear.** `_on_connect_youtube`,
+  `_on_manual_upload` and `_on_approve_reply` each ran in a worker thread
+  and, on failure, scheduled `messagebox.showerror(..., f"{e}")` via
+  `root.after(0, lambda: ...)`. Python unbinds the `except ... as e` name
+  the moment the except block ends, so by the time Tk ran the lambda it
+  raised `NameError: cannot access free variable 'e'` -- swallowed by
+  Tkinter's callback handler, invisible on a desktop-launched app. A failed
+  connect, a failed manual upload (e.g. `uploadLimitExceeded`, hit live on
+  2026-09-12), or a failed reply post simply showed nothing. Ruff's F821
+  found it. The message is now formatted inside the except block and the
+  lambda captures the string. Tests drive the real methods against a stub
+  `self` with `threading.Thread` swapped for a synchronous stand-in.
+- **Every render leaked an ffmpeg reader subprocess.** `assemble_video()`
+  never closed its `AudioFileClip`; moviepy 1.0.3's own `Clip.close`
+  docstring says it must not be done from `__del__`, so the reader (and
+  its open handle on the source audio) lived until interpreter exit -- a
+  batch run accumulated one per song, and on Windows each audio file stayed
+  locked for the session. Closed in a `finally`, verified on both the
+  success and the write-failure path.
+- **The first lyric line was invisible for the whole intro.** The
+  2026-09-10 stale-line gate (blank the "current" line's text whenever
+  `_in_a_line()` is false) also fired before the first line had started,
+  because `find_current_line_index` reports index 0 then. So the intro
+  previewed line 2 as "next" while line 1 stayed hidden until its first
+  word popped in already highlighted. The gate now applies only once the
+  current line has begun; the intro shows line 1 unhighlighted at center
+  with line 2 below, exactly the pre-gate layout, and the mid-gap blanking
+  the owner asked for is unchanged (both covered by tests).
+- **Plain lyrics were discarded when the audio duration was unknown.**
+  `fetch_lyric_lines()` routed unsynced text through `plain_to_lines()`,
+  which fabricates evenly-spread timing and returns `[]` for
+  `duration <= 0` -- but only the TEXT is kept from this stage, so a file
+  whose length `probe_duration` couldn't read lost lyrics the provider had
+  actually found (sidecar `.txt` included). Plain text is now split into
+  lines directly.
+- **`minmaj7` relabeled as major.** crema's real vocabulary is pumpp's
+  `3567s` QUALITIES table; `minmaj7` (minor third, major seventh) is in it
+  and was missing from `_QUALITY_TO_TRIAD_OR_SEVENTH`, whose `.get()`
+  default is `"maj"` -- so `A:minmaj7` displayed as A major. Mapped to
+  `min7`/`min`; a test pins every pumpp quality to an explicit entry.
+- **A song with no lyric text died with "no words to align".** The align
+  stage now raises a RuntimeError naming the song and the exact
+  `<stem>.lrc`/`.txt` sidecar to add, on a fresh run or a `--stage align`
+  resume alike.
+- **`combine_alignment` could reject a valid last word.** `align_words`
+  resamples the stem with a ceil'd length, so a word sung to the final
+  sample can end up to 1/16000 s past the original-rate duration and used
+  to trip the `end > audio_duration` sanity check. The check now shares
+  `MONOTONIC_TOLERANCE`.
+- Smaller: `Settings.render_kwargs()` falls back to 1080p (with a warning)
+  for an unknown resolution label instead of a KeyError that took down
+  every render and the Settings window's preview; Generate and Redo check
+  the audio file exists up front and name the path, instead of an obscure
+  Demucs/ffmpeg failure minutes later; `assemble_video` caches backgrounds
+  already scaled to the frame and `apply_ken_burns` skips its first resize
+  when the input is already frame-sized (identical pixels, one fewer
+  1080p resample per frame); unused imports removed from eleven test
+  modules and `branding/generate_channel_banner.py`.
+
+Reviewed and deliberately left alone this pass: CPU-only MMS_FA inference
+(`align.py`; a full-song emission on GPU risks OOM and alignment is not the
+slow stage); `torchaudio.load` of the whole vocal stem just for its duration
+in `pipeline.py` (~85 MB transient, freed immediately); `next_chord_after`'s
+linear scan per frame (a few hundred events); redrawing the chord legend's
+diagrams on every frame (small draws, no measured cost); the `zip()`
+`strict=` hints.
+
+## 2026-09-14 — Issue #5: Demucs crashed on the GT 1030 box, "no kernel image is available"
+
+The original Linux box (GeForce GT 1030, Pascal, compute capability 6.1) hit
+`torch.AcceleratorError: CUDA error: no kernel image is available for execution
+on the device` on its first Generate after the Windows-support commit earlier
+today. That commit replaced `separate.py`'s hardcoded `-d cpu` (added
+2026-09-06 for exactly this card) with `compute_device()`, which trusted
+`torch.cuda.is_available()`. On that box it is True -- the venv carries the
+`torch==2.14.0+cu130` wheel, and a CUDA device and driver exist -- but the
+cu130 wheel is built for sm_75 and up only (CUDA 13 dropped Maxwell/Pascal/
+Volta), so Demucs's first `th.arange(..., device="cuda")` had no kernel to run.
+torch had printed a UserWarning saying as much into the subprocess's stderr,
+right above the traceback in the issue.
+
+- `compute_device()` now asks what the build was compiled for
+  (`torch.cuda.get_arch_list()`) and what the GPU is
+  (`torch.cuda.get_device_capability()`), and picks `cuda` only when the new
+  pure-logic `cuda_build_supports_device()` says a kernel can run there --
+  NVIDIA's cubin rule, the same one torch's own `_check_capability` applies:
+  code built for sm_XY (or PTX compute_XY) runs on hardware of the same major
+  X with minor >= Y. Arch-specific variants (`sm_90a`, `sm_100f`) count as
+  their base; a list with nothing it can judge (ROCm `gfx` names, empty) is
+  trusted rather than switching a working GPU off. When it falls back it
+  prints why (GPU name, CC, the build's arch list) to stdout so the GUI log
+  shows it, and names the `LYRICVIDEO_DEVICE=cuda` override. A probe that
+  itself raises is treated as `cpu`.
+- `separate_vocals()` retries once on CPU when an AUTO-picked GPU run exits
+  non-zero (too little memory for the model, a driver/runtime mismatch --
+  things only the real run reveals), logging the retry. An explicitly
+  requested device (`device=` argument or the env override) is never
+  second-guessed and fails loudly, as asked; a CPU failure is never retried.
+- The `requirements.txt` comment claimed PyPI's torch wheel is CPU-only on
+  Linux too; it isn't (Linux PyPI wheels are CUDA builds). Reworded, and it
+  now says cu130 builds need a 7.5+ card and a GT 1030-class card wants the
+  cu126 index -- torch's startup warning prints the exact command, and its
+  own release table confirms cu126 x86_64 wheels carry sm_60.
+
+Verified against the real cu130 wheel on the Windows box: arch list
+`sm_75 sm_80 sm_86 sm_90 sm_100 sm_120`; the RTX 5070 (12.0) still picks
+`cuda`, a simulated (6, 1) picks `cpu`. `tests/test_separate.py` grew from 9
+to 29 tests. Not verified: an actual run on the GT 1030 box itself.

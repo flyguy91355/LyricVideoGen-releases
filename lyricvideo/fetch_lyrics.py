@@ -416,5 +416,11 @@ def fetch_lyric_lines(audio_path: Path, title: str, artist: str, duration: float
     if synced and not text.strip():
         log.info("Track flagged instrumental by lyrics provider")
         return []
-    lines = parse_lrc(text, duration) if synced else plain_to_lines(text, duration)
-    return [l.text for l in lines if l.text.strip()]
+    if synced:
+        return [l.text for l in parse_lrc(text, duration) if l.text.strip()]
+    # Plain lyrics: the text IS the result -- no timing is derived from it
+    # here, so this must not go through plain_to_lines(), whose evenly-spread
+    # fake timing needs a positive duration and returns NOTHING for a file
+    # whose length couldn't be probed (duration 0). Real lyrics were being
+    # thrown away in exactly that case (found by code review, 2026-09-14).
+    return [row.strip() for row in text.splitlines() if row.strip()]

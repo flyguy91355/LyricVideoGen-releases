@@ -245,6 +245,18 @@ def run_pipeline(
         report("align")
         lines_text = json.loads(lyrics_path.read_text(encoding="utf-8"))
         parsed_lines = [LyricLine(words=[Word(word=w) for w in text.split()]) for text in lines_text]
+        if not any(line.words for line in parsed_lines):
+            # Checked here (not in fetch_lyrics) so a --stage align resume
+            # with an empty lyric_lines.json gets the same clear message.
+            # Without it the stage died inside the aligner with "no words to
+            # align", which says nothing about what to do next.
+            raise RuntimeError(
+                f"No lyrics were found for '{resolved_title}' (every online lookup came up "
+                f"empty, or the track was flagged instrumental). Save the lyrics as "
+                f"'{Path(audio_path).stem}.lrc' or '{Path(audio_path).stem}.txt' next to the "
+                "audio file and run it again -- a play-along video can't be built without "
+                "lyric text."
+            )
         waveform, sample_rate = torchaudio.load(str(vocals_path))
         audio_duration = waveform.shape[1] / sample_rate
         flat_words = [w.word for line in parsed_lines for w in line.words]

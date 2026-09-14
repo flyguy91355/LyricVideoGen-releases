@@ -28,7 +28,17 @@ def combine_alignment(
         new_words: list[Word] = []
         for w in line.words:
             start, end = word_times[idx]
-            if start < 0 or end > audio_duration or end < start or start < prev_end - MONOTONIC_TOLERANCE:
+            # The duration tolerance mirrors the monotonic one: align_words()
+            # resamples the stem to the model's rate with a ceil'd length, so a
+            # word sung right up to the file's final sample can legitimately
+            # end a few microseconds past the original-rate duration -- a
+            # rounding artifact, not a bad alignment.
+            if (
+                start < 0
+                or end > audio_duration + MONOTONIC_TOLERANCE
+                or end < start
+                or start < prev_end - MONOTONIC_TOLERANCE
+            ):
                 raise AlignmentSanityError(
                     f"invalid timestamp for word {idx} ('{w.word}'): start={start}, "
                     f"end={end}, audio_duration={audio_duration}, prev_end={prev_end}"

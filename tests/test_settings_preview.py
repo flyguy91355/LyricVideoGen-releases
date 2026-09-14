@@ -1,5 +1,4 @@
 import numpy as np
-from PIL import Image
 
 from lyricvideo.settings import Settings
 from lyricvideo.settings_preview import PREVIEW_FRAME_SIZE, render_preview_frame

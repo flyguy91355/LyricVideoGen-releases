@@ -517,3 +517,16 @@ def test_run_pipeline_passes_ordered_unique_chords_to_assemble_video(tmp_path, m
     run_pipeline(Path("audio.mp3"), work_dir)
 
     assert captured["kwargs"]["chord_legend_labels"] == ["G", "D"]
+
+
+def test_run_pipeline_explains_a_song_with_no_lyric_text_instead_of_dying_in_the_aligner(tmp_path, monkeypatch):
+    """fetch_lyrics returns [] when nothing was found (or the track is
+    flagged instrumental); the align stage then aborted inside the aligner
+    with "no words to align", which says nothing about what to do next."""
+    import pytest
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines", lambda *a, **k: [])
+
+    with pytest.raises(RuntimeError, match=r"No lyrics were found for 'Test Song'.*audio\.lrc"):
+        run_pipeline(Path("audio.mp3"), tmp_path / "work")

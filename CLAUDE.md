@@ -115,8 +115,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    A caller-supplied `--title` overrides the identified title for display/filename
    purposes only — artist/duration always come from this stage's own resolution.
 2. **separate** (`separate.py`) — Demucs two-stem split of `--audio` into
-   vocals/instrumental on `compute_device()` -- `cuda` when torch sees a usable
-   GPU, else `cpu`; `LYRICVIDEO_DEVICE=cpu|cuda` overrides. Output path convention
+   vocals/instrumental on `compute_device()` -- `cuda` only when torch sees a
+   GPU AND its own build has kernels for that GPU's compute capability
+   (`cuda_build_supports_device()`, torch's same-major cubin rule; issue #5:
+   `torch.cuda.is_available()` was true on the GT 1030 under a cu130 wheel
+   built for sm_75+, and Demucs died on its first kernel launch), else `cpu`,
+   logging why; `LYRICVIDEO_DEVICE=cpu|cuda` overrides and is never
+   second-guessed. An auto-picked GPU run that still fails is retried once on
+   CPU (too little memory, driver mismatch). Output path convention
    (`work_dir/htdemucs/<audio_stem>/{vocals,no_vocals}.wav`) is what makes
    `--stage` resumption work — later stages look for the file at that same
    path; a resume at fetch_lyrics/align/detect_chords whose stems are missing
@@ -129,9 +135,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    disagreeing first-line candidates), then the `syncedlyrics` aggregator as a
    last resort. Written to `work_dir/lyric_lines.json`. Any timestamps a provider's
    LRC carries are discarded — real timing always comes from the next stage.
+   Plain (unsynced) text is split into lines directly, so a file whose
+   duration couldn't be probed still keeps its lyrics (9-14).
 4. **align** — forced word-level alignment (`align.py`) against the isolated
    vocal stem, timing `fetch_lyrics`'s text; `combine.py` merges the timing onto
-   the lines. MMS_FA knows only a-z and `'`: `_normalize_word_for_alignment`
+   the lines (a last word ending microseconds past the stem's duration is a
+   resample rounding artifact, tolerated; issue #6). An empty lyric list raises a
+   clear RuntimeError pointing at a sidecar file instead of dying inside the
+   aligner. MMS_FA knows only a-z and `'`: `_normalize_word_for_alignment`
    spells digit runs out as sung ("31" -> "thirtyone", "1975" ->
    "nineteenseventyfive", "1st" -> "first"), reads `&` as "and", and gives a
    word with nothing left the model's `*` star token instead of raising
@@ -139,7 +150,9 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
 5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
    identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC) analyzes
    Demucs's `no_vocals.wav`; its 602-class vocabulary collapses to this
-   app's 5 qualities via `_simplify_chord_label()`. Replaced CQT-chroma
+   app's 5 qualities via `_simplify_chord_label()` (every pumpp `3567s`
+   quality mapped explicitly, `minmaj7` included -- the `.get()` default is
+   `maj`, wrong for any minor-third chord). Replaced CQT-chroma
    template matching 9-13 (HISTORY). Needs old TF/Keras/sklearn, no 3.12
    wheels — **`.venv` runs on Python 3.11**; see
    `requirements.txt` pins first. Only chord source, no tab/sheet.
@@ -165,7 +178,10 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    (`lyricvideo/chord_shapes.py` + `chord_diagram.py`) over the audio into the
    final mp4 (`work_dir/<slugified-title>.mp4`); all text is drawn via
    `render.load_font()` (a per-thread font cache -- never share FreeType faces
-   across the GUI and worker threads). The legend shows one small
+   across the GUI and worker threads). `assemble_video()` closes its
+   `AudioFileClip` in a `finally` (moviepy never does; each render leaked an
+   ffmpeg reader) and caches backgrounds pre-scaled to the frame so
+   `apply_ken_burns()` skips a per-frame resample. The legend shows one small
    guitar diagram per unique chord in the song (`pipeline.ordered_unique_chords()`,
    first-appearance order), upper-left, with the currently-playing chord's
    diagram highlighted; fingering data is extracted from `tombatossals/chords-db`
@@ -199,10 +215,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    already generated for the song, NEVER the flat `fallback_color` -- real
    owner complaint, 2026-09-10 ("dont have a blank screen... fill it with
    the beginning frame"): some songs' own first-moment image key had no
-   cached file, so the countdown fell through to a plain color. Confirmed
-   intermittent, not universal, against the owner's own real batch (one
-   song's countdown was blank, another in the same batch was fine) --
-   consistent with a missing-file gap on specific songs, not every song.
+   cached file, so the countdown fell through to a plain color (intermittent,
+   song-specific; HISTORY).
    `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
    (countdown-extended) timeline; real content uses `song_t = T -
    countdown_duration` throughout. Audio is delayed to match
@@ -259,30 +273,21 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    one long label once broke rendering for the WHOLE panel (see `_add()`).
    `scripts/backfill_support_overlay_description.py` (manual, re-runnable)
    adds `support_description_text` to already-uploaded videos.
-   `build_scene()`'s
-   `scroll_progress` (how far the current line's own on-screen scroll
-   animation has advanced) uses `_plausible_line_end()` -- the same
-   outlier-capped end as `_plausible_sung_intervals()` -- instead of the
-   line's raw `end_time`, for the identical reason: real bug found live,
-   2026-09-10, a repeated one-word line ("Memoria") got a 6.86-second
-   duration in forced alignment for what's normally close to 1 second,
-   which by itself didn't displace `_in_a_line()`/Ken Burns (that line's
-   own start/end weren't wildly wrong the way 2026-09-09's was) but did
-   distort how fast that one line's own scroll animation should move.
-   Deliberately scoped to just this one mechanism at the time -- word-highlight
-   timing (`word_sung`/`word_active`) keys only on a word's own start time,
-   never a duration, and is still genuinely unaffected by any of this. But
-   `build_scene()`'s CURRENT-LINE TEXT is now also gated on `_in_a_line()`
-   (real bug found live, 2026-09-10, "Wish You Were Here"): a line whose
-   words were themselves scattered with huge gaps (real spoken radio-intro
-   dialogue, not sung to a rhythm) left `find_current_line_index` treating it
-   as "current" from 9.5s to 94.4s -- 85 seconds -- since that function keys
-   only on start_time and nothing else started in between. The line's own
-   text now blanks during any stretch `_in_a_line()` says isn't plausibly
-   part of it, even mid-line between that same line's own scattered
-   plausible-speech islands, while the upcoming-line preview is unaffected.
-   `find_current_line_index` ITSELF is still untouched -- this is a display
-   gate layered on top of its result, not a change to which index it returns.
+   `build_scene()`'s `scroll_progress` (how far the current line's own
+   on-screen scroll animation has advanced) uses `_plausible_line_end()` --
+   the same outlier-capped end as `_plausible_sung_intervals()` -- instead of
+   the line's raw `end_time` (HISTORY 2026-09-10, "Memoria": one word got a
+   6.86s duration). Word-highlight timing (`word_sung`/`word_active`) keys
+   only on a word's own start time, never a duration, and is unaffected.
+   `build_scene()`'s CURRENT-LINE TEXT is also gated on `_in_a_line()`
+   (HISTORY 2026-09-10, "Wish You Were Here": scattered spoken-intro words
+   left one line "current" for 85 seconds): once a line has BEGUN, its text
+   blanks during any stretch `_in_a_line()` says isn't plausibly part of it,
+   even mid-line between its own scattered plausible-speech islands. Before
+   the first line has begun (the intro) it stays visible as the upcoming
+   preview -- the gate had hidden it there too (9-14). The upcoming-
+   line preview and `find_current_line_index` itself are untouched -- this
+   is a display gate layered on top of its result.
    The scrolling timeline lane's per-segment chord label (`render.py`'s
    `_lane_label_font`) shrinks to fit a short-duration chord's narrow box
    instead of being skipped entirely when it doesn't fit at the default size
@@ -290,9 +295,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    doesn't fit, the label is now omitted entirely (`_lane_label_visible`) --
    the colored block itself still draws, so a chord change stays visible,
    but the text no longer overflows into the neighboring segment's own label
-   (real bug found live, 2026-09-10: a spurious 0.51-second detected chord
-   produced a sliver too narrow for any label, smearing it into the next
-   segment's text). No song title or artist text is drawn into the frame
+   (HISTORY 2026-09-10: a spurious 0.51s chord smeared into the next
+   label). No song title or artist text is drawn into the frame
    anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
    chord legend were added to the frame.
 
@@ -362,13 +366,10 @@ with the release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-dependencies-if-changed/copies/writes the new
 VERSION) followed by a Relaunch Now button. No severity tiering, no
 periodic re-check, no manual "Check Now" button — see the spec for why.
-The Apply Update confirmation itself (`_on_apply_update_clicked`'s own
-`messagebox.askyesno`) is a SEPARATE dialog from the outer "Update
-available" one and needs the identical `parent=`/topmost treatment for
-the same reason -- real recurrence, 2026-09-10 (owner screenshots): with
-no `parent=` given it wasn't WM-recognized as that dialog's child and
-could open behind it. Fixed by passing `parent=self._update_dialog_window`
-and briefly forcing that dialog topmost around the call.
+The Apply Update confirmation (`_on_apply_update_clicked`'s own
+`messagebox.askyesno`) is a SEPARATE dialog and needs the identical
+`parent=`/topmost treatment (`parent=self._update_dialog_window`) -- it
+opened behind the outer dialog without it (HISTORY 2026-09-10).
 Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs
 both launchers, `.sh` and `.bat`; the
 releases repo itself was created 2026-09-08, public/unlisted, no source
@@ -376,14 +377,10 @@ code — just synced snapshots + release notes). The sync step exports from
 git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
 `cp`) specifically so uncommitted local changes can never leak into a
 public release — see the 2026-09-08 history entry for the real incident
-that found this the hard way. Since `git show ... > file` is a shell
-redirect, it never carries over git's own tracked executable-bit metadata
-(always the destination's default umask instead) — after writing each
-file, the script now checks `git ls-tree HEAD` for that path and
-`chmod +x`s it if git tracks it as `100755` (real incident, 2026-09-10:
-`run_playalongvideoproduction.sh` shipped non-executable in every release
-this session, silently re-breaking the desktop launcher on every Apply
-Update even after being fixed locally). The owner runs the app directly from this same
+that found this the hard way. `git show ... > file` drops git's executable
+bit, so the script re-applies `chmod +x` to any path `git ls-tree HEAD`
+tracks as `100755` (the `.sh` launcher once shipped non-executable;
+HISTORY 2026-09-10). The owner runs the app directly from this same
 git checkout (not a separate deployed copy), so code changes reach them
 immediately on every commit; releases exist so the Update Available banner
 and changelog stay meaningful, not because Apply Update is the only way
@@ -394,7 +391,8 @@ since the project rename — it had drifted to reference the pre-rename
 against a stale release reverting newer commits (HISTORY, 9-13).
 
 `Settings.render_kwargs()` centralizes resolution/color unpacking for
-`assemble_video()`; `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`
+`assemble_video()` (an unknown resolution label falls back to 1080p with a
+warning, never a KeyError); `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`
 (owner request 2026-09-09) renders a synthetic sample frame (fake lyric line + fake
 chord track, no real song/network/AI image) at the chosen output resolution using
 that same mapping, then downscales it for on-screen display. `gui.py`'s Settings
@@ -499,7 +497,12 @@ on YouTube Studio after a redo, and the stale local record left that song
 permanently stuck claiming "already uploaded" with no automatic recovery.
 A verification call that itself fails (network hiccup) fails CLOSED here
 (skip, never risk a duplicate upload). Any upload failure is caught and
-logged as a warning, never raised. A "YouTube: not connected"/"YouTube:
+logged as a warning, never raised. GUI worker threads format an error's
+text BEFORE the deferred `root.after` lambda: `except ... as e` unbinds `e`
+when the block ends, so a lambda reading it raised NameError and the
+connect/upload/Approve error dialogs never showed (9-14). Generate
+and Redo refuse up front, naming the path, when the audio file is gone.
+A "YouTube: not connected"/"YouTube:
 connected as <channel>" status label + "Connect to YouTube" button sit
 above the Settings panel (refreshed on a background thread -- YouTube is
 never called from the GUI thread); a manual "Upload to YouTube" button next to the

@@ -13,6 +13,9 @@ def _fake_clips(calls):
             calls["audio_set_start"] = t
             return self
 
+        def close(self):
+            calls["audio_closed"] = calls.get("audio_closed", 0) + 1
+
     class _FakeVideoClip:
         def __init__(self, make_frame, duration):
             calls["make_frame"] = make_frame
@@ -770,3 +773,82 @@ def test_assemble_video_missing_image_key_falls_back_to_a_real_image_not_a_flat_
 
     assert not np.all(frame.reshape(-1, 3) == (1, 2, 3))
     assert np.any(np.all(np.abs(frame.astype(int) - np.array(distinctive_color)) < 10, axis=-1))
+
+
+def test_assemble_video_closes_the_audio_clip_after_writing(tmp_path, monkeypatch, test_font_path):
+    """AudioFileClip keeps an ffmpeg reader subprocess (and the source file)
+    open until close() -- moviepy never does that itself, so every render
+    leaked one for the rest of the session: a whole batch run's worth of
+    zombie ffmpeg processes (found by code review, 2026-09-14)."""
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo.assemble import assemble_video
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", tmp_path / "final.mp4", font_path=test_font_path,
+        countdown_beats=0,
+    )
+
+    assert calls["audio_closed"] == 1
+
+
+def test_assemble_video_closes_the_audio_clip_even_when_the_write_fails(tmp_path, monkeypatch, test_font_path):
+    import pytest
+
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+
+    class _FailingVideoClip(FakeVideoClip):
+        def write_videofile(self, *args, **kwargs):
+            raise RuntimeError("ffmpeg exploded")
+
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", _FailingVideoClip)
+
+    from lyricvideo.assemble import assemble_video
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    with pytest.raises(RuntimeError, match="ffmpeg exploded"):
+        assemble_video(
+            lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", tmp_path / "final.mp4",
+            font_path=test_font_path, countdown_beats=0,
+        )
+
+    assert calls["audio_closed"] == 1
+
+
+def test_assemble_video_hands_ken_burns_an_already_frame_sized_background(tmp_path, monkeypatch, test_font_path):
+    """Backgrounds are cached scaled to the output frame ONCE, so the
+    per-frame Ken Burns pan never re-resamples the raw generation (which is
+    a different size) on every single frame."""
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    import lyricvideo.assemble as assemble_module
+    from lyricvideo.assemble import assemble_video
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    Image.new("RGB", (640, 360), (200, 30, 30)).save(tmp_path / f"{line_hash('hi')}.png")
+
+    seen_sizes = []
+    real_apply_ken_burns = assemble_module.apply_ken_burns
+
+    def spying_apply_ken_burns(image, *args, **kwargs):
+        seen_sizes.append(image.size)
+        return real_apply_ken_burns(image, *args, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "apply_ken_burns", spying_apply_ken_burns)
+
+    assemble_video(
+        lines, ChordTrack(), tmp_path, tmp_path / "audio.wav", tmp_path / "final.mp4", font_path=test_font_path,
+        countdown_beats=0, frame_size=(1280, 720),
+    )
+    calls["make_frame"](0.5)
+
+    assert seen_sizes and all(size == (1280, 720) for size in seen_sizes)

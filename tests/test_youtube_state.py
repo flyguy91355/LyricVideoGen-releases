@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from lyricvideo.youtube_state import YoutubeState, load_youtube_state, save_youtube_state
 

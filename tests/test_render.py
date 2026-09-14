@@ -651,3 +651,17 @@ def test_load_font_cache_is_per_thread(test_font_path):
     t.join()
 
     assert seen["font"] is not main_font
+
+
+def test_apply_ken_burns_gives_identical_output_for_a_pre_resized_input():
+    """assemble_video caches backgrounds already scaled to the frame; the
+    pan must then produce exactly the pixels it would from the raw image
+    (whose first step is that same resize), just without redoing it."""
+    raw = Image.new("RGB", (640, 360), (20, 20, 60))
+    ImageDraw.Draw(raw).ellipse((100, 50, 500, 300), fill=(200, 40, 40))
+    pre_resized = raw.resize(FRAME_SIZE)
+
+    from_raw = np.array(apply_ken_burns(raw, progress=0.4))
+    from_pre_resized = np.array(apply_ken_burns(pre_resized, progress=0.4))
+
+    assert np.array_equal(from_raw, from_pre_resized)

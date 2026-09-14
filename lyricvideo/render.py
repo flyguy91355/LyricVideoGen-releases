@@ -116,7 +116,10 @@ def apply_ken_burns(
     zoom_end: float = 1.15,
     frame_size: tuple[int, int] = FRAME_SIZE,
 ) -> Image.Image:
-    img = image.resize(frame_size)
+    # assemble_video caches its backgrounds already frame-sized, so this
+    # first resample is skipped on the hot per-frame path; any other caller
+    # (the Settings preview, tests) still gets the same normalization.
+    img = image if image.size == tuple(frame_size) else image.resize(frame_size)
     zoom = zoom_start + (zoom_end - zoom_start) * progress
     w, h = img.size
     new_w, new_h = max(int(w * zoom), w), max(int(h * zoom), h)

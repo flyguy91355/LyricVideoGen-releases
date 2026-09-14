@@ -98,7 +98,11 @@ def assemble_video(
             real_key = _first_available_image_key(image_dir, key)
             path = image_dir / f"{real_key}.png" if real_key is not None else None
             if path is not None and path.exists():
-                image_cache[key] = Image.open(path).convert("RGB")
+                # Cached already scaled to the output frame: apply_ken_burns
+                # starts from a frame-sized image, and re-scaling the raw
+                # (differently-sized) generation on EVERY frame was a full
+                # extra resample per frame for the same pixels each time.
+                image_cache[key] = Image.open(path).convert("RGB").resize(frame_size)
             else:
                 image_cache[key] = Image.new("RGB", frame_size, fallback_color)
         return image_cache[key]
@@ -192,11 +196,19 @@ def assemble_video(
         return np.array(frame)
 
     total_duration = duration + countdown_duration
-    final_audio = (
-        CompositeAudioClip([audio_clip.set_start(countdown_duration)]) if countdown_beats > 0 else audio_clip
-    )
-    video_clip = VideoClip(make_frame, duration=total_duration).set_audio(final_audio)
-    video_clip.write_videofile(
-        str(out_path), fps=fps, codec=encoder, audio_codec="aac",
-        ffmpeg_params=["-crf", str(crf)],
-    )
+    try:
+        final_audio = (
+            CompositeAudioClip([audio_clip.set_start(countdown_duration)]) if countdown_beats > 0 else audio_clip
+        )
+        video_clip = VideoClip(make_frame, duration=total_duration).set_audio(final_audio)
+        video_clip.write_videofile(
+            str(out_path), fps=fps, codec=encoder, audio_codec="aac",
+            ffmpeg_params=["-crf", str(crf)],
+        )
+    finally:
+        # AudioFileClip holds an ffmpeg reader subprocess with the source file
+        # open; moviepy never closes it on its own (its Clip.close docstring
+        # says so explicitly), so every render leaked one until interpreter
+        # exit -- a whole batch run's worth of zombie ffmpeg processes, and on
+        # Windows a lock on each audio file for the rest of the session.
+        audio_clip.close()
