@@ -4,6 +4,8 @@ detection."""
 
 import subprocess
 import tarfile
+
+import pytest
 from pathlib import Path
 
 from lyricvideo.update.apply import (
@@ -42,6 +44,8 @@ def test_top_level_py_file_is_updatable():
 
 def test_top_level_sh_file_is_updatable():
     assert is_path_updatable("run_lyricvideogen.sh") is True
+    assert is_path_updatable("run_playalongvideoproduction.bat") is True
+    assert is_path_updatable("scripts/tool.bat") is False
 
 
 def test_env_file_is_never_updatable():
@@ -159,7 +163,10 @@ def test_symlinked_destination_is_never_overwritten(tmp_path):
     real_env = target_dir / ".env"
     real_env.write_text("SECRET=1", encoding="utf-8")
     symlink_path = target_dir / "lyricvideo" / "gui.py"
-    symlink_path.symlink_to(real_env)
+    try:
+        symlink_path.symlink_to(real_env)
+    except OSError as e:  # Windows without Developer Mode / admin can't create symlinks
+        pytest.skip(f"symlinks not creatable here: {e}")
 
     source_root = tmp_path / "release_source"
     (source_root / "lyricvideo").mkdir(parents=True)

@@ -2,9 +2,16 @@ from pathlib import Path
 
 import pytest
 
+# Mirrors lyricvideo.pipeline.default_font()'s own candidate list: Linux DejaVu/
+# Liberation first, then the bold fonts every Windows install ships with. Without
+# the Windows entries, every render/assemble/chord-diagram test silently skipped
+# on Windows (73 of them, found 2026-09-14) -- a whole layer of the suite that
+# looked green because it never ran.
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
 ]
 
 

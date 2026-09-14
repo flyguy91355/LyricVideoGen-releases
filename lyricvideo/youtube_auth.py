@@ -50,6 +50,14 @@ def load_credentials(token_path: Path = TOKEN_FILE):
         except Exception as exc:
             log.warning("Could not refresh YouTube credentials: %s", exc)
             return None
+    if credentials is None or not credentials.valid:
+        # Expired with no refresh token to renew it (a token file from a
+        # consent flow that never granted one) -- the file exists, but no
+        # real call can succeed with it. Report "not connected" so the
+        # owner reconnects, instead of handing back credentials that make
+        # every upload/comment action fail with an auth error later.
+        log.warning("Stored YouTube credentials are expired and can't be refreshed; reconnect")
+        return None
     return credentials
 
 

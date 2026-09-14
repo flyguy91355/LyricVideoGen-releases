@@ -18,14 +18,16 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
 
 ## Running it
 
+- **Linux and Windows both supported.** Launchers: `run_playalongvideoproduction.sh`
+  (Linux/macOS) and `run_playalongvideoproduction.bat` (Windows). Code never
+  hardcodes the venv interpreter path -- `lyricvideo/venv.py`'s `venv_python()`
+  resolves `.venv/bin/python` vs `.venv/Scripts/python.exe`; read every
+  `.venv/bin/python` below that way.
+  `.gitattributes` keeps `*.sh`/`.githooks/*` LF and `*.bat` CRLF. (HISTORY 2026-09-14.)
 - **GUI (normal use):** double-click the `PlayAlongVideoProduction` desktop icon, or
-  run `./run_playalongvideoproduction.sh` from the repo root. That script calls
-  `.venv/bin/python` directly rather than `source .venv/bin/activate` — a venv's
-  `bin/activate` bakes an absolute `VIRTUAL_ENV` path in at creation time, and this
-  venv still carries its pre-rename path (`/home/doug/LyricVideoGen/.venv`), so
-  sourcing it would silently put the wrong (or no) `python` first on `PATH`; the
-  venv's own `python` binary locates its site-packages relative to itself and needs
-  no activation. Supply just an audio
+  run `./run_playalongvideoproduction.sh` from the repo root. Launchers call the
+  venv's own `python` directly, never `source .venv/bin/activate` (stale baked-in
+  `VIRTUAL_ENV` path; HISTORY 2026-09-09). Supply just an audio
   file — title/artist/lyrics are identified and fetched automatically, chords are
   detected directly from the audio, and the title field is an editable override, not
   a required input — then click Generate; work dir (no Browse) falls back to
@@ -36,30 +38,18 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   self._on_close_window)` in `__init__` -- the only way to quit) confirms first
   if a Generate/Redo/Batch is actively running -- closing mid-run kills the
   pipeline (and any in-flight upload) partway through with no way to resume;
-  closes immediately, no prompt, whenever nothing is running. Real incident,
-  2026-09-10: the first attempt shipped `_on_close_window()` itself correctly
-  but never actually wired the `root.protocol(...)` binding, so clicking X
-  still closed unconditionally -- verifying by calling the handler method
-  directly proved the method's own logic but not that a real close ever
-  reaches it. Now verified by actually invoking the registered
-  `WM_DELETE_WINDOW` Tcl callback (`root.tk.call(root.protocol("WM_DELETE_WINDOW"))`),
-  not the Python method directly. A
+  closes immediately, no prompt, whenever nothing is running. Tests must invoke
+  the registered `WM_DELETE_WINDOW` Tcl callback, not the Python method (the
+  binding was once shipped unwired; HISTORY 2026-09-10). A
   "Batch: Process a Folder" section (`lyricvideo/batch.py` finds/resolves the
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or
   regenerated (backing up each one first, like Redo) for the whole batch; a
   file that errors is logged and skipped, never aborting the rest. The chosen
-  folder's path is never `.strip()`'d -- unlike the typed title/audio/work-dir
-  fields, this value comes verbatim from the OS file dialog, and a real folder
-  name can legitimately have leading or trailing whitespace. That alone wasn't
-  enough (real bug found live, 2026-09-10: a folder literally named
-  "batch music " with a trailing space still 404'd after removing the
-  `.strip()`, because the native folder-picker dialog itself drops the
-  trailing space before the path ever reaches this app's code) -- fixed with
-  `resolve_existing_folder()` in `lyricvideo/batch.py`, which falls back to
-  matching a sibling directory by whitespace-insensitive name when the exact
-  path the dialog returned doesn't exist, so the owner never has to rename a
-  folder to work around it. The batch folder field also remembers the last
+  folder's path is never `.strip()`'d (a real folder name can carry whitespace),
+  and `resolve_existing_folder()` in `lyricvideo/batch.py` recovers a folder
+  whose trailing space the native picker itself dropped (real 2026-09-10 bug;
+  HISTORY). The batch folder field also remembers the last
   folder used (`load_last_batch_folder`/`save_last_batch_folder` in
   `lyricvideo/batch.py`, a tiny separate JSON file at
   `~/.playalongvideoproduction/batch_state.json` -- deliberately not a
@@ -73,22 +63,18 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   button/comments panel plus a "⚙ Settings" button. Settings (live preview + the
   scrollable Settings panel) live in their own popup window (`_open_settings_window`,
   same transient/grab_set/lift/focus_force/brief-topmost treatment as the Update
-  Available dialog) rather than an embedded tab (owner feedback, 2026-09-11: felt
-  cramped/"ugly"; a bare `CTkTabview` "Settings" tab was the 2026-09-10 fix before
-  that) -- re-opening while already open lifts the existing window instead of
+  Available dialog) rather than an embedded tab (HISTORY 2026-09-11) -- re-opening
+  while already open lifts the existing window instead of
   building a second `SettingsPanel` bound to the same `Settings` object. Closing the
   popup (its own X button) with unsaved changes prompts the same discard
   confirmation as the panel's own Discard button, then reverts `self.settings` to
   the on-disk baseline before destroying the window. `_open_settings_window` wraps
   its own `SettingsPanel(...)` construction in `self._suppress_settings_save = True`
-  (reset to `False` right after) -- SettingsPanel's own `load_from()` fires
-  `on_change` once before that assignment completes, so without this guard
-  `_on_settings_changed`'s `self.settings_panel.collect()` hits an attribute that
-  doesn't exist yet (real bug found live, 2026-09-11: silently swallowed by
-  Tkinter with no visible error, aborting construction before `.pack()` ever ran --
-  the whole panel invisible below the live preview). Startup uses the identical
-  guard for the identical reason; it only resets the flag once, so a second,
-  later construction needs its own re-arm. The scrollable Settings panel
+  (reset to `False` right after): SettingsPanel's `load_from()` fires `on_change`
+  before that assignment completes, and `_on_settings_changed` would hit a
+  not-yet-assigned attribute (real 2026-09-11 bug, silently swallowed by
+  Tkinter; HISTORY). Startup uses the identical guard; it resets the flag only
+  once, so a later construction needs its own re-arm. The scrollable Settings panel
   (`lyricvideo/settings_panel.py`) is bound to a `Settings` object
   (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
   loaded on launch and saved only on explicit Save). Every field shows its own
@@ -108,7 +94,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   `Settings` object and unpacks it.
 - **CLI (staged/resumable, useful for debugging one stage):**
   ```bash
-  cd /home/doug/PlayAlongVideoProduction
+  cd <repo root>
   .venv/bin/python -m lyricvideo.pipeline --audio <path> --work-dir <dir> \
       [--title "<override>"] \
       [--stage identify|separate|fetch_lyrics|align|detect_chords|images|render]
@@ -129,10 +115,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    A caller-supplied `--title` overrides the identified title for display/filename
    purposes only — artist/duration always come from this stage's own resolution.
 2. **separate** (`separate.py`) — Demucs two-stem split of `--audio` into
-   vocals/instrumental (CPU). Output path convention
+   vocals/instrumental on `compute_device()` -- `cuda` when torch sees a usable
+   GPU, else `cpu`; `LYRICVIDEO_DEVICE=cpu|cuda` overrides. Output path convention
    (`work_dir/htdemucs/<audio_stem>/{vocals,no_vocals}.wav`) is what makes
    `--stage` resumption work — later stages look for the file at that same
-   path rather than re-running Demucs.
+   path; a resume at fetch_lyrics/align/detect_chords whose stems are missing
+   re-runs Demucs instead of crashing. Demucs's own output is relayed through
+   `sys.stdout` (`_run_demucs`) so the GUI log shows its progress.
 3. **fetch_lyrics** (`fetch_lyrics.py` + `vocal_onset.py`) — plain lyric-line
    text, no manual input required: a sidecar `.lrc`/`.txt` next to the audio file,
    then lrclib.net (edition-consensus voting across every matching-length record,
@@ -142,8 +131,11 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    LRC carries are discarded — real timing always comes from the next stage.
 4. **align** — forced word-level alignment (`align.py`) against the isolated
    vocal stem, timing `fetch_lyrics`'s text; `combine.py` merges the timing onto
-   the lines. `align_words()` has no idea where its input words came from, so this
-   is the same alignment mechanism the original tab-PDF design used.
+   the lines. MMS_FA knows only a-z and `'`: `_normalize_word_for_alignment`
+   spells digit runs out as sung ("31" -> "thirtyone", "1975" ->
+   "nineteenseventyfive", "1st" -> "first"), reads `&` as "and", and gives a
+   word with nothing left the model's `*` star token instead of raising
+   (issue #3: a lyric word "31" aborted the stage). Display text never changes.
 5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
    identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC) analyzes
    Demucs's `no_vocals.wav`; its 602-class vocabulary collapses to this
@@ -152,28 +144,28 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    wheels — **`.venv` runs on Python 3.11**; see
    `requirements.txt` pins first. Only chord source, no tab/sheet.
 6. **images** — `imagery.py`: one Claude call summarizes the whole song's gist
-   once (`summarize_song_gist`), then each *unique* lyric line AND each distinct
-   chord label that occurs during an instrumental gap (`_instrumental_chord_labels`
-   in `pipeline.py`) gets its own generated background image (Replicate), cached by
-   content hash so a repeated chorus or a repeated chord anywhere in the song
-   reuses one image instead of paying to regenerate it. Also reuses any
-   `images_backup_*/` archive left in the work dir before generating new images.
-   `get_or_generate_image` retries a failed generation up to
-   `_MAX_GENERATION_ATTEMPTS` (3) times before falling back to a plain-color
-   placeholder -- but a flat placeholder visibly breaks a finished video (real
-   owner complaint, 2026-09-10), so it's never left as the final answer for a
-   line unless every single image in the whole song failed: once every line's
-   and instrumental caption's image has been generated for the run,
-   `substitute_fallback_images` (also in `imagery.py`, called from the images
-   stage in `pipeline.py`) replaces any remaining fallback with a copy of the
-   nearest real, successfully-generated image in the song's own sequence
-   (`is_fallback_image` detects one by its unmistakable signature -- a single
-   perfectly solid color, which a real AI-generated image never is).
+   once (`summarize_song_gist`), then each *unique* lyric line AND each
+   instrumental-stretch caption (`layout.instrumental_image_captions()` -- the
+   SAME gap/segment walk `build_image_timeline()` renders from, so every key the
+   render looks up was generated; an uncovered sliver adopts its neighboring
+   chord's caption, and the generic `[Instrumental]` caption only exists for a
+   song with no chords at all) gets its own generated background image
+   (Replicate), cached by content hash so a repeated chorus or chord reuses one
+   image. Also reuses any `images_backup_*/` archive in the work dir.
+   `get_or_generate_image` retries a failed generation `_MAX_GENERATION_ATTEMPTS`
+   (3) times before writing a plain-color placeholder; `substitute_fallback_images`
+   then replaces any placeholder with the nearest real image in the song's own
+   sequence (`is_fallback_image`: a single perfectly solid color), unless every
+   image failed. `assemble_video()`'s `get_image` applies the same rule per
+   frame: a key with no file behind it renders the nearest real image, never a
+   flat color. A missing `REPLICATE_API_TOKEN` raises a clear RuntimeError here.
 7. **render** — `assemble.py`/`layout.py`/`render.py`: composites scrolling lyrics
    (karaoke word-highlight sweep, Ken Burns pans), a NOW/NEXT/segmented-timeline
    chord bar, a Key/BPM badge, and a chord fingering legend
    (`lyricvideo/chord_shapes.py` + `chord_diagram.py`) over the audio into the
-   final mp4 (`work_dir/<slugified-title>.mp4`). The legend shows one small
+   final mp4 (`work_dir/<slugified-title>.mp4`); all text is drawn via
+   `render.load_font()` (a per-thread font cache -- never share FreeType faces
+   across the GUI and worker threads). The legend shows one small
    guitar diagram per unique chord in the song (`pipeline.ordered_unique_chords()`,
    first-appearance order), upper-left, with the currently-playing chord's
    diagram highlighted; fingering data is extracted from `tombatossals/chords-db`
@@ -355,14 +347,10 @@ and allow-listed archive extraction/copy
 (`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
 `CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
 `work/`, `.venv/`). `self.top_frame` (the `before=` anchor `_poll_update_queue`
-packs the banner above) must be a widget managed by `.pack()` directly under
-`self.root` -- real bug found live 2026-09-09 (never once showed a real
-available update across multiple relaunches): the CustomTkinter rebuild left
-`top_frame` pointing at `left`, which is `.grid()`-managed inside the `body`
-frame, so every attempt raised `TclError: window isn't packed`, silently (a
-background-thread Tkinter callback exception prints to a log the desktop-
-launched app's owner never sees). Fixed to anchor on `body` itself, which
-really is pack()-managed under `root` like the banner. `gui.py` checks once on
+packs the banner above) must be a `.pack()`-managed child of `self.root` --
+it is `body`; anchoring on the grid-managed `left` raised `TclError: window
+isn't packed`, silently, so the banner never showed (real 2026-09-09 bug;
+HISTORY). `gui.py` checks once on
 launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
@@ -381,7 +369,8 @@ the same reason -- real recurrence, 2026-09-10 (owner screenshots): with
 no `parent=` given it wasn't WM-recognized as that dialog's child and
 could open behind it. Fixed by passing `parent=self._update_dialog_window`
 and briefly forcing that dialog topmost around the call.
-Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (the
+Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs
+both launchers, `.sh` and `.bat`; the
 releases repo itself was created 2026-09-08, public/unlisted, no source
 code — just synced snapshots + release notes). The sync step exports from
 git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
@@ -428,7 +417,8 @@ Closing the app (or a crash) with unsaved changes simply loses them, by design.
 current session's own Generate/Redo/Batch always uses your latest tweak) -- only
 the on-disk file itself is gated behind the explicit Save click. `pipeline.py`'s font-resolution helper
 was renamed `_default_font` -> `default_font` (no longer module-private, since the
-preview needs it too).
+preview needs it too). Its candidates cover Linux DejaVu/Liberation and Windows
+Arial Bold / Segoe UI Bold.
 
 `lyricvideo/chord_shapes.py` holds guitar fingering data for every chord
 `detect_chords()` can produce, extracted from tombatossals/chords-db (MIT).
@@ -511,12 +501,14 @@ A verification call that itself fails (network hiccup) fails CLOSED here
 (skip, never risk a duplicate upload). Any upload failure is caught and
 logged as a warning, never raised. A "YouTube: not connected"/"YouTube:
 connected as <channel>" status label + "Connect to YouTube" button sit
-above the Settings panel; a manual "Upload to YouTube" button next to the
+above the Settings panel (refreshed on a background thread -- YouTube is
+never called from the GUI thread); a manual "Upload to YouTube" button next to the
 Status line (enabled once a video finishes and YouTube is connected)
 always performs a fresh `schedule_upload()` immediately, bypassing the
 auto-upload skip-checks -- the owner's deliberate override for a
 correction or any other manual re-post. `_update_upload_button_state(work_dir)`
-swaps that button for a plain "✓ Uploaded to YouTube" label in the same
+(verification on a background thread; a newer request supersedes an older
+one's result) swaps that button for a plain "✓ Uploaded to YouTube" label in the same
 spot whenever a saved `youtube_state.json` record's video_id still
 verifiably exists on YouTube (same `video_exists()` check as
 `_maybe_upload_to_youtube`, same fail-closed behavior on a verification
@@ -560,14 +552,19 @@ self-heal above); short of that specific case, there is still no
 automated "corrected video" relinking -- an in-session correction is the
 owner's own manual call via the upload button.
 
-This whole feature (11 tasks) is now complete and tested (363 tests
-passing). What's NOT yet verified: the interactive OAuth `connect()` flow
-and live comment fetch/reply, both of which need the owner's own real
-Google Cloud `client_secret_*.json` and a real connected channel to
-exercise end-to-end.
+This whole feature is complete and tested. What's NOT yet verified: the
+interactive OAuth `connect()` flow and live comment fetch/reply, both of which
+need the owner's own real Google Cloud `client_secret_*.json` and a real
+connected channel to exercise end-to-end. `load_credentials()` returns `None`
+("not connected") for a stored token that's expired with no refresh token.
 
 ## Tests
 
 ```bash
-cd /home/doug/PlayAlongVideoProduction && .venv/bin/python -m pytest tests/ -v
+cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scripts/python.exe
 ```
+
+Two tests self-skip on Windows (trailing-space folder; symlinked destination).
+`tests/conftest.py`'s font fixture lists Windows fonts too (before 2026-09-14,
+73 render tests silently skipped there). The align tests need FFmpeg's shared
+DLLs on PATH (torchcodec) -- an environment requirement, not a code one.

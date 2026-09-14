@@ -429,10 +429,19 @@ def test_draw_scene_current_and_next_line_never_overlap_when_both_wrap(test_font
         "Long you live, and high you fly, but only if you ride the tide, "
         "balanced on the biggest wave, you race towards an early grave"
     )
+    # Every current-line word is marked sung, so the current block is drawn as
+    # solid green highlight boxes (WORD_HIGHLIGHT_BG_COLOR, spanning each row's
+    # full text-box height) with white text; the next line is drawn in a red
+    # text_color nothing else on the frame uses. The two blocks' pixel rows
+    # can then be told apart by color alone, whatever font (and so whatever
+    # row count) this machine renders with -- the earlier version of this
+    # test asserted a fixed 280px total span calibrated to DejaVu Sans Bold's
+    # metrics, which simply fails on a machine whose bold font is narrower
+    # (Arial Bold wraps the same text onto fewer rows).
     scene = Scene(
         lines=[
             SceneLine(
-                words=[SceneWord(text=w) for w in current_text.split()],
+                words=[SceneWord(text=w, word_active=True) for w in current_text.split()],
                 is_current=True, distance_from_current=0,
             ),
             SceneLine(
@@ -444,21 +453,18 @@ def test_draw_scene_current_and_next_line_never_overlap_when_both_wrap(test_font
     )
     bg = Image.new("RGB", FRAME_SIZE, (0, 0, 0))
 
-    frame = np.array(draw_scene(scene, bg, test_font_path))
+    frame = np.array(draw_scene(scene, bg, test_font_path, text_color=(220, 0, 0))).astype(int)
 
-    rows_with_content = np.any(frame != 0, axis=(1, 2))
-    content_rows = np.where(rows_with_content)[0]
-    assert content_rows.size > 0
-
-    # With the old fixed single-row line_height (77px for this font/size) the
-    # next line's 2-row block would land squarely inside the current line's
-    # own 3-row block (measured directly: total span collapses to ~225px and
-    # the two blocks' pixel ranges overlap). The dynamic per-line-height step
-    # this test guards keeps them apart, spreading the real content across
-    # ~317px. 280 sits clearly between the two -- only the fixed behavior
-    # reaches it.
-    total_span = content_rows.max() - content_rows.min()
-    assert total_span >= 280
+    r, g, b = frame[..., 0], frame[..., 1], frame[..., 2]
+    is_highlight = (g > 150) & (r < 120)             # the green boxes behind the current line
+    is_next_text = (r > 120) & (g < 60) & (b < 60)   # the red next-line text
+    current_rows = np.where(np.any(is_highlight, axis=1))[0]
+    next_rows = np.where(np.any(is_next_text, axis=1))[0]
+    assert current_rows.size > 0 and next_rows.size > 0
+    # Both lines must actually have wrapped for this test to mean anything.
+    assert current_rows.max() - current_rows.min() > 2 * 60
+    # The whole current block sits strictly above the whole next block.
+    assert current_rows.max() < next_rows.min()
 
 
 def test_draw_scene_wrapped_line_keeps_the_configured_font_size(test_font_path):
@@ -613,3 +619,35 @@ def test_draw_support_overlay_scale_makes_the_overlay_bigger(test_font_path):
     large = np.array(draw_support_overlay(bg, "Support: ko-fi.com/x", test_font_path, scale=2.0))
 
     assert (large.any(axis=2)).sum() > (small.any(axis=2)).sum()
+
+
+def test_load_font_returns_the_same_object_for_the_same_path_and_size(test_font_path):
+    from lyricvideo.render import load_font
+
+    a = load_font(test_font_path, 30)
+    b = load_font(test_font_path, 30)
+    c = load_font(test_font_path, 31)
+
+    assert a is b
+    assert c is not a
+    assert c.size == 31
+
+
+def test_load_font_cache_is_per_thread(test_font_path):
+    """FreeType faces must never be shared across threads (the Settings
+    preview on the GUI thread renders concurrently with a worker-thread
+    render), so each thread gets its own cached font objects."""
+    import threading
+    from lyricvideo.render import load_font
+
+    main_font = load_font(test_font_path, 30)
+    seen = {}
+
+    def worker():
+        seen["font"] = load_font(test_font_path, 30)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    assert seen["font"] is not main_font

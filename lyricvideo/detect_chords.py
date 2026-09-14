@@ -134,7 +134,11 @@ def _fold_tempo(bpm: float) -> float:
 
 
 def _merge_short_events(events: list[ChordEvent], min_seconds: float) -> list[ChordEvent]:
-    """Absorb segments shorter than `min_seconds` into their neighbours."""
+    """Absorb segments shorter than `min_seconds` into their neighbours.
+    Works on copies -- the input list's own ChordEvents are never edited in
+    place (the `events[i + 1].start = ...` path below would otherwise reach
+    back into the caller's objects)."""
+    events = [ChordEvent(e.start, e.end, e.label) for e in events]
     if min_seconds <= 0 or len(events) < 2:
         return events
     out: list[ChordEvent] = []

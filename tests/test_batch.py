@@ -1,3 +1,6 @@
+import sys
+
+import pytest
 from pathlib import Path
 
 from lyricvideo.batch import (
@@ -44,6 +47,10 @@ def test_resolve_existing_folder_returns_real_dir_unchanged(tmp_path):
     assert resolve_existing_folder(real) == real
 
 
+@pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="NTFS strips trailing spaces from folder names, so the scenario cannot exist on Windows",
+)
 def test_resolve_existing_folder_recovers_dropped_trailing_space(tmp_path):
     (tmp_path / "batch music ").mkdir()
     dialog_returned = tmp_path / "batch music"  # trailing space missing

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -62,6 +63,30 @@ KEN_BURNS_PRESETS: list[tuple[float, float, float, float, float, float]] = [
     (0.5, 1.0, 0.5, 0.0, 1.0, 1.15),
     (0.5, 0.5, 0.5, 0.5, 1.18, 1.0),
 ]
+
+
+_font_cache_local = threading.local()
+
+
+def load_font(font_path: str, size: int) -> ImageFont.FreeTypeFont:
+    """ImageFont.truetype(font_path, size), cached per (path, size) -- PER
+    THREAD, since FreeType face objects aren't safe to share between the
+    GUI thread (the live Settings preview) and a pipeline render running on
+    a worker thread at the same time. Every draw_* helper here and in
+    chord_diagram.py used to call ImageFont.truetype directly, re-reading
+    the font file from disk and rebuilding the face for every font size on
+    EVERY frame -- around 25 loads per frame with a typical chord legend,
+    i.e. minutes of pure font loading over a full-length render (found by
+    code review, 2026-09-14). The set of distinct sizes is tiny, so the
+    cache stays tiny."""
+    cache = getattr(_font_cache_local, "fonts", None)
+    if cache is None:
+        cache = _font_cache_local.fonts = {}
+    key = (font_path, size)
+    font = cache.get(key)
+    if font is None:
+        font = cache[key] = ImageFont.truetype(font_path, size)
+    return font
 
 
 def crossfade_backgrounds(prev: Image.Image, current: Image.Image, blend: float) -> Image.Image:
@@ -238,7 +263,7 @@ def draw_scene(
 ) -> Image.Image:
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
-    font = ImageFont.truetype(font_path, font_size)
+    font = load_font(font_path, font_size)
 
     center_y = frame_size[1] // 2
     ascent, descent = font.getmetrics()
@@ -314,7 +339,7 @@ def _lane_label_font(label: str, draw, base_font, font_path: str, available_widt
     shrunk_size = max(min_size, int(base_font.size * scale))
     if shrunk_size >= base_font.size:
         return base_font
-    return ImageFont.truetype(font_path, shrunk_size)
+    return load_font(font_path, shrunk_size)
 
 
 def _lane_label_visible(label: str, draw, font, available_width: float) -> bool:
@@ -359,11 +384,11 @@ def draw_chord_bar(
         layout["chord_box"], layout["now_box"], layout["next_box"], layout["lane_box"], layout["badge_xy"],
     )
 
-    label_font = ImageFont.truetype(font_path, 20)
-    now_font = ImageFont.truetype(font_path, chord_now_size)
-    next_font = ImageFont.truetype(font_path, chord_next_size)
-    small_font = ImageFont.truetype(font_path, 24)
-    lane_font = ImageFont.truetype(font_path, 30)
+    label_font = load_font(font_path, 20)
+    now_font = load_font(font_path, chord_now_size)
+    next_font = load_font(font_path, chord_next_size)
+    small_font = load_font(font_path, 24)
+    lane_font = load_font(font_path, 30)
 
     overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -466,7 +491,7 @@ def draw_countdown(
     box = (cx - box_side // 2, cy - box_side // 2, cx + box_side // 2, cy + box_side // 2)
     draw.rounded_rectangle(box, radius=int(box_side * 0.18), fill=BOX_FILL, outline=(*accent_color, 255), width=3)
 
-    font = ImageFont.truetype(font_path, int(box_side * 0.5))
+    font = load_font(font_path, int(box_side * 0.5))
     label = str(seconds_remaining)
     label_w = draw.textlength(label, font=font)
     draw.text((cx - label_w / 2, cy - box_side * 0.28), label, font=font, fill=(*accent_color, 255))
@@ -518,7 +543,7 @@ def draw_support_overlay(
 
     overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    font = ImageFont.truetype(font_path, font_size)
+    font = load_font(font_path, font_size)
 
     text_w = draw.textlength(text, font=font)
     ascent, descent = font.getmetrics()

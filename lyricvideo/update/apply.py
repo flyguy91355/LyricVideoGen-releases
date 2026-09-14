@@ -64,8 +64,8 @@ def is_path_updatable(relative_path: str) -> bool:
     """True iff an update is allowed to overwrite this path (relative to
     the repo root). Checked in order: traversal/absolute-path rejection,
     then the deny-list (always wins), then the explicit allow-list, then a
-    fallback rule for a bare top-level *.py or *.sh file (e.g.
-    run_lyricvideogen.sh)."""
+    fallback rule for a bare top-level *.py, *.sh or *.bat file (the
+    Linux and Windows launcher scripts)."""
     normalized = relative_path.replace("\\", "/")
 
     if _is_traversal_unsafe(normalized):
@@ -84,7 +84,7 @@ def is_path_updatable(relative_path: str) -> bool:
         if _matches_path_entry(normalized, allowed):
             return True
 
-    if "/" not in normalized and (normalized.endswith(".py") or normalized.endswith(".sh")):
+    if "/" not in normalized and normalized.endswith((".py", ".sh", ".bat")):
         return True
 
     return False

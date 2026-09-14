@@ -18,6 +18,7 @@ import httpx
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 
+from .venv import venv_python
 from .batch import (
     find_audio_files,
     load_last_batch_folder,
@@ -143,8 +144,10 @@ ctk.set_default_color_theme("blue")
 
 class _QueueWriter:
     """File-like object that pushes writes into a queue instead of a real
-    stream -- lets stdout/stderr from the worker thread (Demucs/moviepy's own
-    progress output) reach the GUI's log widget instead of the terminal."""
+    stream -- lets stdout/stderr from the worker thread (moviepy's own
+    progress output, and Demucs's, which separate._run_demucs relays through
+    sys.stdout precisely so it lands here) reach the GUI's log widget
+    instead of the terminal."""
 
     def __init__(self, q: "queue.Queue"):
         self._queue = q
@@ -189,6 +192,7 @@ class LyricVideoGUI:
         self._batch_index = 0
         self._batch_results = {"succeeded": [], "skipped_already_done": [], "failed": []}
         self._last_work_dir: Path | None = None
+        self._upload_state_request = 0  # see _update_upload_button_state
 
         self.title_var.trace_add("write", self._on_title_changed)
 
@@ -681,9 +685,8 @@ class LyricVideoGUI:
 
                 if requirements_changed(old_requirements, new_requirements):
                     self._update_queue.put(("apply_status", "Installing dependencies..."))
-                    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
                     pip_result = subprocess.run(
-                        [str(venv_python), "-m", "pip", "install", "-r", "requirements.txt"],
+                        [str(venv_python(PROJECT_ROOT)), "-m", "pip", "install", "-r", "requirements.txt"],
                         cwd=extracted_root,
                         capture_output=True,
                         text=True,
@@ -730,8 +733,7 @@ class LyricVideoGUI:
         self._update_apply_button.configure(state="normal")
 
     def _on_relaunch_clicked(self) -> None:
-        venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
-        subprocess.Popen([str(venv_python), "-m", "lyricvideo.gui"], cwd=str(PROJECT_ROOT))
+        subprocess.Popen([str(venv_python(PROJECT_ROOT)), "-m", "lyricvideo.gui"], cwd=str(PROJECT_ROOT))
         self.root.destroy()
 
     def _on_new_song(self) -> None:
@@ -922,6 +924,7 @@ class LyricVideoGUI:
         self._running = True
         self.generate_button.configure(state="disabled")
         self.redo_button.configure(state="disabled")
+        self.batch_button.configure(state="disabled")
         self.status_var.set("Starting...")
         self.progress_bar.set(0.0)
         self._clear_log()
@@ -970,6 +973,7 @@ class LyricVideoGUI:
         self._running = True
         self.generate_button.configure(state="disabled")
         self.redo_button.configure(state="disabled")
+        self.batch_button.configure(state="disabled")
         self.status_var.set("Starting...")
         self.progress_bar.set(0.0)
         self._clear_log()
@@ -984,15 +988,30 @@ class LyricVideoGUI:
         self.root.after(100, self._poll_queue)
 
     def _refresh_youtube_status(self) -> None:
+        """Refreshes the "YouTube: ..." status label on a background thread.
+        Both load_credentials() (a token refresh is a real network call) and
+        get_channel_title() (an API call) can block for seconds -- or for a
+        whole network timeout when offline -- and this used to run them
+        straight on the GUI thread from __init__, so the main window couldn't
+        even finish appearing until YouTube answered (found by code review,
+        2026-09-14). The 20-minute periodic tick already did it this way;
+        the launch-time and post-connect refreshes now match it."""
+        threading.Thread(target=self._refresh_youtube_status_worker, daemon=True).start()
+
+    def _youtube_status_text(self) -> str:
+        """The connect-status label's text, computed with real network calls
+        -- only ever call this from a background thread."""
         credentials = youtube_auth.load_credentials()
         if credentials is None:
-            self.youtube_status_var.set("YouTube: not connected")
-            return
+            return "YouTube: not connected"
         try:
-            channel = youtube_auth.get_channel_title(credentials)
-            self.youtube_status_var.set(f"YouTube: connected as {channel}")
+            return f"YouTube: connected as {youtube_auth.get_channel_title(credentials)}"
         except Exception:
-            self.youtube_status_var.set("YouTube: connected (channel name unavailable)")
+            return "YouTube: connected (channel name unavailable)"
+
+    def _refresh_youtube_status_worker(self) -> None:
+        text = self._youtube_status_text()
+        self.root.after(0, lambda: self.youtube_status_var.set(text))
 
     def _update_upload_button_state(self, work_dir: Path | None) -> None:
         """Swaps between the clickable "Upload to YouTube" button and a plain
@@ -1002,9 +1021,32 @@ class LyricVideoGUI:
         video on the channel. Re-verifies the saved video_id against
         YouTube's real state (not just "a local record exists") so the label
         doesn't keep claiming a video is live after the owner deleted it
-        directly on YouTube -- see _maybe_upload_to_youtube's docstring."""
+        directly on YouTube -- see _maybe_upload_to_youtube's docstring.
+
+        That verification runs on a background thread: video_exists() is a
+        real API round trip (and load_credentials() can refresh a token over
+        the network), and this used to make both straight from the GUI
+        thread -- freezing the whole window for the round trip, or a full
+        timeout when offline, every time a video finished or New Song was
+        clicked (found by code review, 2026-09-14). The button shows
+        disabled while a check is in flight, and a newer request always
+        supersedes an older one's result, whichever thread answers first."""
+        self._upload_state_request += 1
+        request_id = self._upload_state_request
+        self.upload_status_label.pack_forget()
+        self.upload_button.configure(state="disabled")
+        self.upload_button.pack(side="left", padx=(12, 0))
+        if work_dir is None:
+            # New Song / nothing finished yet: there's no video to upload, so
+            # the button stays disabled -- no point asking YouTube anything.
+            return
+        threading.Thread(
+            target=self._upload_button_state_worker,
+            args=(load_youtube_state(work_dir), request_id), daemon=True,
+        ).start()
+
+    def _upload_button_state_worker(self, state, request_id: int) -> None:
         credentials = youtube_auth.load_credentials()
-        state = load_youtube_state(work_dir) if work_dir is not None else None
         already_uploaded = state is not None
         if already_uploaded and credentials is not None:
             try:
@@ -1012,12 +1054,20 @@ class LyricVideoGUI:
                 already_uploaded = video_exists(youtube_client, state.video_id)
             except Exception:
                 pass  # can't verify right now -- fail closed, keep showing "uploaded"
+        connected = credentials is not None
+        self.root.after(
+            0, lambda: self._apply_upload_button_state(request_id, already_uploaded, connected),
+        )
+
+    def _apply_upload_button_state(self, request_id: int, already_uploaded: bool, connected: bool) -> None:
+        if request_id != self._upload_state_request:
+            return  # a newer request (another song finished, New Song clicked) supersedes this one
         if already_uploaded:
             self.upload_button.pack_forget()
             self.upload_status_label.pack(side="left", padx=(12, 0))
             return
         self.upload_status_label.pack_forget()
-        self.upload_button.configure(state="normal" if credentials is not None else "disabled")
+        self.upload_button.configure(state="normal" if connected else "disabled")
         self.upload_button.pack(side="left", padx=(12, 0))
 
     def _on_connect_youtube(self) -> None:
@@ -1193,16 +1243,9 @@ class LyricVideoGUI:
         expires mid-session (Google's own 7-day limit on an unverified/
         Testing-mode app, which this one always is for personal use) would
         only be noticed at next app launch."""
-        credentials = youtube_auth.load_credentials()
-        if credentials is None:
-            self.root.after(0, lambda: self.youtube_status_var.set("YouTube: not connected"))
-            return
-        try:
-            channel = youtube_auth.get_channel_title(credentials)
-            status_text = f"YouTube: connected as {channel}"
-        except Exception:
-            status_text = "YouTube: connected (channel name unavailable)"
+        status_text = self._youtube_status_text()
         self.root.after(0, lambda: self.youtube_status_var.set(status_text))
+        # Returns immediately on its own when there are no credentials.
         self._check_youtube_comments_worker()
 
     def _run_worker(

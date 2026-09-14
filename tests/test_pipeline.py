@@ -9,8 +9,8 @@ from lyricvideo.pipeline import (
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
-    _instrumental_chord_labels,
     ordered_unique_chords,
+    song_end_time,
 )
 from lyricvideo.settings import Settings
 
@@ -196,20 +196,108 @@ def test_run_pipeline_detect_chords_writes_chord_track_onto_song(tmp_path, monke
     assert saved.chord_track.events[0].label == "C"
 
 
-def test_instrumental_chord_labels_skips_chords_covered_by_a_sung_line():
-    lines = [LyricLine(start_time=0.0, end_time=2.0)]
-    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C"), ChordEvent(2.0, 4.0, "G")])
+def test_song_end_time_is_the_later_of_last_chord_and_last_line():
+    song = Song(
+        title="t", audio_path="a.mp3",
+        lines=[LyricLine(words=[Word(word="hi", start_time=0.0, end_time=12.5)], start_time=0.0, end_time=12.5)],
+        chord_track=ChordTrack(events=[ChordEvent(0.0, 10.0, "C")]),
+    )
+    assert song_end_time(song) == 12.5
 
-    assert _instrumental_chord_labels(lines, chord_track) == ["G"]
+    song.chord_track = ChordTrack(events=[ChordEvent(0.0, 20.0, "C")])
+    assert song_end_time(song) == 20.0
 
 
-def test_instrumental_chord_labels_dedupes_repeated_labels():
-    lines = []
-    chord_track = ChordTrack(events=[
-        ChordEvent(0.0, 2.0, "Am"), ChordEvent(2.0, 4.0, "F"), ChordEvent(4.0, 6.0, "Am"),
-    ])
+def test_song_end_time_is_zero_for_an_empty_song():
+    assert song_end_time(Song(title="t", audio_path="a.mp3")) == 0.0
 
-    assert _instrumental_chord_labels(lines, chord_track) == ["Am", "F"]
+
+def test_run_pipeline_images_stage_generates_every_instrumental_caption_the_timeline_needs(tmp_path, monkeypatch):
+    """The images stage must generate an image for every instrumental key the
+    render's own image timeline can look up -- including a chord that only
+    OVERLAPS a gap's edge (its midpoint inside a sung line), which the old
+    midpoint rule skipped, leaving that stretch a flat placeholder color."""
+    _patch_common(monkeypatch, tmp_path)
+    # Sung 0-2s; chords C 0-3 (midpoint 1.5 is inside the line, but 2-3 is a
+    # real instrumental stretch) and G 3-10.
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines", lambda *a, **k: ["hello there"])
+    monkeypatch.setattr("lyricvideo.pipeline.align_words", lambda vocals_path, words: [(0.0, 1.0), (1.0, 2.0)])
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.detect_chords",
+        lambda instrumental_stem_path, **kwargs: ChordTrack(
+            events=[ChordEvent(0.0, 3.0, "C"), ChordEvent(3.0, 10.0, "G")], key="C major", bpm=100.0,
+        ),
+    )
+    captions = []
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.get_or_generate_image",
+        lambda client, token, gist, text, images_dir, **k: captions.append(text) or Path("x"),
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert captions == ["hello there", "[Instrumental — chord: C]", "[Instrumental — chord: G]"]
+
+
+def test_run_pipeline_resuming_past_separate_reruns_demucs_when_stems_are_missing(tmp_path, monkeypatch):
+    """A resume at fetch_lyrics/align/detect_chords reads the Demucs stems; if
+    they aren't on disk (htdemucs/ deleted, or never produced here) the run
+    must re-separate rather than crash on the missing file."""
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "song_info.json").write_text(
+        json.dumps({"title": "t", "artist": "a", "duration": 10.0, "alt_titles": []}), encoding="utf-8",
+    )
+    reported = []
+
+    run_pipeline(Path("audio.mp3"), work_dir, start_stage="fetch_lyrics", progress_callback=reported.append)
+
+    assert reported[:2] == ["separate", "fetch_lyrics"]
+
+
+def test_run_pipeline_resuming_past_separate_skips_demucs_when_stems_exist(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    stems = work_dir / "htdemucs" / "audio"
+    stems.mkdir(parents=True)
+    (stems / "vocals.wav").write_bytes(b"fake")
+    (stems / "no_vocals.wav").write_bytes(b"fake")
+    (work_dir / "song_info.json").write_text(
+        json.dumps({"title": "t", "artist": "a", "duration": 10.0, "alt_titles": []}), encoding="utf-8",
+    )
+    reported = []
+
+    run_pipeline(Path("audio.mp3"), work_dir, start_stage="fetch_lyrics", progress_callback=reported.append)
+
+    assert "separate" not in reported
+
+
+def test_run_pipeline_resuming_at_images_never_needs_the_stems(tmp_path, monkeypatch):
+    """images/render never read the stems, so a resume there must not trigger
+    a (slow) re-separation just because htdemucs/ is gone."""
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "song_info.json").write_text(
+        json.dumps({"title": "t", "artist": "a", "duration": 10.0, "alt_titles": []}), encoding="utf-8",
+    )
+    save_song(Song(title="t", audio_path="a.mp3"), work_dir / "lyrics_timed.json")
+    reported = []
+
+    run_pipeline(Path("audio.mp3"), work_dir, start_stage="images", progress_callback=reported.append)
+
+    assert "separate" not in reported
+
+
+def test_run_pipeline_images_stage_explains_a_missing_replicate_token(tmp_path, monkeypatch):
+    import pytest
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError, match="REPLICATE_API_TOKEN"):
+        run_pipeline(Path("audio.mp3"), tmp_path / "work")
 
 
 def test_ordered_unique_chords_preserves_first_seen_order():

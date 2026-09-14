@@ -90,12 +90,30 @@ def assemble_video(
 
     def get_image(key: str) -> Image.Image:
         if key not in image_cache:
-            path = image_dir / f"{key}.png"
-            if path.exists():
+            # A key with no file behind it (an instrumental caption the images
+            # stage didn't generate, or a stale cache dir) must never render as
+            # a flat placeholder color while ANY real image exists for this
+            # song -- the same rule the countdown already follows, applied to
+            # every frame (real owner complaint class, "blank screen").
+            real_key = _first_available_image_key(image_dir, key)
+            path = image_dir / f"{real_key}.png" if real_key is not None else None
+            if path is not None and path.exists():
                 image_cache[key] = Image.open(path).convert("RGB")
             else:
                 image_cache[key] = Image.new("RGB", frame_size, fallback_color)
         return image_cache[key]
+
+    # The countdown's background is the same for every lead-in frame; resolve
+    # it once (a scene build plus a directory scan) instead of per frame.
+    countdown_key_cache: dict[str, str | None] = {}
+
+    def countdown_image_key() -> str | None:
+        if "key" not in countdown_key_cache:
+            scene = build_scene(
+                lines, 0.0, chord_track=chord_track, audio_duration=duration, image_timeline=image_timeline,
+            )
+            countdown_key_cache["key"] = _first_available_image_key(image_dir, scene.image_key)
+        return countdown_key_cache["key"]
 
     def make_frame(T: float):
         # T is the OUTER video's own timeline, which runs countdown_duration
@@ -107,10 +125,7 @@ def assemble_video(
         # placeholder color.
         song_t = T - countdown_duration
         if song_t < 0:
-            scene = build_scene(
-                lines, 0.0, chord_track=chord_track, audio_duration=duration, image_timeline=image_timeline,
-            )
-            countdown_key = _first_available_image_key(image_dir, scene.image_key)
+            countdown_key = countdown_image_key()
             if countdown_key is not None:
                 start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(countdown_key)
                 bg = apply_ken_burns(

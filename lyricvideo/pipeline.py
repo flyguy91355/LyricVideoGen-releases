@@ -20,7 +20,7 @@ from .detect_chords import detect_chords
 from .fetch_lyrics import fetch_lyric_lines
 from .identify import extract_metadata
 from .imagery import get_or_generate_image, substitute_fallback_images, summarize_song_gist
-from .layout import _in_a_line
+from .layout import instrumental_image_captions
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals
 from .settings import Settings
@@ -33,17 +33,17 @@ def slugify(title: str) -> str:
     return slug or "untitled-song"
 
 
-def _instrumental_chord_labels(lines: list[LyricLine], chord_track: ChordTrack) -> list[str]:
-    """Distinct chord labels that need their own instrumental-gap background image:
-    every ChordEvent whose midpoint doesn't fall inside any sung line's window,
-    in first-seen order (so a repeated chord anywhere in the song reuses one
-    image, the same dedup-by-content philosophy the per-line images already use)."""
-    labels: list[str] = []
-    for event in chord_track.events:
-        mid = (event.start + event.end) / 2
-        if not _in_a_line(lines, mid) and event.label not in labels:
-            labels.append(event.label)
-    return labels
+def song_end_time(song: Song) -> float:
+    """Where the song's own detected content ends -- the later of the last
+    chord event's end (detect_chords extends that to the analyzed stem's full
+    duration) and the last timed lyric line's end. The images stage uses this
+    as the horizon for listing every instrumental image the render will need,
+    without decoding the audio again; a container whose decoded duration runs
+    a hair past this (MP3 decoder padding) is covered at render time by the
+    nearest-real-image fallback in assemble_video()."""
+    ends = [event.end for event in song.chord_track.events]
+    ends += [line.end_time for line in song.lines if line.end_time is not None]
+    return max(ends, default=0.0)
 
 
 def ordered_unique_chords(chord_track: ChordTrack) -> list[str]:
@@ -62,6 +62,9 @@ def default_font() -> str:
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        # Windows: bold Arial / Segoe UI ship with every install.
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf",
     ]
     for c in candidates:
         if Path(c).exists():
@@ -215,6 +218,19 @@ def run_pipeline(
     if start_idx <= STAGES.index("separate"):
         report("separate")
         vocals_path = separate_vocals(audio_path, work_dir)
+    elif start_idx <= STAGES.index("detect_chords") and not (
+        vocals_path.exists() and instrumental_stem_path.exists()
+    ):
+        # Resuming past separation, but the stems the align/detect_chords
+        # stages below read aren't on disk (an htdemucs/ folder deleted to
+        # save space, or a batch "already done" song whose stems never made
+        # it here) -- those stages would crash on the missing file. Demucs
+        # is deterministic and costs no API spend, so just run it again --
+        # the same self-heal the identify bootstrap above applies to a
+        # missing song_info.json. A resume at images/render never reads the
+        # stems, so it's left alone.
+        report("separate")
+        vocals_path = separate_vocals(audio_path, work_dir)
 
     if start_idx <= STAGES.index("fetch_lyrics"):
         report("fetch_lyrics")
@@ -253,7 +269,12 @@ def run_pipeline(
     if start_idx <= STAGES.index("images"):
         report("images")
         anthropic_client = anthropic.Anthropic()
-        replicate_token = os.environ["REPLICATE_API_TOKEN"]
+        replicate_token = os.environ.get("REPLICATE_API_TOKEN", "")
+        if not replicate_token:
+            raise RuntimeError(
+                "REPLICATE_API_TOKEN is not set -- add it to the .env file at the repo root "
+                "(see .env.example). The images stage can't generate backgrounds without it."
+            )
         full_lyrics = "\n".join(l.text for l in song.lines)
         song_gist = summarize_song_gist(anthropic_client, full_lyrics)
         images_dir.mkdir(exist_ok=True)
@@ -267,10 +288,14 @@ def run_pipeline(
                 extra_cache_dirs=backup_dirs,
             ))
         # Instrumental-gap images (2026-09-09 owner request): one per distinct
-        # chord label that actually occurs during a gap, so the background
-        # follows the chord instead of freezing on the last-sung line's image.
-        for label in _instrumental_chord_labels(song.lines, song.chord_track):
-            caption = f"[Instrumental — chord: {label}]"
+        # caption the render's own image timeline can look up, so the
+        # background follows the chord instead of freezing on the last-sung
+        # line's image. The caption list comes from the very same gap/segment
+        # walk build_image_timeline() performs (layout.instrumental_image_
+        # captions), never a separate approximation of it -- the earlier
+        # midpoint-based rule here skipped chords that only overlapped a gap's
+        # edge, leaving the render to show a flat placeholder for them.
+        for caption in instrumental_image_captions(song.lines, song.chord_track, song_end_time(song)):
             image_paths.append(get_or_generate_image(
                 anthropic_client, replicate_token, song_gist, caption, images_dir,
                 extra_cache_dirs=backup_dirs,

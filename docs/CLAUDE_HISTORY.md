@@ -1449,3 +1449,157 @@ touching the override field's value. Verified end-to-end against a real
 audio file ("Angie" by The Rolling Stones, from an existing `work/`
 folder): Song title stayed "Angie", preview correctly read "Angie - The
 Rolling Stones - (Play Along Lyrics & Chords)". All 472 tests pass.
+
+## 2026-09-14 — First Windows setup: CUDA-or-CPU Demucs, cross-platform launcher and paths
+
+A second owner set the project up on Windows 11 (RTX 5070) for the first time.
+Environment findings: only Python 3.12 was installed, so the venv was built on a
+`uv`-managed 3.11 (the crema/TensorFlow 2.15 constraint from 2026-09-13 holds on
+Windows too). PyPI's torch wheels are CPU-only on Windows; the cu130 build from
+download.pytorch.org was swapped in and the command is now documented in
+`requirements.txt`. torchcodec refused to load against winget's default
+`Gyan.FFmpeg` package -- that build is static and ships no DLLs; `Gyan.FFmpeg.Shared`
+fixed it (also noted in `requirements.txt`).
+
+Code was Linux-only in four places, each found by the test suite (27 failures on
+first run) or by reading the launch path:
+- `separate.py` hardcoded `-d cpu` for the original GT 1030 box (2026-09-06 entry).
+  Replaced with `compute_device()`: `cuda` when `torch.cuda.is_available()`, else
+  `cpu`, with a `LYRICVIDEO_DEVICE` env override. Verified live: a synthetic clip
+  separated on both `cuda` and `cpu`. Machines without a GPU are unaffected -- the
+  default `requirements.txt` install still yields CPU torch and the fallback picks it.
+- `pipeline.py` `default_font()` only listed `/usr/share/fonts/...` candidates, so
+  every render and settings-preview test died with "No default font found" (25 of
+  the 27 failures). Added Windows Arial Bold / Segoe UI Bold.
+- `gui.py` spelled out `.venv/bin/python` for self-update's pip install and the
+  Relaunch button; both now go through the new `lyricvideo/venv.py` `venv_python()`.
+  Added `run_playalongvideoproduction.bat` as the Windows launcher, and the update
+  allow-list's bare-top-level rule now accepts `.bat` alongside `.py`/`.sh` so
+  releases can update it.
+- Git on Windows with `core.autocrlf=true` checked out `*.sh` and
+  `.githooks/pre-commit` as CRLF, which bash rejects. New `.gitattributes` pins them
+  to LF (and `*.bat` to CRLF).
+
+Two tests can never pass on Windows and now skip there: the trailing-space
+batch-folder test (NTFS silently strips a trailing space at mkdir time, so the
+scenario from 2026-09-10 cannot be constructed) and the symlinked-destination update
+test (symlink creation needs Developer Mode or admin). Final Windows run: 404 passed,
+75 skipped, 0 failed.
+
+## 2026-09-14 — Full codebase review: blank-background gap, GUI-thread network calls, silent Windows test skips
+
+A full read-through of every module, script, launcher and test, with each
+finding fixed the same day. Baseline on Windows before: 401 passed, 75
+skipped, 3 failed (the align tests -- torchcodec couldn't find FFmpeg's
+shared DLLs because the review's shell predated the winget install; with
+that `bin/` on PATH all 6 pass, so purely environmental). After: 495 passed,
+2 skipped (the two documented Windows-only skips), 0 failed.
+
+- **73 render/assemble/chord-diagram tests silently skipped on Windows.**
+  `tests/conftest.py`'s `test_font_path` fixture only knew the two Linux
+  font paths, so every test taking it skipped -- a whole layer of the suite
+  that had looked green here because it never ran. Added the same Windows
+  candidates `pipeline.default_font()` already lists. That immediately
+  exposed one test asserting a DejaVu-specific pixel span (Arial Bold wraps
+  the same lyric onto fewer rows); it now asserts the real invariant --
+  the current and next lyric blocks, told apart by color, never overlap --
+  whatever font the machine renders with.
+- **Instrumental background images the images stage never generated.**
+  `pipeline._instrumental_chord_labels()` picked chords by whether their
+  MIDPOINT fell outside every sung line, while `layout.build_image_timeline()`
+  keyed segments by OVERLAP with each gap and used a generic `[Instrumental]`
+  key for any sub-range the chord track didn't cover -- a key nothing ever
+  generated an image for. Either mismatch rendered as the flat
+  `fallback_color`, the exact "blank screen" class the owner complained about
+  on 2026-09-10 (for the countdown, which was patched in isolation then).
+  Fixed at the source: `layout.instrumental_caption()` is now the only place
+  the caption string is spelled; `layout.instrumental_image_captions()` walks
+  the identical gaps and micro-segments the timeline does and the images
+  stage generates exactly that list; an uncovered sliver (a chord track
+  starting a hair after 0, or ending a hair before the decoded audio does)
+  adopts its neighboring chord's caption instead of the generic one, which
+  now only exists for a song with no chord events at all; and
+  `assemble_video()`'s `get_image` falls back to the nearest real image (the
+  countdown's own rule) rather than a flat color for any key still missing.
+  `pipeline.song_end_time()` supplies the horizon without decoding audio.
+- **Demucs progress never reached the GUI log.** `separate_vocals()` used
+  `subprocess.run`, and a child process inherits the OS-level stdout, not
+  the Python `sys.stdout` object the GUI swaps for its log-widget writer --
+  so the slowest stage of the pipeline showed nothing in the log (and, for
+  a desktop-launched app, nowhere at all). `_run_demucs()` now pipes the
+  child's stdout+stderr and relays whatever bytes are available through the
+  current `sys.stdout`, so tqdm's `\r` updates stream live through the
+  existing `_split_log_text` handling.
+- **Network calls on the GUI thread.** `_refresh_youtube_status()` ran
+  `load_credentials()` (a token refresh is a network call) and
+  `get_channel_title()` (an API call) straight from `__init__`, so the main
+  window couldn't finish appearing until YouTube answered -- or timed out,
+  offline. `_update_upload_button_state()` did the same with `video_exists()`
+  every time a video finished or New Song was clicked. Both now run their
+  verification on a background thread (the way the 20-minute tick already
+  did) and hand the result back via `root.after`; the upload button shows
+  disabled while a check is in flight, and a request counter makes a newer
+  request supersede a slower older one. Verified with a real Tk mainloop
+  smoke script: construction returns in ~0.15s against a stubbed 1-second
+  channel lookup, and the label/button states land correctly afterwards.
+- **Resuming past `separate` with no stems on disk crashed.** A Redo, a
+  batch "already done" song, or a CLI `--stage fetch_lyrics|align|detect_chords`
+  read `htdemucs/<stem>/vocals.wav` unconditionally. Missing stems now
+  re-run Demucs (deterministic, no API spend) -- the same self-heal the
+  identify bootstrap already applied to a missing `song_info.json`. A
+  resume at images/render never reads the stems and is left alone.
+- **Fonts re-loaded from disk on every frame.** Every `draw_*` helper called
+  `ImageFont.truetype` directly -- about 25 loads per frame with a typical
+  chord legend, minutes of pure font loading per render. `render.load_font()`
+  caches per (path, size) PER THREAD; FreeType faces are not safe to share
+  between the GUI thread's live Settings preview and a worker-thread render.
+- **`youtube_auth.load_credentials()` handed back unusable credentials** for
+  a stored token that had expired with no refresh token; every later YouTube
+  action then failed with an auth error. It now returns `None` (not
+  connected) so the owner is prompted to reconnect instead.
+- **`cut_release.sh` never shipped the Windows launcher.** `apply.py` had
+  accepted a bare top-level `.bat` since the Windows-support commit, but the
+  sync list only ever included the `.sh`, so a Windows install could never
+  receive a launcher fix through Apply Update.
+- Smaller: `pipeline` raises a clear RuntimeError (not KeyError) when
+  `REPLICATE_API_TOKEN` is unset; `detect_chords._merge_short_events` no
+  longer mutates the caller's events in place; `fetch_lyrics._lrclib_get`
+  parses the response body once; Generate/Redo grey out the Start Batch
+  button like Start Batch greys out theirs; the `requirements.txt` CUDA
+  swap command had lost its line break; the two `branding/` scripts
+  resolve fonts per OS instead of hardcoding the Linux DejaVu path; the
+  countdown's background key is resolved once per render, not per frame.
+
+Reviewed and deliberately left alone: `torchaudio.load` in `align.py`/
+`pipeline.py` (torchcodec + FFmpeg shared DLLs are a documented environment
+requirement, and Demucs itself needs the same stack); `chord_theory.
+build_templates`/`diatonic_chords` (unused since the crema switch but
+harmless and tested); the unbounded per-render image cache (a few hundred MB
+for a long song, acceptable); `root.after` from worker threads throughout
+`gui.py` (the app's established pattern, fine while `mainloop` runs).
+
+## 2026-09-14 — Issue #3: a numeric lyric word ("31") aborted forced alignment
+
+Owner reported (GitHub issue #3) `AlignmentError: word '31' has no alignable
+characters after normalization`, from the align stage. Root cause: the
+MMS_FA forced-alignment model's dictionary is a-z plus the apostrophe (and
+its own `-` blank and `*` star tokens), and `_normalize_word_for_alignment`
+stripped everything else from a lyric word and RAISED when nothing was left.
+Lyric providers return numbers as digits ("31", "1975") and sometimes
+symbol-only tokens ("&", "..."), so any such word killed the whole stage --
+deterministically, since Redo re-fetches the same lyrics, leaving that song
+unprocessable until the code changed. Nothing upstream converted digits.
+
+Fix, alignment-spelling only (display text is untouched): digit runs are
+spelled out as sung and joined into ONE aligner word so they still map to
+one span -- "31" -> "thirtyone", 4-digit runs in 1100-1999 read as years
+("1975" -> "nineteenseventyfive", "1905" -> "nineteenohfive"), 2010-2099
+as "twenty ..."; ordinals ("31st" -> "thirtyfirst"); runs longer than four
+digits or with a leading zero read digit by digit ("867-5309" the way it's
+sung); "&" reads as "and"; and a word with nothing left ("...", a dash, an
+emoji) becomes the model's `*` star token -- MMS_FA's documented wildcard
+for unalignable audio, already enabled by the default
+`get_model(with_star=True)` this code uses -- instead of an exception.
+Guarded by a test that runs every kind of normalized spelling through the
+REAL `MMS_FA.get_tokenizer()` (dictionary only, no model download), since
+an unknown character is exactly the failure class this was.

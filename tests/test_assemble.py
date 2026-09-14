@@ -734,3 +734,39 @@ def test_assemble_video_countdown_uses_a_real_image_not_the_missing_preferred_on
     # must NOT be uniformly the flat fallback_color.
     assert not np.all(frame.reshape(-1, 3) == (1, 2, 3))
     assert np.any(np.all(np.abs(frame.astype(int) - np.array(distinctive_color)) < 10, axis=-1))
+
+
+def test_assemble_video_missing_image_key_falls_back_to_a_real_image_not_a_flat_color(
+    tmp_path, monkeypatch, test_font_path,
+):
+    """Same rule the countdown already follows, applied to every frame: a key
+    with no file behind it must show some real generated image for the song,
+    never the flat fallback_color (real owner complaint class: a blank
+    background mid-video)."""
+    from PIL import Image
+    import numpy as np
+
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+
+    distinctive_color = (10, 200, 30)
+    Image.new("RGB", (1920, 1080), distinctive_color).save(tmp_path / f"{line_hash('hi')}.png")
+
+    lines = [
+        LyricLine(words=[Word(word="hi", start_time=0.0, end_time=0.5)], start_time=0.0, end_time=0.5)
+    ]
+    # An instrumental stretch after the line whose chord image was never generated.
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "Am")], bpm=120.0)
+
+    from lyricvideo import assemble as assemble_module
+    assemble_module.assemble_video(
+        lines, chord_track, tmp_path, tmp_path / "audio.wav", tmp_path / "final.mp4", font_path=test_font_path,
+        countdown_beats=0, fallback_color=(1, 2, 3),
+    )
+    frame = calls["make_frame"](1.5)  # inside the Am stretch, past the sung line
+
+    assert not np.all(frame.reshape(-1, 3) == (1, 2, 3))
+    assert np.any(np.all(np.abs(frame.astype(int) - np.array(distinctive_color)) < 10, axis=-1))

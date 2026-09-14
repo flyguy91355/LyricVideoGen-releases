@@ -419,3 +419,85 @@ def test_build_scene_image_blend_is_one_for_the_very_first_segment_of_the_song()
 
     assert scene.prev_image_key is None
     assert scene.image_blend == 1.0
+
+
+def test_instrumental_image_captions_skips_a_chord_fully_inside_a_sung_line():
+    from lyricvideo.layout import instrumental_image_captions
+
+    lines = [LyricLine(start_time=0.0, end_time=2.0)]
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C"), ChordEvent(2.0, 4.0, "G")])
+
+    assert instrumental_image_captions(lines, chord_track, end_time=4.0) == ["[Instrumental — chord: G]"]
+
+
+def test_instrumental_image_captions_dedupes_repeated_labels_in_first_seen_order():
+    from lyricvideo.layout import instrumental_image_captions
+
+    chord_track = ChordTrack(events=[
+        ChordEvent(0.0, 2.0, "Am"), ChordEvent(2.0, 4.0, "F"), ChordEvent(4.0, 6.0, "Am"),
+    ])
+
+    assert instrumental_image_captions([], chord_track, end_time=6.0) == [
+        "[Instrumental — chord: Am]", "[Instrumental — chord: F]",
+    ]
+
+
+def test_instrumental_image_captions_includes_a_chord_that_only_overlaps_a_gaps_edge():
+    """The old images-stage rule keyed on each chord's MIDPOINT: a chord whose
+    midpoint fell inside a sung line but whose tail ran into the following
+    instrumental gap got no image, yet the timeline still showed it there --
+    as a flat placeholder color."""
+    from lyricvideo.layout import instrumental_image_captions
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=2.0)], start_time=0.0, end_time=2.0)]
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 3.0, "C"), ChordEvent(3.0, 10.0, "G")])
+
+    captions = instrumental_image_captions(lines, chord_track, end_time=10.0)
+
+    assert captions == ["[Instrumental — chord: C]", "[Instrumental — chord: G]"]
+
+
+def test_instrumental_image_captions_generic_only_when_there_are_no_chords_at_all():
+    from lyricvideo.layout import instrumental_image_captions
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=2.0, end_time=3.0)], start_time=2.0, end_time=3.0)]
+
+    assert instrumental_image_captions(lines, ChordTrack(), end_time=5.0) == ["[Instrumental]"]
+    assert instrumental_image_captions(lines, None, end_time=5.0) == ["[Instrumental]"]
+
+
+def test_instrumental_image_captions_matches_every_key_the_timeline_uses():
+    """The contract the images stage relies on: whatever build_image_timeline
+    looks up must be in this list, for any min_hold setting."""
+    from lyricvideo.layout import instrumental_image_captions
+
+    lines = [
+        LyricLine(words=[Word(word="a", start_time=1.0, end_time=2.0)], start_time=1.0, end_time=2.0),
+        LyricLine(words=[Word(word="b", start_time=6.0, end_time=7.0)], start_time=6.0, end_time=7.0),
+    ]
+    chord_track = ChordTrack(events=[
+        ChordEvent(0.5, 1.5, "C"), ChordEvent(1.5, 3.0, "G"), ChordEvent(3.0, 3.4, "D"),
+        ChordEvent(3.4, 6.5, "Em"), ChordEvent(6.5, 9.0, "C"),
+    ])
+    caption_keys = {line_hash(c) for c in instrumental_image_captions(lines, chord_track, end_time=10.0)}
+
+    for min_hold in (0.0, 2.0, 5.0):
+        timeline = build_image_timeline(lines, chord_track, audio_duration=10.0, min_hold_seconds=min_hold)
+        line_keys = {line_hash("a"), line_hash("b")}
+        assert {s.image_key for s in timeline} - line_keys <= caption_keys
+
+
+def test_build_image_timeline_uncovered_sliver_adopts_the_nearest_chord_not_a_generic_key():
+    """A chord track that starts a hair after 0, or ends a hair before the
+    decoded audio does, used to produce a generic '[Instrumental]' segment
+    there -- a key no image is ever generated for. It now borrows the
+    neighboring chord's own image instead."""
+    chord_track = ChordTrack(events=[ChordEvent(0.05, 5.0, "C"), ChordEvent(5.0, 9.95, "G")])
+
+    timeline = build_image_timeline([], chord_track, audio_duration=10.0, min_hold_seconds=0.0)
+
+    assert [s.image_key for s in timeline] == [
+        line_hash("[Instrumental — chord: C]"), line_hash("[Instrumental — chord: C]"),
+        line_hash("[Instrumental — chord: G]"), line_hash("[Instrumental — chord: G]"),
+    ]
+    assert timeline[0].start == 0.0 and timeline[-1].end == 10.0

@@ -297,7 +297,10 @@ def artist_matches(record_artist: str, wanted: str) -> bool:
 
 def _lrclib_get(params: dict) -> dict | None:
     r = requests.get(f"{LRCLIB_BASE}/get", params=params, headers=HTTP_HEADERS, timeout=15)
-    return r.json() if r.status_code == 200 and isinstance(r.json(), dict) else None
+    if r.status_code != 200:
+        return None
+    data = r.json()
+    return data if isinstance(data, dict) else None
 
 
 def _lrclib_search(params: dict) -> list[dict]:

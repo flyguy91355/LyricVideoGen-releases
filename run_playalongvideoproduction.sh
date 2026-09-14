@@ -1,6 +1,7 @@
 #!/bin/bash
-# Launches PlayAlongVideoProduction. Double-click the desktop icon, or run
-# this directly from a terminal.
+# Launches PlayAlongVideoProduction on Linux/macOS. Double-click the desktop icon,
+# or run this directly from a terminal. Windows users double-click
+# run_playalongvideoproduction.bat instead (same idea, .venv/Scripts/python.exe).
 cd "$(dirname "$0")" || exit 1
 # Invoke the venv's own python directly rather than "source .venv/bin/activate" --
 # the venv was created at this project's pre-rename path (LyricVideoGen), and venvs

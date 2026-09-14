@@ -5,9 +5,10 @@ render.py/detect_chords.py."""
 
 from __future__ import annotations
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from .chord_shapes import ChordShape, get_chord_shape
+from .render import load_font
 
 ACCENT_COLOR_DEFAULT = (56, 189, 248)
 TEXT_COLOR_DEFAULT = (255, 255, 255)
@@ -70,9 +71,9 @@ def draw_single_chord_diagram(
     grid_x0 = side_pad
     grid_w = bw - 2 * side_pad
 
-    label_font = ImageFont.truetype(font_path, max(10, label_h - 4))
-    small_font = ImageFont.truetype(font_path, max(8, xo_h - 2))
-    finger_font = ImageFont.truetype(font_path, max(8, int(grid_h / 4 * 0.5)))
+    label_font = load_font(font_path, max(10, label_h - 4))
+    small_font = load_font(font_path, max(8, xo_h - 2))
+    finger_font = load_font(font_path, max(8, int(grid_h / 4 * 0.5)))
 
     label_color = accent_color if highlighted else text_color
     label_w = draw.textlength(label, font=label_font)

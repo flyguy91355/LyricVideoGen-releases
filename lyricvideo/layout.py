@@ -122,39 +122,106 @@ def _in_a_line(lines: list[LyricLine], t: float) -> bool:
     )
 
 
+def instrumental_caption(chord_label: str | None) -> str:
+    """The caption an instrumental-stretch background image is generated
+    from and cached under (via line_hash) -- one per distinct chord label,
+    or a single generic one when there's no chord to name. The ONLY place
+    this string is spelled: pipeline.py's images stage generates from it
+    and build_image_timeline()/build_scene() look images up by it, so the
+    two can never drift apart (real bug, 2026-09-14: they did -- see
+    instrumental_image_captions below)."""
+    return f"[Instrumental — chord: {chord_label}]" if chord_label else "[Instrumental]"
+
+
 def _instrumental_image_key(chord_track: ChordTrack, t: float) -> str:
     chord = current_chord_at(chord_track, t)
-    caption = f"[Instrumental — chord: {chord.label}]" if chord else "[Instrumental]"
-    return line_hash(caption)
+    return line_hash(instrumental_caption(chord.label if chord else None))
 
 
 def _instrumental_micro_segments(
     chord_track: ChordTrack | None, gap_start: float, gap_end: float,
 ) -> list[tuple[float, float, str]]:
-    """(start, end, image_key) triples covering [gap_start, gap_end) at raw
-    per-chord granularity -- one per chord event overlapping the gap, plus a
-    generic '[Instrumental]' segment for any sub-range the chord track
-    doesn't cover at all. These are the RAW boundaries _merge_into_hold_blocks
+    """(start, end, caption) triples covering [gap_start, gap_end) at raw
+    per-chord granularity -- one per chord event overlapping the gap. A
+    sub-range the chord track doesn't cover (a sliver before its first
+    event, or between the detected track's own end and the container's
+    slightly longer decoded audio duration) adopts the NEAREST real chord's
+    caption -- the one just before it, else the one just after -- rather
+    than a generic '[Instrumental]' caption that no image was ever
+    generated for: that generic key rendered as a flat placeholder color
+    (real bug, 2026-09-14). Only a song with no chord events at all uses
+    the generic caption. These are the RAW boundaries _merge_into_hold_blocks
     smooths into hold-respecting blocks; every one of them is a real chord
     onset, never a guess."""
     if gap_end <= gap_start:
         return []
     if chord_track is None or not chord_track.events:
-        return [(gap_start, gap_end, line_hash("[Instrumental]"))]
+        return [(gap_start, gap_end, instrumental_caption(None))]
 
     segments: list[tuple[float, float, str]] = []
     cursor = gap_start
+    previous_label: str | None = None
     for event in chord_track.events:
         seg_start, seg_end = max(event.start, gap_start), min(event.end, gap_end)
         if seg_end <= seg_start:
+            if event.end <= gap_start:
+                previous_label = event.label
             continue
         if seg_start > cursor:
-            segments.append((cursor, seg_start, line_hash("[Instrumental]")))
-        segments.append((seg_start, seg_end, line_hash(f"[Instrumental — chord: {event.label}]")))
+            neighbor = previous_label if previous_label is not None else event.label
+            segments.append((cursor, seg_start, instrumental_caption(neighbor)))
+        segments.append((seg_start, seg_end, instrumental_caption(event.label)))
         cursor = seg_end
+        previous_label = event.label
     if cursor < gap_end:
-        segments.append((cursor, gap_end, line_hash("[Instrumental]")))
+        segments.append((cursor, gap_end, instrumental_caption(previous_label)))
     return segments
+
+
+def _instrumental_gaps(lines: list[LyricLine], end_time: float) -> list[tuple[float, float]]:
+    """Every stretch of [0, end_time) that no line is plausibly sung during
+    -- the intro, each gap between lines, and the outro -- in order. Shared
+    by build_image_timeline (which fills each gap with chord segments) and
+    instrumental_image_captions (which lists the images those segments will
+    need), so the two walk the identical set of gaps."""
+    vocal_intervals = sorted(
+        (start, end)
+        for line in lines
+        for start, end in _plausible_sung_intervals(line)
+    )
+    gaps: list[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in vocal_intervals:
+        if start > cursor:
+            gaps.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < end_time:
+        gaps.append((cursor, end_time))
+    return gaps
+
+
+def instrumental_image_captions(
+    lines: list[LyricLine], chord_track: ChordTrack | None, end_time: float,
+) -> list[str]:
+    """Every distinct instrumental-image caption build_image_timeline() can
+    ask for over [0, end_time), in first-seen order -- exactly the set the
+    images stage must generate so no instrumental stretch ever falls back
+    to a flat placeholder color. Derived from the same gap walk and the same
+    micro-segments the timeline itself uses, NOT re-derived independently:
+    the previous images-stage rule ("a chord whose MIDPOINT falls outside
+    every sung line") missed any chord that merely overlapped a gap's edge,
+    and never generated the generic caption at all, so the render silently
+    showed a flat color for those stretches (found by code review,
+    2026-09-14). Only the caption of each hold block's FIRST micro-segment
+    is ever displayed, but every micro-segment's caption is listed here so
+    the set stays right whatever image_min_hold_seconds the owner later
+    renders with."""
+    captions: list[str] = []
+    for gap_start, gap_end in _instrumental_gaps(lines, end_time):
+        for _start, _end, caption in _instrumental_micro_segments(chord_track, gap_start, gap_end):
+            if caption not in captions:
+                captions.append(caption)
+    return captions
 
 
 def _merge_into_hold_blocks(
@@ -216,29 +283,25 @@ def build_image_timeline(
         for start, end in _plausible_sung_intervals(line)
     )
 
-    segments: list[tuple[float, float, str]] = []
+    def instrumental_blocks(gap_start: float, gap_end: float) -> list[ImageSegment]:
+        micro = [
+            (start, end, line_hash(caption))
+            for start, end, caption in _instrumental_micro_segments(chord_track, gap_start, gap_end)
+        ]
+        return _merge_into_hold_blocks(micro, min_hold_seconds)
+
+    segments: list[ImageSegment] = []
     cursor = 0.0
     for start, end, key in vocal_intervals:
-        gap_start = cursor
-        if start > gap_start:
-            segments.extend(
-                (s.start, s.end, s.image_key)
-                for s in _merge_into_hold_blocks(
-                    _instrumental_micro_segments(chord_track, gap_start, start), min_hold_seconds,
-                )
-            )
+        if start > cursor:
+            segments.extend(instrumental_blocks(cursor, start))
         if end > cursor:
-            segments.append((max(start, cursor), end, key))
+            segments.append(ImageSegment(max(start, cursor), end, key))
             cursor = end
     if cursor < audio_duration:
-        segments.extend(
-            (s.start, s.end, s.image_key)
-            for s in _merge_into_hold_blocks(
-                _instrumental_micro_segments(chord_track, cursor, audio_duration), min_hold_seconds,
-            )
-        )
+        segments.extend(instrumental_blocks(cursor, audio_duration))
 
-    return [ImageSegment(start, end, key) for start, end, key in segments]
+    return segments
 
 
 def _segment_index_at(timeline: list[ImageSegment], t: float) -> int | None:
