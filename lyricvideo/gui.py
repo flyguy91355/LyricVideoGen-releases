@@ -27,6 +27,7 @@ from .batch import (
     save_last_batch_folder,
 )
 from .identify import extract_metadata
+from .dismissed_songs import dismiss_song, load_dismissed
 from .pipeline import (
     STAGES,
     run_pipeline,
@@ -37,6 +38,7 @@ from .pipeline import (
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
+    song_video_path,
 )
 from .settings import Settings
 from .settings_panel import SettingsPanel
@@ -163,6 +165,18 @@ _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
 # request, 2026-09-15: these lists were growing too long for a fixed-size
 # dropdown to show).
 SONG_LIST_HEIGHT = 420
+
+
+def _open_with_default_app(path: Path) -> None:
+    """Hands a rendered video off to whatever the OS already uses to play
+    mp4s -- no in-app player, just a preview-before-uploading convenience
+    (owner request, 2026-09-15)."""
+    if sys.platform.startswith("win"):
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
 
 
 def _default_work_dir_from_audio(audio_path: str) -> str:
@@ -344,7 +358,7 @@ class LyricVideoGUI:
         self.redo_list_frame = ctk.CTkScrollableFrame(redo_frame, height=SONG_LIST_HEIGHT)
         self.redo_list_frame.pack(fill="x", padx=8, pady=(0, 4))
         self._populate_song_radio_list(
-            self.redo_list_frame, list_redoable_songs(PROJECT_ROOT / "work"), self.redo_song_var,
+            self.redo_list_frame, "redo", list_redoable_songs(PROJECT_ROOT / "work"), self.redo_song_var,
         )
         redo_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
         redo_controls.pack(fill="x", padx=8, pady=(0, 8))
@@ -360,7 +374,8 @@ class LyricVideoGUI:
         self.retry_upload_list_frame = ctk.CTkScrollableFrame(redo_frame, height=SONG_LIST_HEIGHT)
         self.retry_upload_list_frame.pack(fill="x", padx=8, pady=(0, 4))
         self._populate_song_radio_list(
-            self.retry_upload_list_frame, list_rendered_songs(PROJECT_ROOT / "work"), self.retry_upload_song_var,
+            self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
+            self.retry_upload_song_var,
         )
         retry_upload_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
         retry_upload_controls.pack(fill="x", padx=8, pady=(0, 8))
@@ -1193,14 +1208,32 @@ class LyricVideoGUI:
     def _refresh_retry_upload_options(self) -> None:
         values = list_rendered_songs(PROJECT_ROOT / "work")
         self._populate_song_radio_list(
-            self.retry_upload_list_frame, values, self.retry_upload_song_var, auto_select_first=True,
+            self.retry_upload_list_frame, "upload", values, self.retry_upload_song_var, auto_select_first=True,
         )
         self.retry_upload_button.configure(state="normal")
         self.upload_selected_button.configure(state="normal")
         self._refresh_pending_uploads_list()
 
+    def _refresh_song_list(self, list_name: str) -> None:
+        """Rebuilds a single list (by its dismissed_songs.py list_name) after
+        a Remove click -- deliberately scoped to just that one list, since
+        removal is per-list (owner request, 2026-09-15: a song dismissed from
+        Pending Uploads should still be reachable via Upload to YouTube)."""
+        if list_name == "redo":
+            self._populate_song_radio_list(
+                self.redo_list_frame, "redo", list_redoable_songs(PROJECT_ROOT / "work"),
+                self.redo_song_var, auto_select_first=True,
+            )
+        elif list_name == "upload":
+            self._populate_song_radio_list(
+                self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
+                self.retry_upload_song_var, auto_select_first=True,
+            )
+        elif list_name == "pending":
+            self._refresh_pending_uploads_list()
+
     def _populate_song_radio_list(
-        self, frame: ctk.CTkScrollableFrame, songs: list[str], variable: tk.StringVar,
+        self, frame: ctk.CTkScrollableFrame, list_name: str, all_songs: list[str], variable: tk.StringVar,
         auto_select_first: bool = False,
     ) -> None:
         """Rebuilds `frame`'s rows as a single-select list of radio buttons
@@ -1210,12 +1243,16 @@ class LyricVideoGUI:
         _refresh_retry_upload_options behavior of snapping to the first song
         when the current selection no longer exists; the initial build never
         auto-selects, matching the old dropdown's blank starting state."""
+        songs = [s for s in all_songs if s not in load_dismissed(list_name)]
         for child in frame.winfo_children():
             child.destroy()
         if variable.get() not in songs:
             variable.set((songs[0] if songs and auto_select_first else ""))
         for song in songs:  # already alphabetical -- see list_redoable_songs/list_rendered_songs
-            ctk.CTkRadioButton(frame, text=song, variable=variable, value=song).pack(anchor="w", padx=6, pady=2)
+            self._build_song_list_row(
+                frame, list_name, song,
+                lambda row, song=song: ctk.CTkRadioButton(row, text=song, variable=variable, value=song),
+            )
 
     def _refresh_pending_uploads_list(self) -> None:
         """Rebuilds the Pending Uploads checklist from the filesystem (never
@@ -1225,14 +1262,57 @@ class LyricVideoGUI:
         (owner request, 2026-09-15)."""
         for child in self.pending_uploads_list_frame.winfo_children():
             child.destroy()
+        dismissed = load_dismissed("pending")
         select_all = self.pending_select_all_var.get()
         self._pending_upload_vars = {}
         for slug in list_pending_uploads(PROJECT_ROOT / "work"):
+            if slug in dismissed:
+                continue
             var = tk.BooleanVar(value=select_all)
             self._pending_upload_vars[slug] = var
-            ctk.CTkCheckBox(self.pending_uploads_list_frame, text=slug, variable=var).pack(
-                anchor="w", padx=6, pady=2
+            self._build_song_list_row(
+                self.pending_uploads_list_frame, "pending", slug,
+                lambda row, var=var: ctk.CTkCheckBox(row, text=slug, variable=var),
             )
+
+    def _build_song_list_row(self, frame, list_name: str, song: str, selector_factory) -> None:
+        """One row in a song list: the selector (radio or checkbox, built by
+        `selector_factory`) on the left, a Watch and a Remove button on the
+        right (owner request, 2026-09-15 -- preview a video before deciding
+        whether to upload it, and get a long-since-handled song out of the
+        way without touching its files)."""
+        row = ctk.CTkFrame(frame, fg_color="transparent")
+        row.pack(fill="x", padx=2, pady=1)
+        ctk.CTkButton(
+            row, text="✕", width=28, fg_color="gray30", hover_color="#8b2020",
+            command=lambda: self._on_remove_song(list_name, song),
+        ).pack(side="right", padx=(4, 0))
+        ctk.CTkButton(
+            row, text="▶ Watch", width=70, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_watch_song(song),
+        ).pack(side="right", padx=(4, 0))
+        selector_factory(row).pack(side="left", anchor="w")
+
+    def _on_watch_song(self, slug: str) -> None:
+        video_path = song_video_path(PROJECT_ROOT / "work" / slug)
+        if video_path is None:
+            messagebox.showerror("No video yet", f'"{slug}" has not been rendered yet.')
+            return
+        try:
+            _open_with_default_app(video_path)
+        except Exception as e:
+            messagebox.showerror("Could not open video", f"{type(e).__name__}: {e}")
+
+    def _on_remove_song(self, list_name: str, slug: str) -> None:
+        if not messagebox.askyesno(
+            "Remove from list",
+            f'Remove "{slug}" from this list?\n\n'
+            "This only changes what shows up here -- the song's files aren't "
+            "touched, and it can still be found in this app's other lists.",
+        ):
+            return
+        dismiss_song(list_name, slug)
+        self._refresh_song_list(list_name)
 
     def _build_youtube_panel(self, parent) -> None:
         frame = ctk.CTkFrame(parent, fg_color="transparent")

@@ -87,6 +87,19 @@ def list_redoable_songs(work_root: Path) -> list[str]:
     )
 
 
+def song_video_path(work_dir: Path) -> Path | None:
+    """The rendered mp4 for work_dir, if it exists -- None if the song has
+    no lyrics_timed.json yet, or hasn't been rendered yet. Shared by
+    list_rendered_songs()/list_pending_uploads() below and the GUI's Watch
+    button (owner request, 2026-09-15)."""
+    timed_path = work_dir / "lyrics_timed.json"
+    if not timed_path.exists():
+        return None
+    song = load_song(timed_path)
+    video_path = work_dir / f"{slugify(song.title)}.mp4"
+    return video_path if video_path.exists() else None
+
+
 def list_rendered_songs(work_root: Path) -> list[str]:
     """Names of work_root's immediate subdirectories that have a rendered
     video, whether or not it's ever been uploaded to YouTube -- backs the
@@ -96,17 +109,11 @@ def list_rendered_songs(work_root: Path) -> list[str]:
     from the current session."""
     if not work_root.exists():
         return []
-    rendered = []
-    for entry in sorted(work_root.iterdir(), key=lambda p: p.name):
-        if not entry.is_dir():
-            continue
-        timed_path = entry / "lyrics_timed.json"
-        if not timed_path.exists():
-            continue
-        song = load_song(timed_path)
-        if (entry / f"{slugify(song.title)}.mp4").exists():
-            rendered.append(entry.name)
-    return rendered
+    return sorted(
+        entry.name
+        for entry in work_root.iterdir()
+        if entry.is_dir() and song_video_path(entry) is not None
+    )
 
 
 def list_pending_uploads(work_root: Path) -> list[str]:
@@ -121,17 +128,13 @@ def list_pending_uploads(work_root: Path) -> list[str]:
     this list."""
     if not work_root.exists():
         return []
-    pending = []
-    for entry in sorted(work_root.iterdir(), key=lambda p: p.name):
-        if not entry.is_dir():
-            continue
-        timed_path = entry / "lyrics_timed.json"
-        if not timed_path.exists() or (entry / STATE_FILENAME).exists():
-            continue
-        song = load_song(timed_path)
-        if (entry / f"{slugify(song.title)}.mp4").exists():
-            pending.append(entry.name)
-    return pending
+    return sorted(
+        entry.name
+        for entry in work_root.iterdir()
+        if entry.is_dir()
+        and not (entry / STATE_FILENAME).exists()
+        and song_video_path(entry) is not None
+    )
 
 
 def load_redo_inputs(song_dir: Path) -> tuple[Path, str]:

@@ -561,3 +561,102 @@ def test_toggle_pending_select_all_sets_every_checkbox(monkeypatch):
 
     assert var_a.get() is True
     assert var_b.get() is True
+
+
+def test_watch_song_shows_error_when_not_rendered_yet(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.song_video_path", lambda work_dir: None)
+    opened = []
+    monkeypatch.setattr("lyricvideo.gui._open_with_default_app", lambda path: opened.append(path))
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    stub = _gui_stub()
+    LyricVideoGUI._on_watch_song(stub, "angie")
+
+    assert opened == []
+    assert [title for title, _ in shown] == ["No video yet"]
+
+
+def test_watch_song_opens_the_rendered_video(monkeypatch, tmp_path):
+    video_path = tmp_path / "angie.mp4"
+    monkeypatch.setattr("lyricvideo.gui.song_video_path", lambda work_dir: video_path)
+    opened = []
+    monkeypatch.setattr("lyricvideo.gui._open_with_default_app", lambda path: opened.append(path))
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", _must_not_run)
+
+    stub = _gui_stub()
+    LyricVideoGUI._on_watch_song(stub, "angie")
+
+    assert opened == [video_path]
+
+
+def test_watch_song_shows_error_when_the_default_app_fails_to_open(monkeypatch, tmp_path):
+    video_path = tmp_path / "angie.mp4"
+    monkeypatch.setattr("lyricvideo.gui.song_video_path", lambda work_dir: video_path)
+
+    def failing_open(path):
+        raise OSError("no player registered")
+
+    monkeypatch.setattr("lyricvideo.gui._open_with_default_app", failing_open)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    stub = _gui_stub()
+    LyricVideoGUI._on_watch_song(stub, "angie")
+
+    assert [title for title, _ in shown] == ["Could not open video"]
+
+
+def test_remove_song_does_nothing_when_declined(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, msg: False)
+    monkeypatch.setattr("lyricvideo.gui.dismiss_song", _must_not_run)
+
+    stub = _gui_stub(_refresh_song_list=_must_not_run)
+    LyricVideoGUI._on_remove_song(stub, "pending", "angie")
+
+
+def test_remove_song_dismisses_and_refreshes_just_that_list(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, msg: True)
+    dismissed = []
+    monkeypatch.setattr("lyricvideo.gui.dismiss_song", lambda list_name, slug: dismissed.append((list_name, slug)))
+    refreshed = []
+
+    stub = _gui_stub(_refresh_song_list=lambda list_name: refreshed.append(list_name))
+    LyricVideoGUI._on_remove_song(stub, "pending", "angie")
+
+    assert dismissed == [("pending", "angie")]
+    assert refreshed == ["pending"]
+
+
+def test_refresh_song_list_redo_repopulates_the_redo_list(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_redoable_songs", lambda work_root: ["angie", "crazy"])
+    calls = []
+
+    stub = _gui_stub(
+        redo_list_frame="redo-frame", redo_song_var="redo-var",
+        _populate_song_radio_list=lambda *a, **kw: calls.append((a, kw)),
+    )
+    LyricVideoGUI._refresh_song_list(stub, "redo")
+
+    assert calls == [(("redo-frame", "redo", ["angie", "crazy"], "redo-var"), {"auto_select_first": True})]
+
+
+def test_refresh_song_list_upload_repopulates_the_upload_list(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_rendered_songs", lambda work_root: ["angie"])
+    calls = []
+
+    stub = _gui_stub(
+        retry_upload_list_frame="upload-frame", retry_upload_song_var="upload-var",
+        _populate_song_radio_list=lambda *a, **kw: calls.append((a, kw)),
+    )
+    LyricVideoGUI._refresh_song_list(stub, "upload")
+
+    assert calls == [(("upload-frame", "upload", ["angie"], "upload-var"), {"auto_select_first": True})]
+
+
+def test_refresh_song_list_pending_refreshes_the_pending_checklist(monkeypatch):
+    refreshed = []
+    stub = _gui_stub(_refresh_pending_uploads_list=lambda: refreshed.append(True))
+    LyricVideoGUI._refresh_song_list(stub, "pending")
+
+    assert refreshed == [True]

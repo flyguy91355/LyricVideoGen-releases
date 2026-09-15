@@ -13,6 +13,7 @@ from lyricvideo.pipeline import (
     prepare_images_for_fresh_regeneration,
     ordered_unique_chords,
     song_end_time,
+    song_video_path,
 )
 from lyricvideo.settings import Settings
 
@@ -395,6 +396,30 @@ def test_load_redo_inputs_prefers_a_local_copy_in_work_dir_over_the_original_pat
 
     assert audio_path == song_dir / "angie.mp3"
     assert title == "Angie"
+
+
+def test_song_video_path_returns_the_rendered_mp4(tmp_path):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "angie.mp4").write_bytes(b"video")
+
+    assert song_video_path(song_dir) == song_dir / "angie.mp4"
+
+
+def test_song_video_path_returns_none_when_not_yet_rendered(tmp_path):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+
+    assert song_video_path(song_dir) is None
+
+
+def test_song_video_path_returns_none_with_no_lyrics_timed_json(tmp_path):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+
+    assert song_video_path(song_dir) is None
 
 
 def test_list_rendered_songs_includes_an_already_uploaded_song(tmp_path):

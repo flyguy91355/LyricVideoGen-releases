@@ -1882,3 +1882,57 @@ reaching the window in this sandbox (confirmed via a plain radio-button
 click that never registered, ruling out a scrollbar-specific bug) -- so full
 interactive confirmation (scrolling, checking boxes, Select All, Upload
 Selected) still needs a manual pass by the owner.
+
+## 2026-09-15 — Added per-song Watch and Remove-from-list to the song lists
+
+Follow-up to the same day's scrollable-lists work. Owner asked for two more
+things on the Redo/Upload-to-YouTube/Pending-Uploads lists: a way to preview
+a song's rendered video before deciding whether to upload it, and a way to
+get a song off a list that's grown cluttered. The first ask for "delete a
+song" turned out to mean something different once asked directly: "dont
+destroy the file.. just remove it from the list" -- so this is a display
+filter, not `shutil.rmtree`. A follow-up question narrowed the removal
+scope further: per-list (a song dismissed from Pending Uploads should still
+be reachable via Upload to YouTube, e.g. if the owner changes their mind
+about it later) rather than one global hide-everywhere action.
+
+Added `pipeline.song_video_path(work_dir) -> Path | None`, factored out of
+the near-identical slugify+exists checks that `list_rendered_songs()` and
+`list_pending_uploads()` already had -- both now call it instead of
+duplicating the logic, and the GUI's new Watch button reuses it too.
+`_on_watch_song()` hands the path to `_open_with_default_app()`
+(`os.startfile` on Windows, `xdg-open` on Linux, `open` on macOS) -- no
+in-app video player, just a hand-off to whatever the owner already uses.
+Shows an error dialog if the song hasn't been rendered yet, or if the OS
+open call itself fails (no registered player, etc).
+
+New `lyricvideo/dismissed_songs.py` (same tiny-separate-JSON-file pattern as
+`batch.py`'s `_STATE_FILE`, deliberately not part of `Settings`): a single
+`~/.playalongvideoproduction/dismissed_songs.json` holding
+`{"redo": [...], "upload": [...], "pending": [...]}`. `_populate_song_radio_list()`
+and `_refresh_pending_uploads_list()` both filter their song list through
+`load_dismissed(list_name)` before building rows. Each row is now built by a
+shared `_build_song_list_row()` (selector widget + Watch + ✕, used
+identically by the radio-list and checklist paths) -- the ✕ button calls
+`_on_remove_song(list_name, slug)`, which confirms first (its dialog text
+says explicitly that files aren't touched and the song may still appear
+elsewhere), then `dismiss_song()`s it and calls the new `_refresh_song_list(list_name)`
+dispatcher to rebuild just that one list rather than all three. There's no
+"show hidden"/restore UI yet -- not asked for; the JSON file itself is
+plain enough to hand-edit if ever needed.
+
+New tests: `tests/test_dismissed_songs.py` (round-trip, per-list scoping,
+idempotent dismiss, corrupt/missing file), three new `test_pipeline.py`
+cases for `song_video_path()`, and new `test_gui.py` stub tests for
+`_on_watch_song()` (found/not-rendered/open-fails), `_on_remove_song()`
+(confirm/decline), and `_refresh_song_list()`'s three-way dispatch. Full
+suite: 585 passed.
+
+Verified live the same way as the scrolling-lists work earlier today:
+launched a second GUI instance (none of the owner's own was running this
+time), screenshotted the Redo list, and confirmed each row now shows its
+radio button plus "▶ Watch" and "✕" cleanly laid out with no overlap
+across ~15 real songs from `work/`. Did not attempt to click-verify the
+buttons themselves, for the same synthetic-input-doesn't-reach-the-window
+reason logged earlier today -- Watch/Remove still want a manual pass by the
+owner.
