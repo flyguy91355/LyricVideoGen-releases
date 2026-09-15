@@ -129,12 +129,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    re-runs Demucs instead of crashing. Demucs's own output is relayed through
    `sys.stdout` (`_run_demucs`) so the GUI log shows its progress.
 3. **fetch_lyrics** (`fetch_lyrics.py` + `vocal_onset.py`) — plain lyric-line
-   text, no manual input required: a sidecar `.lrc`/`.txt` next to the audio file,
-   then lrclib.net (edition-consensus voting across every matching-length record,
-   using `vocal_onset.py`'s narrow vocal-onset-rise check to disambiguate
-   disagreeing first-line candidates), then the `syncedlyrics` aggregator as a
-   last resort. Written to `work_dir/lyric_lines.json`. Any timestamps a provider's
-   LRC carries are discarded — real timing always comes from the next stage.
+   text, no manual input required: a sidecar `.lrc`/`.txt` next to the
+   audio file `run_pipeline()` now uses (its `work_dir` copy, not the
+   original; 9-15), then lrclib.net (edition-consensus voting
+   across matching-length records, using `vocal_onset.py`'s narrow
+   vocal-onset-rise check to disambiguate disagreeing first-line
+   candidates), then `syncedlyrics` last, written to
+   `work_dir/lyric_lines.json`. LRC timestamps are discarded — real
+   timing comes from the next stage.
    Plain (unsynced) text is split into lines directly, so a file whose
    duration couldn't be probed still keeps its lyrics (9-14).
 4. **align** — forced word-level alignment (`align.py`) against the isolated
@@ -316,7 +318,7 @@ Demucs/images), reusing the existing Demucs stems and `work_dir/song_info.json`
 `start_stage` past `"identify"` never re-runs it), via `list_redoable_songs()`/
 `load_redo_inputs()` (reads `audio_path`/`title` off `lyrics_timed.json`,
 preferring a local copy `run_pipeline()` writes into `work_dir`). In
-`gui.py`, the "Redo an Existing Song" dropdown lists every `work/` folder with a
+`gui.py`, "Redo an Existing Song" lists every `work/` folder with a
 completed run; a "Generate new images" checkbox (default off = reuse, matching this
 app's existing cost-conscious convention) forces fresh images via
 `prepare_images_for_fresh_regeneration()` — it moves the old `images/` dir aside to

@@ -106,6 +106,33 @@ def test_run_pipeline_copies_the_source_audio_into_work_dir(tmp_path, monkeypatc
     assert (work_dir / "song.mp3").read_bytes() == b"fake audio bytes"
 
 
+def test_run_pipeline_fetches_lyrics_against_the_work_dir_copy_not_the_original(tmp_path, monkeypatch):
+    """Real bug, 2026-09-15: fetch_lyric_lines()'s sidecar .lrc/.txt lookup
+    checks next to whatever audio_path it's called with. run_pipeline()
+    copies the source audio into work_dir (the test above) but kept calling
+    every later stage, including fetch_lyric_lines, with the ORIGINAL
+    external audio_path -- so a sidecar file the owner dropped next to the
+    work_dir copy (following the error message's own filename hint) was
+    never actually found; only a sidecar next to the original, possibly
+    transient, external location ever counted. Every stage must receive
+    the work_dir copy from here on."""
+    _patch_common(monkeypatch, tmp_path)
+    seen_audio_paths = []
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines",
+        lambda audio_path, *a, **k: seen_audio_paths.append(audio_path) or ["hello there"],
+    )
+    work_dir = tmp_path / "work"
+    original_dir = tmp_path / "external" / "staging"
+    original_dir.mkdir(parents=True)
+    audio_path = original_dir / "song.mp3"
+    audio_path.write_bytes(b"fake audio bytes")
+
+    run_pipeline(audio_path, work_dir)
+
+    assert seen_audio_paths == [work_dir / "song.mp3"]
+
+
 def test_run_pipeline_skips_earlier_stages(tmp_path, monkeypatch):
     calls = []
     _patch_common(monkeypatch, tmp_path)

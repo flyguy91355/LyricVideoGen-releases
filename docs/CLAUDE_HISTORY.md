@@ -2170,3 +2170,29 @@ and confirmed the expected row counts (50, then 9) after. Full suite:
 591 passed (no test changes needed -- this is a pure startup-timing fix
 to GUI-construction code this project's tests don't exercise directly,
 same as the collapsible-section work itself).
+
+## 2026-09-15 — fetch_lyrics' sidecar lookup used the wrong audio path
+
+Owner report: a sidecar `.lrc`/`.txt` placed next to the song's audio in
+`work_dir` (matching the "Ky Anthem-D1jMg1K_7gQ.txt" filename the error
+message itself named) was never found, no matter what. Root cause:
+`run_pipeline()` copies the source audio into `work_dir` (existing
+behavior, for `load_redo_inputs()`), but every later stage -- including
+`fetch_lyric_lines()`, whose sidecar check is `path.with_suffix(...)` on
+whatever `audio_path` it's handed -- kept using the ORIGINAL external
+`audio_path` parameter, never switching to the copy. A sidecar dropped
+next to the `work_dir` copy (the natural, error-message-suggested place)
+was checking the wrong directory entirely.
+
+Fix: right after the existing copy-or-skip block, `audio_path` is
+reassigned to `audio_copy_path` whenever that copy exists (freshly made or
+already there from a prior run) -- every subsequent stage, not just
+`fetch_lyrics`, now consistently uses the `work_dir` copy. Also
+incidentally hardens the "batch staging folder already emptied" case
+`load_redo_inputs()` was already special-cased for (see its own
+docstring) for a same-run stage resume, not just a later Redo.
+
+New test asserts `fetch_lyric_lines()` is called with the `work_dir` copy
+path, not an external original location, by constructing the audio file
+in a separate `external/staging/` directory and capturing what path the
+mocked call actually receives. Full suite: 592 passed.

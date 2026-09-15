@@ -237,6 +237,16 @@ def run_pipeline(
     audio_copy_path = work_dir / Path(audio_path).name
     if Path(audio_path).exists() and not audio_copy_path.exists():
         shutil.copy2(audio_path, audio_copy_path)
+    # Every stage below reads from THIS copy from here on, not the original
+    # external path -- real bug, 2026-09-15: fetch_lyrics' sidecar .lrc/.txt
+    # lookup checks next to whatever audio_path currently points at, so a
+    # sidecar the owner drops next to this work_dir copy (the file the
+    # error message's own filename hint refers to) was never actually being
+    # found while audio_path still meant the original location. Same fix
+    # also helps the "batch staging folder gone by resume time" case this
+    # copy already existed to solve for Redo (see load_redo_inputs below).
+    if audio_copy_path.exists():
+        audio_path = audio_copy_path
 
     # Matches separate_vocals()'s own output path convention, so resuming from a
     # later stage (skipping separation) still finds the file it already wrote.
