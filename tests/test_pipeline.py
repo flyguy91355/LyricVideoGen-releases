@@ -6,6 +6,7 @@ from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Song, Word, sav
 from lyricvideo.pipeline import (
     run_pipeline,
     list_redoable_songs,
+    list_pending_uploads,
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
@@ -88,6 +89,19 @@ def test_run_pipeline_only_needs_the_audio_file_no_pdf_or_chords_text_argument(t
     out_path = run_pipeline(Path("audio.mp3"), work_dir)
 
     assert out_path.parent == work_dir
+
+
+def test_run_pipeline_copies_the_source_audio_into_work_dir(tmp_path, monkeypatch):
+    """So Redo has a reliable local copy to fall back on even after a batch
+    run's original staging-folder file is gone -- see load_redo_inputs()."""
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"fake audio bytes")
+
+    run_pipeline(audio_path, work_dir)
+
+    assert (work_dir / "song.mp3").read_bytes() == b"fake audio bytes"
 
 
 def test_run_pipeline_skips_earlier_stages(tmp_path, monkeypatch):
@@ -360,6 +374,60 @@ def test_load_redo_inputs_reads_audio_path_and_title(tmp_path):
 
     assert audio_path == Path("/home/doug/songs/angie.mp3")
     assert title == "Angie"
+
+
+def test_load_redo_inputs_prefers_a_local_copy_in_work_dir_over_the_original_path(tmp_path):
+    """A batch-run song's original audio_path can point into a staging
+    folder the owner has since emptied -- run_pipeline() now copies the
+    source audio into the song's own work_dir precisely so Redo has
+    something reliable to fall back on. This is that fallback taking
+    priority once the local copy exists."""
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    save_song(
+        Song(title="Angie", audio_path="/batch/staging/angie.mp3"),
+        song_dir / "lyrics_timed.json",
+    )
+    (song_dir / "angie.mp3").write_bytes(b"local copy")
+
+    audio_path, title = load_redo_inputs(song_dir)
+
+    assert audio_path == song_dir / "angie.mp3"
+    assert title == "Angie"
+
+
+def test_list_pending_uploads_finds_a_rendered_song_with_no_youtube_state(tmp_path):
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "angie.mp4").write_bytes(b"video")
+
+    assert list_pending_uploads(work_root) == ["angie-rolling-stones"]
+
+
+def test_list_pending_uploads_excludes_a_song_already_recorded_as_uploaded(tmp_path):
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "angie.mp4").write_bytes(b"video")
+    (song_dir / "youtube_state.json").write_text("{}", encoding="utf-8")
+
+    assert list_pending_uploads(work_root) == []
+
+
+def test_list_pending_uploads_excludes_a_song_with_no_rendered_video_yet(tmp_path):
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+
+    assert list_pending_uploads(work_root) == []
+
+
+def test_list_pending_uploads_returns_empty_list_when_work_dir_missing(tmp_path):
+    assert list_pending_uploads(tmp_path / "does-not-exist") == []
 
 
 def test_backup_song_outputs_copies_video_and_timed_json(tmp_path):

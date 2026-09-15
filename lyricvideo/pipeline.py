@@ -24,6 +24,7 @@ from .layout import instrumental_image_captions
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals
 from .settings import Settings
+from .youtube_state import STATE_FILENAME
 
 STAGES = ["identify", "separate", "fetch_lyrics", "align", "detect_chords", "images", "render"]
 
@@ -86,11 +87,44 @@ def list_redoable_songs(work_root: Path) -> list[str]:
     )
 
 
+def list_pending_uploads(work_root: Path) -> list[str]:
+    """Names of work_root's immediate subdirectories that have a rendered
+    video but no recorded YouTube upload yet -- backs the GUI's retry-upload
+    dropdown for a failed upload (e.g. YouTube's daily uploadLimitExceeded
+    cap) on a song that isn't self._last_work_dir (only set by Generate/Redo
+    in the same session, not Batch). Filesystem-only, no live YouTube call:
+    schedule_upload() only ever writes youtube_state.json AFTER a successful
+    upload, so a missing one is already the right signal that nothing
+    succeeded -- no need for a network round trip per song just to build
+    this list."""
+    if not work_root.exists():
+        return []
+    pending = []
+    for entry in sorted(work_root.iterdir(), key=lambda p: p.name):
+        if not entry.is_dir():
+            continue
+        timed_path = entry / "lyrics_timed.json"
+        if not timed_path.exists() or (entry / STATE_FILENAME).exists():
+            continue
+        song = load_song(timed_path)
+        if (entry / f"{slugify(song.title)}.mp4").exists():
+            pending.append(entry.name)
+    return pending
+
+
 def load_redo_inputs(song_dir: Path) -> tuple[Path, str]:
     """Reads back the (audio_path, title) a prior run saved onto its own
     Song, so a redo never needs the owner to re-browse for the original
-    audio file."""
+    audio file. Prefers run_pipeline()'s own local copy of the audio inside
+    song_dir over the original external audio_path -- a batch-run song's
+    original path points into a staging folder the owner empties before the
+    next batch, so by the time an older song is redone that file may already
+    be gone. Falls back to the original external path for a song generated
+    before this local copy existed."""
     song = load_song(song_dir / "lyrics_timed.json")
+    local_copy = song_dir / Path(song.audio_path).name
+    if local_copy.exists():
+        return local_copy, song.title
     return Path(song.audio_path), song.title
 
 
@@ -170,6 +204,15 @@ def run_pipeline(
             progress_callback(stage)
 
     work_dir.mkdir(parents=True, exist_ok=True)
+    # A local copy of the source audio, kept for load_redo_inputs() -- a batch
+    # song's original audio_path points into a staging folder the owner
+    # empties before the next batch, so it can be gone by the time a later
+    # Redo needs it. Skipped once the copy already exists (a resume past an
+    # earlier stage, or a Redo that's already reading from this same copy).
+    audio_copy_path = work_dir / Path(audio_path).name
+    if Path(audio_path).exists() and not audio_copy_path.exists():
+        shutil.copy2(audio_path, audio_copy_path)
+
     # Matches separate_vocals()'s own output path convention, so resuming from a
     # later stage (skipping separation) still finds the file it already wrote.
     demucs_dir = work_dir / "htdemucs" / Path(audio_path).stem

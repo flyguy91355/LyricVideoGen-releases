@@ -32,6 +32,7 @@ from .pipeline import (
     run_pipeline,
     slugify as _slugify,
     list_redoable_songs,
+    list_pending_uploads,
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
@@ -123,6 +124,36 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
         print(f"WARNING: YouTube upload failed for {work_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
 
 
+def _retry_pending_uploads(
+    work_root: Path, settings: Settings, slugs: list[str] | None = None,
+) -> dict:
+    """Uploads every song named in `slugs` (default: every list_pending_uploads()
+    result) via the same schedule_upload() code path as auto-upload and the
+    manual Upload button -- backs the GUI's retry-upload controls for a song
+    that failed to upload (e.g. YouTube's daily uploadLimitExceeded cap) and
+    isn't self._last_work_dir. One song's failure is logged and skipped,
+    never aborting the rest -- same "keep going" behavior as the batch
+    pipeline worker, since a still-active daily cap would otherwise fail
+    every remaining song in the same way anyway."""
+    credentials = youtube_auth.load_credentials()
+    if credentials is None:
+        raise RuntimeError("Not connected to YouTube.")
+    youtube_client = build("youtube", "v3", credentials=credentials)
+    anthropic_client = anthropic.Anthropic()
+
+    if slugs is None:
+        slugs = list_pending_uploads(work_root)
+
+    results: dict = {"succeeded": [], "failed": []}
+    for slug in slugs:
+        try:
+            schedule_upload(youtube_client, anthropic_client, work_root / slug, settings)
+            results["succeeded"].append(slug)
+        except Exception as e:
+            results["failed"].append((slug, f"{type(e).__name__}: {e}"))
+    return results
+
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
 
@@ -187,6 +218,7 @@ class LyricVideoGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.redo_song_var = tk.StringVar()
         self.redo_new_images_var = tk.BooleanVar(value=False)
+        self.retry_upload_song_var = tk.StringVar()
         self.batch_folder_var = tk.StringVar(value=load_last_batch_folder())
         self._batch_items: list = []  # list[BatchItem] once resolved
         self._batch_index = 0
@@ -311,6 +343,25 @@ class LyricVideoGUI:
         ).pack(side="left", padx=8)
         self.redo_button = ctk.CTkButton(redo_controls, text="Redo", command=self._on_redo, width=80)
         self.redo_button.pack(side="left", padx=8)
+
+        ctk.CTkLabel(redo_frame, text="Retry a Failed Upload", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=8, pady=(4, 4)
+        )
+        retry_upload_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
+        retry_upload_controls.pack(fill="x", padx=8, pady=(0, 8))
+        self.retry_upload_combo = ctk.CTkComboBox(
+            retry_upload_controls, variable=self.retry_upload_song_var,
+            values=list_pending_uploads(PROJECT_ROOT / "work"), width=260, state="readonly",
+        )
+        self.retry_upload_combo.pack(side="left", padx=(0, 8))
+        self.retry_upload_button = ctk.CTkButton(
+            retry_upload_controls, text="Upload", command=self._on_retry_upload, width=80,
+        )
+        self.retry_upload_button.pack(side="left", padx=8)
+        self.retry_upload_all_button = ctk.CTkButton(
+            retry_upload_controls, text="Upload All Pending", command=self._on_retry_upload_all, width=140,
+        )
+        self.retry_upload_all_button.pack(side="left", padx=8)
 
         batch_frame = ctk.CTkFrame(left)
         batch_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -1138,6 +1189,52 @@ class LyricVideoGUI:
                 self.root.after(0, lambda: self._update_upload_button_state(work_dir))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_retry_upload(self) -> None:
+        if self._running:
+            return
+        slug = self.retry_upload_song_var.get().strip()
+        if not slug:
+            messagebox.showerror("No song selected", "Pick a song from the Retry Upload dropdown.")
+            return
+        self._start_retry_upload([slug])
+
+    def _on_retry_upload_all(self) -> None:
+        if self._running:
+            return
+        self._start_retry_upload(None)
+
+    def _start_retry_upload(self, slugs: list[str] | None) -> None:
+        self.retry_upload_button.configure(state="disabled")
+        self.retry_upload_all_button.configure(state="disabled")
+
+        def worker():
+            try:
+                results = _retry_pending_uploads(PROJECT_ROOT / "work", self.settings, slugs)
+            except Exception as e:
+                message = f"{type(e).__name__}: {e}"  # see _on_connect_youtube: never read `e` inside the lambda
+                self.root.after(0, lambda: messagebox.showerror("Upload failed", message))
+                self.root.after(0, self._refresh_retry_upload_options)
+                return
+            self.root.after(0, lambda: self._on_retry_upload_done(results))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_retry_upload_done(self, results: dict) -> None:
+        self._refresh_retry_upload_options()
+        lines = [f"Uploaded {len(results['succeeded'])} song(s)."]
+        if results["failed"]:
+            lines.append(f"{len(results['failed'])} failed:")
+            lines.extend(f"  {slug}: {reason}" for slug, reason in results["failed"])
+        messagebox.showinfo("Retry upload results", "\n".join(lines))
+
+    def _refresh_retry_upload_options(self) -> None:
+        values = list_pending_uploads(PROJECT_ROOT / "work")
+        self.retry_upload_combo.configure(values=values)
+        if self.retry_upload_song_var.get() not in values:
+            self.retry_upload_song_var.set(values[0] if values else "")
+        self.retry_upload_button.configure(state="normal")
+        self.retry_upload_all_button.configure(state="normal")
 
     def _build_youtube_panel(self, parent) -> None:
         frame = ctk.CTkFrame(parent, fg_color="transparent")

@@ -1,5 +1,6 @@
 from lyricvideo.gui import (
-    PROJECT_ROOT, _default_work_dir_from_audio, _maybe_upload_to_youtube, _slugify, _split_log_text,
+    PROJECT_ROOT, _default_work_dir_from_audio, _maybe_upload_to_youtube, _retry_pending_uploads,
+    _slugify, _split_log_text,
 )
 from lyricvideo.settings import Settings
 from lyricvideo.youtube_state import YoutubeState, save_youtube_state
@@ -117,6 +118,80 @@ def test_maybe_upload_to_youtube_never_raises_on_upload_failure(tmp_path, monkey
     settings = Settings(youtube_auto_upload=True)
 
     _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+
+def test_retry_pending_uploads_uploads_every_pending_song(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b"])
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+    )
+    settings = Settings()
+
+    results = _retry_pending_uploads(tmp_path, settings)
+
+    assert calls == [tmp_path / "song-a", tmp_path / "song-b"]
+    assert results == {"succeeded": ["song-a", "song-b"], "failed": []}
+
+
+def test_retry_pending_uploads_continues_after_a_single_song_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b"])
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+
+    def upload(youtube_client, anthropic_client, work_dir, settings):
+        if work_dir.name == "song-a":
+            raise RuntimeError("uploadLimitExceeded")
+
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", upload)
+    settings = Settings()
+
+    results = _retry_pending_uploads(tmp_path, settings)
+
+    assert results == {
+        "succeeded": ["song-b"],
+        "failed": [("song-a", "RuntimeError: uploadLimitExceeded")],
+    }
+
+
+def test_retry_pending_uploads_raises_when_not_connected(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a"])
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: None)
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload")),
+    )
+
+    try:
+        _retry_pending_uploads(tmp_path, Settings())
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass
+
+
+def test_retry_pending_uploads_only_attempts_the_given_slugs(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.gui.list_pending_uploads",
+        lambda work_root: (_ for _ in ()).throw(AssertionError("should not list all pending songs")),
+    )
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+    )
+
+    results = _retry_pending_uploads(tmp_path, Settings(), slugs=["song-a"])
+
+    assert calls == [tmp_path / "song-a"]
+    assert results == {"succeeded": ["song-a"], "failed": []}
 
 
 def test_slugify_lowercases_and_hyphenates():
@@ -367,3 +442,43 @@ def test_redo_refuses_when_the_original_audio_file_is_gone(monkeypatch, tmp_path
     assert [title for title, _ in shown] == ["Original audio file not found"]
     assert str(tmp_path / "gone.mp3") in shown[0][1]
     assert "Angie" in shown[0][1]
+
+
+def test_retry_upload_refuses_when_nothing_is_selected(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _must_not_run)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    stub = _gui_stub(_running=False, retry_upload_song_var=SimpleNamespace(get=lambda: "  "))
+    LyricVideoGUI._on_retry_upload(stub)
+
+    assert [title for title, _ in shown] == ["No song selected"]
+
+
+def test_retry_upload_all_shows_a_summary_and_refreshes_the_dropdown(monkeypatch, tmp_path):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        "lyricvideo.gui._retry_pending_uploads",
+        lambda work_root, settings, slugs: {"succeeded": ["song-a"], "failed": [("song-b", "RuntimeError: boom")]},
+    )
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda title, msg: shown.append((title, msg)))
+    button_states = []
+    refreshed = []
+
+    stub = _gui_stub(
+        _running=False,
+        retry_upload_button=SimpleNamespace(configure=lambda **kw: button_states.append(("upload", kw))),
+        retry_upload_all_button=SimpleNamespace(configure=lambda **kw: button_states.append(("upload_all", kw))),
+        _refresh_retry_upload_options=lambda: refreshed.append(True),
+    )
+    stub._on_retry_upload_done = lambda results: LyricVideoGUI._on_retry_upload_done(stub, results)
+    LyricVideoGUI._start_retry_upload(stub, None)
+
+    assert shown == [(
+        "Retry upload results",
+        "Uploaded 1 song(s).\n1 failed:\n  song-b: RuntimeError: boom",
+    )]
+    assert ("upload", {"state": "disabled"}) in button_states
+    assert ("upload_all", {"state": "disabled"}) in button_states
+    assert refreshed == [True]

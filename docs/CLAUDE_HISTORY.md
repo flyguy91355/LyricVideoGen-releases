@@ -1720,3 +1720,46 @@ Verified against the real cu130 wheel on the Windows box: arch list
 `sm_75 sm_80 sm_86 sm_90 sm_100 sm_120`; the RTX 5070 (12.0) still picks
 `cuda`, a simulated (6, 1) picks `cpu`. `tests/test_separate.py` grew from 9
 to 29 tests. Not verified: an actual run on the GT 1030 box itself.
+
+## 2026-09-15 — Redo audio for batch songs, and a retry-upload GUI for failed YouTube uploads
+
+Two items triaged into `TODO.md`, both now implemented and resolved (the file is
+empty again).
+
+**Redo broke for any song originally processed via Batch.** `load_redo_inputs()`
+read back the ORIGINAL absolute `audio_path` from the song's own
+`lyrics_timed.json`, but a batch-run song's path points into the owner's "batch
+music" staging folder -- emptied before the next batch run, by the owner's own
+workflow, so an older batch song's source file was long gone by the time a Redo
+was attempted (reported by the owner 2026-09-14). Fix (owner's own decided
+approach): `run_pipeline()` now copies the source audio into the song's own
+`work_dir` under its original filename, early (right after `work_dir.mkdir()`),
+skipped once the copy already exists or the source doesn't (so it's a no-op, not
+an error, for every existing test's fake `Path("audio.mp3")`). `load_redo_inputs()`
+prefers that local copy over the external `audio_path`, falling back to the
+original external path for a song generated before this fix existed -- an older
+work dir keeps working exactly as before as long as its source file hasn't
+actually been deleted yet.
+
+**No way to retry a failed YouTube upload** (e.g. hitting the daily
+`uploadLimitExceeded` cap) without a one-off script calling `schedule_upload()`
+directly -- hit live 2026-09-12 during a batch run. New `list_pending_uploads()`
+in `pipeline.py` (filesystem-only, same shape as `list_redoable_songs()`): a
+`work/*` folder counts as pending when it has a rendered `<slug>.mp4` but no
+`youtube_state.json` yet -- `schedule_upload()` only ever writes that file AFTER
+a successful upload, so a missing one is already the right signal without a live
+YouTube API call per song. The GUI's "Redo an Existing Song" section grew a
+second row, "Retry a Failed Upload": a dropdown of pending songs, an "Upload"
+button for the selected one, and "Upload All Pending" which loops through every
+pending song, logging and skipping any individual failure and continuing to the
+next (same behavior as the batch pipeline worker) rather than aborting the whole
+retry run the moment the still-active daily cap rejects the first one. Both
+buttons call the same `schedule_upload()` path as auto-upload and the existing
+manual Upload button, and -- confirmed with the owner -- work regardless of the
+`youtube_auto_upload` setting, same as that existing manual button: an explicit
+click is a deliberate override, not something the auto-upload toggle should gate.
+
+Built via the brainstorming skill's bounded path (short in-chat design, no spec
+file) and TDD throughout; `tests/test_pipeline.py` and `tests/test_gui.py` grew
+new coverage for `list_pending_uploads()`, the redo audio-copy fallback, and
+`_retry_pending_uploads()`. Full suite: 557 passed.

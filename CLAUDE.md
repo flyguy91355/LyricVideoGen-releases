@@ -315,8 +315,8 @@ re-fetched and chords re-detected fresh on every redo, both cheap relative to
 Demucs/images), reusing the existing Demucs stems and `work_dir/song_info.json`
 (read via the `else` branch of `run_pipeline`'s `identify` stage, since a
 `start_stage` past `"identify"` never re-runs it), via `list_redoable_songs()`/
-`load_redo_inputs()` (reads the original `audio_path`/`title` back off the song's
-own `lyrics_timed.json`, so the owner never re-browses for the original files). In
+`load_redo_inputs()` (reads `audio_path`/`title` off `lyrics_timed.json`,
+preferring a local copy `run_pipeline()` writes into `work_dir`). In
 `gui.py`, the "Redo an Existing Song" dropdown lists every `work/` folder with a
 completed run; a "Generate new images" checkbox (default off = reuse, matching this
 app's existing cost-conscious convention) forces fresh images via
@@ -516,7 +516,9 @@ spot whenever a saved `youtube_state.json` record's video_id still
 verifiably exists on YouTube (same `video_exists()` check as
 `_maybe_upload_to_youtube`, same fail-closed behavior on a verification
 error -- keeps showing "uploaded" rather than flash a wrong button; a
-stale local file alone once risked a duplicate upload).
+stale local file alone once risked a duplicate upload). "Retry a Failed
+Upload" (below Redo) retries `list_pending_uploads()` songs, ignoring
+`youtube_auto_upload`.
 `lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies
