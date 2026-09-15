@@ -158,6 +158,12 @@ def _retry_pending_uploads(
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
 
+# Height (px) of each scrollable song-list panel (Redo / Upload to YouTube /
+# Pending Uploads) -- ~15 rows visible before it scrolls for the rest (owner
+# request, 2026-09-15: these lists were growing too long for a fixed-size
+# dropdown to show).
+SONG_LIST_HEIGHT = 420
+
 
 def _default_work_dir_from_audio(audio_path: str) -> str:
     """Fallback work directory derived straight from the audio file's own
@@ -198,7 +204,7 @@ class LyricVideoGUI:
         self.root = root
         current_version = read_local_version(str(_VERSION_FILE_PATH)) or "v0.0.0"
         root.title(f"PlayAlongVideoProduction {current_version}")
-        root.geometry("1400x820")
+        root.geometry("1400x900")
         root.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         self._queue: "queue.Queue" = queue.Queue()
@@ -269,8 +275,19 @@ class LyricVideoGUI:
 
         left = ctk.CTkFrame(body)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        left.grid_columnconfigure(0, weight=1)
+        # Song-list panels below (Redo/Upload to YouTube/Pending Uploads) can
+        # each run SONG_LIST_HEIGHT px tall (~15 rows) -- more than fits in
+        # the window alongside the log console, so everything above the log
+        # scrolls as one unit (left_scroll) instead of the window just
+        # growing past the screen (owner request, 2026-09-15).
+        left.grid_rowconfigure(0, weight=3)
+        left.grid_rowconfigure(1, weight=2)
 
-        form = ctk.CTkFrame(left, fg_color="transparent")
+        left_scroll = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        left_scroll.grid(row=0, column=0, sticky="nsew")
+
+        form = ctk.CTkFrame(left_scroll, fg_color="transparent")
         form.pack(fill="x", padx=10, pady=10)
         form.grid_columnconfigure(1, weight=1)
 
@@ -308,29 +325,29 @@ class LyricVideoGUI:
         )
         self.new_song_button.pack(side="left", padx=4)
 
-        status_frame = ctk.CTkFrame(left, fg_color="transparent")
+        status_frame = ctk.CTkFrame(left_scroll, fg_color="transparent")
         status_frame.pack(fill="x", padx=10, pady=(0, 4))
         ctk.CTkLabel(status_frame, text="Status:").pack(side="left")
         ctk.CTkLabel(status_frame, textvariable=self.status_var, text_color="#3ecf8e").pack(
             side="left", padx=6
         )
 
-        self.progress_bar = ctk.CTkProgressBar(left)
+        self.progress_bar = ctk.CTkProgressBar(left_scroll)
         self.progress_bar.set(0.0)
         self.progress_bar.pack(fill="x", padx=10, pady=(0, 10))
 
-        redo_frame = ctk.CTkFrame(left)
+        redo_frame = ctk.CTkFrame(left_scroll)
         redo_frame.pack(fill="x", padx=10, pady=(0, 10))
         ctk.CTkLabel(redo_frame, text="Redo an Existing Song", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=8, pady=(8, 4)
         )
+        self.redo_list_frame = ctk.CTkScrollableFrame(redo_frame, height=SONG_LIST_HEIGHT)
+        self.redo_list_frame.pack(fill="x", padx=8, pady=(0, 4))
+        self._populate_song_radio_list(
+            self.redo_list_frame, list_redoable_songs(PROJECT_ROOT / "work"), self.redo_song_var,
+        )
         redo_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
         redo_controls.pack(fill="x", padx=8, pady=(0, 8))
-        self.redo_combo = ctk.CTkComboBox(
-            redo_controls, variable=self.redo_song_var,
-            values=list_redoable_songs(PROJECT_ROOT / "work"), width=260, state="readonly",
-        )
-        self.redo_combo.pack(side="left", padx=(0, 8))
         ctk.CTkCheckBox(
             redo_controls, text="Generate new images", variable=self.redo_new_images_var,
         ).pack(side="left", padx=8)
@@ -340,23 +357,42 @@ class LyricVideoGUI:
         ctk.CTkLabel(redo_frame, text="Upload to YouTube", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=8, pady=(4, 4)
         )
+        self.retry_upload_list_frame = ctk.CTkScrollableFrame(redo_frame, height=SONG_LIST_HEIGHT)
+        self.retry_upload_list_frame.pack(fill="x", padx=8, pady=(0, 4))
+        self._populate_song_radio_list(
+            self.retry_upload_list_frame, list_rendered_songs(PROJECT_ROOT / "work"), self.retry_upload_song_var,
+        )
         retry_upload_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
         retry_upload_controls.pack(fill="x", padx=8, pady=(0, 8))
-        self.retry_upload_combo = ctk.CTkComboBox(
-            retry_upload_controls, variable=self.retry_upload_song_var,
-            values=list_rendered_songs(PROJECT_ROOT / "work"), width=260, state="readonly",
-        )
-        self.retry_upload_combo.pack(side="left", padx=(0, 8))
         self.retry_upload_button = ctk.CTkButton(
             retry_upload_controls, text="Upload", command=self._on_retry_upload, width=80,
         )
         self.retry_upload_button.pack(side="left", padx=8)
-        self.retry_upload_all_button = ctk.CTkButton(
-            retry_upload_controls, text="Upload All Pending", command=self._on_retry_upload_all, width=140,
-        )
-        self.retry_upload_all_button.pack(side="left", padx=8)
 
-        batch_frame = ctk.CTkFrame(left)
+        pending_frame = ctk.CTkFrame(left_scroll)
+        pending_frame.pack(fill="x", padx=10, pady=(0, 10))
+        pending_header = ctk.CTkFrame(pending_frame, fg_color="transparent")
+        pending_header.pack(fill="x", padx=8, pady=(8, 4))
+        ctk.CTkLabel(pending_header, text="Pending YouTube Uploads", font=ctk.CTkFont(weight="bold")).pack(
+            side="left"
+        )
+        self.pending_select_all_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            pending_header, text="Select All", variable=self.pending_select_all_var,
+            command=self._on_toggle_pending_select_all,
+        ).pack(side="right")
+        self.pending_uploads_list_frame = ctk.CTkScrollableFrame(pending_frame, height=SONG_LIST_HEIGHT)
+        self.pending_uploads_list_frame.pack(fill="x", padx=8, pady=(0, 4))
+        self._pending_upload_vars: dict[str, tk.BooleanVar] = {}
+        self._refresh_pending_uploads_list()
+        pending_controls = ctk.CTkFrame(pending_frame, fg_color="transparent")
+        pending_controls.pack(fill="x", padx=8, pady=(0, 8))
+        self.upload_selected_button = ctk.CTkButton(
+            pending_controls, text="Upload Selected", command=self._on_upload_selected_pending, width=140,
+        )
+        self.upload_selected_button.pack(side="left", padx=8)
+
+        batch_frame = ctk.CTkFrame(left_scroll)
         batch_frame.pack(fill="x", padx=10, pady=(0, 10))
         ctk.CTkLabel(batch_frame, text="Batch: Process a Folder", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=8, pady=(8, 4)
@@ -373,7 +409,7 @@ class LyricVideoGUI:
         self.batch_button.pack(side="left", padx=8)
 
         self.log_widget = ctk.CTkTextbox(left, state="disabled", wrap="word")
-        self.log_widget.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.log_widget.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
         right = ctk.CTkFrame(body)
         right.grid(row=0, column=1, sticky="nsew")
@@ -1103,7 +1139,7 @@ class LyricVideoGUI:
             return
         slug = self.retry_upload_song_var.get().strip()
         if not slug:
-            messagebox.showerror("No song selected", "Pick a song from the dropdown.")
+            messagebox.showerror("No song selected", "Pick a song from the list.")
             return
         if load_youtube_state(PROJECT_ROOT / "work" / slug) is not None:
             # Already uploaded -- reachable for any past song now, not just
@@ -1116,14 +1152,23 @@ class LyricVideoGUI:
                 return
         self._start_retry_upload([slug])
 
-    def _on_retry_upload_all(self) -> None:
+    def _on_toggle_pending_select_all(self) -> None:
+        value = self.pending_select_all_var.get()
+        for var in self._pending_upload_vars.values():
+            var.set(value)
+
+    def _on_upload_selected_pending(self) -> None:
         if self._running:
             return
-        self._start_retry_upload(None)
+        slugs = [slug for slug, var in self._pending_upload_vars.items() if var.get()]
+        if not slugs:
+            messagebox.showerror("No songs selected", "Check at least one pending song to upload.")
+            return
+        self._start_retry_upload(slugs)
 
     def _start_retry_upload(self, slugs: list[str] | None) -> None:
         self.retry_upload_button.configure(state="disabled")
-        self.retry_upload_all_button.configure(state="disabled")
+        self.upload_selected_button.configure(state="disabled")
 
         def worker():
             try:
@@ -1147,11 +1192,47 @@ class LyricVideoGUI:
 
     def _refresh_retry_upload_options(self) -> None:
         values = list_rendered_songs(PROJECT_ROOT / "work")
-        self.retry_upload_combo.configure(values=values)
-        if self.retry_upload_song_var.get() not in values:
-            self.retry_upload_song_var.set(values[0] if values else "")
+        self._populate_song_radio_list(
+            self.retry_upload_list_frame, values, self.retry_upload_song_var, auto_select_first=True,
+        )
         self.retry_upload_button.configure(state="normal")
-        self.retry_upload_all_button.configure(state="normal")
+        self.upload_selected_button.configure(state="normal")
+        self._refresh_pending_uploads_list()
+
+    def _populate_song_radio_list(
+        self, frame: ctk.CTkScrollableFrame, songs: list[str], variable: tk.StringVar,
+        auto_select_first: bool = False,
+    ) -> None:
+        """Rebuilds `frame`'s rows as a single-select list of radio buttons
+        bound to `variable`, replacing the old CTkComboBox dropdown (a native
+        OS menu that could run off-screen once a song list got long enough --
+        owner request, 2026-09-15). `auto_select_first` reproduces the old
+        _refresh_retry_upload_options behavior of snapping to the first song
+        when the current selection no longer exists; the initial build never
+        auto-selects, matching the old dropdown's blank starting state."""
+        for child in frame.winfo_children():
+            child.destroy()
+        if variable.get() not in songs:
+            variable.set((songs[0] if songs and auto_select_first else ""))
+        for song in songs:  # already alphabetical -- see list_redoable_songs/list_rendered_songs
+            ctk.CTkRadioButton(frame, text=song, variable=variable, value=song).pack(anchor="w", padx=6, pady=2)
+
+    def _refresh_pending_uploads_list(self) -> None:
+        """Rebuilds the Pending Uploads checklist from the filesystem (never
+        cached) -- schedule_upload() only writes youtube_state.json AFTER a
+        successful upload, so a song simply stops appearing here once it
+        succeeds, with no separate bookkeeping needed for "leaving the list"
+        (owner request, 2026-09-15)."""
+        for child in self.pending_uploads_list_frame.winfo_children():
+            child.destroy()
+        select_all = self.pending_select_all_var.get()
+        self._pending_upload_vars = {}
+        for slug in list_pending_uploads(PROJECT_ROOT / "work"):
+            var = tk.BooleanVar(value=select_all)
+            self._pending_upload_vars[slug] = var
+            ctk.CTkCheckBox(self.pending_uploads_list_frame, text=slug, variable=var).pack(
+                anchor="w", padx=6, pady=2
+            )
 
     def _build_youtube_panel(self, parent) -> None:
         frame = ctk.CTkFrame(parent, fg_color="transparent")

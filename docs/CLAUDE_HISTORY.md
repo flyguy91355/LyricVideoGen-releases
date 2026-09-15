@@ -1828,3 +1828,57 @@ stub tests covering the confirm/skip-confirm/decline paths on the single
 Upload button. Section header renamed "Retry a Failed Upload" ->
 "Upload to YouTube" since it's the only upload UI now. TDD throughout; full
 suite: 564 passed.
+
+## 2026-09-15 — Made the Redo/Upload-to-YouTube/Pending-uploads lists scrollable
+
+Owner complaint: the Redo and Upload-to-YouTube song pickers had grown too
+long to be usable. Both were plain `CTkComboBox` dropdowns, which pop a
+native OS menu (a plain `tkinter.Menu` under the hood, confirmed by reading
+customtkinter's own `dropdown_menu.py`) -- on this owner's window manager
+that menu could run off-screen once the song list got long enough, with no
+scrollbar of its own. Separately, "Upload All Pending" acted on
+`list_pending_uploads()` completely blind -- there was no way to see which
+songs were pending, or to upload only some of them rather than all-or-nothing.
+
+Fix: `_populate_song_radio_list()` rebuilds the Redo and Upload-to-YouTube
+pickers as `CTkRadioButton` rows inside a `CTkScrollableFrame` fixed to a new
+`SONG_LIST_HEIGHT` constant (420px, ~15 rows before it scrolls -- owner's
+own number, after an initial back-and-forth from 10). Replaced "Upload All
+Pending" with a new "Pending YouTube Uploads" panel: a `CTkCheckBox`
+checklist over `list_pending_uploads()` (`_refresh_pending_uploads_list()`),
+a "Select All" toggle, and an "Upload Selected" button
+(`_on_upload_selected_pending()`) that reuses the existing
+`_start_retry_upload()`/`_retry_pending_uploads()` path unchanged. A song
+needs no special "remove from pending" handling -- `schedule_upload()` only
+ever writes `youtube_state.json` after a real success, so a song simply
+stops matching `list_pending_uploads()`'s filesystem scan on the next
+refresh (called automatically after every upload batch finishes).
+
+Three ~15-row scrollable lists don't fit in the existing 820px-tall window
+alongside the song form and the log console -- offered the owner three
+layout options (shrink each list, move lists into popups, or scroll the
+whole left-hand column as one unit) and they picked the latter. Wrapped
+everything above the log console in `left_scroll`, a `CTkScrollableFrame`;
+`left` itself switched from a single pack()'d column to a 3:2-weighted grid
+(`left_scroll` row 0, the log widget row 1), and the window's default height
+grew from 820 to 900 to fit more comfortably on a normal monitor. The old
+`retry_upload_combo`/`redo_combo`/`retry_upload_all_button` attributes and
+the now-dead `_on_retry_upload_all` were removed; `retry_upload_all_button`
+was renamed `upload_selected_button` throughout (`_start_retry_upload` still
+disables/re-enables it during a run) and the one test that referenced it by
+name was updated to match, plus three new stub tests for the select-all
+toggle and the selected-only upload path. Full suite: 567 passed.
+
+Verified live: launched a second GUI instance under the owner's real
+session (careful not to touch the owner's own already-running instance,
+mid-batch at the time -- confirmed by PID/start-time before touching
+anything, and killed only the new instance by PID afterward, never by
+window title, since both instances shared the exact same window title).
+Screenshots confirmed the Redo list renders real, alphabetically-sorted
+songs from `work/`, scrolls internally, and the overall layout isn't broken
+or overlapping. Automated click/drag verification of the scrollbars and
+checkboxes themselves was inconclusive -- synthetic `xdotool` input wasn't
+reaching the window in this sandbox (confirmed via a plain radio-button
+click that never registered, ruling out a scrollbar-specific bug) -- so full
+interactive confirmation (scrolling, checking boxes, Select All, Upload
+Selected) still needs a manual pass by the owner.

@@ -483,7 +483,7 @@ def test_retry_upload_skips_confirmation_for_a_never_uploaded_song(monkeypatch):
     assert started == [["angie"]]
 
 
-def test_retry_upload_all_shows_a_summary_and_refreshes_the_dropdown(monkeypatch, tmp_path):
+def test_retry_upload_all_shows_a_summary_and_refreshes_the_lists(monkeypatch, tmp_path):
     monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
     monkeypatch.setattr(
         "lyricvideo.gui._retry_pending_uploads",
@@ -497,7 +497,7 @@ def test_retry_upload_all_shows_a_summary_and_refreshes_the_dropdown(monkeypatch
     stub = _gui_stub(
         _running=False,
         retry_upload_button=SimpleNamespace(configure=lambda **kw: button_states.append(("upload", kw))),
-        retry_upload_all_button=SimpleNamespace(configure=lambda **kw: button_states.append(("upload_all", kw))),
+        upload_selected_button=SimpleNamespace(configure=lambda **kw: button_states.append(("upload_selected", kw))),
         _refresh_retry_upload_options=lambda: refreshed.append(True),
     )
     stub._on_retry_upload_done = lambda results: LyricVideoGUI._on_retry_upload_done(stub, results)
@@ -508,5 +508,56 @@ def test_retry_upload_all_shows_a_summary_and_refreshes_the_dropdown(monkeypatch
         "Uploaded 1 song(s).\n1 failed:\n  song-b: RuntimeError: boom",
     )]
     assert ("upload", {"state": "disabled"}) in button_states
-    assert ("upload_all", {"state": "disabled"}) in button_states
+    assert ("upload_selected", {"state": "disabled"}) in button_states
     assert refreshed == [True]
+
+
+def test_upload_selected_pending_refuses_when_nothing_is_checked(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _must_not_run)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    stub = _gui_stub(_running=False, _pending_upload_vars={"song-a": SimpleNamespace(get=lambda: False)})
+    LyricVideoGUI._on_upload_selected_pending(stub)
+
+    assert [title for title, _ in shown] == ["No songs selected"]
+
+
+def test_upload_selected_pending_uploads_only_the_checked_songs(monkeypatch):
+    started = []
+    stub = _gui_stub(
+        _running=False,
+        _pending_upload_vars={
+            "song-a": SimpleNamespace(get=lambda: True),
+            "song-b": SimpleNamespace(get=lambda: False),
+            "song-c": SimpleNamespace(get=lambda: True),
+        },
+        _start_retry_upload=lambda slugs: started.append(slugs),
+    )
+    LyricVideoGUI._on_upload_selected_pending(stub)
+
+    assert started == [["song-a", "song-c"]]
+
+
+class _FakeBooleanVar:
+    def __init__(self, value: bool):
+        self._value = value
+
+    def get(self) -> bool:
+        return self._value
+
+    def set(self, value: bool) -> None:
+        self._value = value
+
+
+def test_toggle_pending_select_all_sets_every_checkbox(monkeypatch):
+    var_a = _FakeBooleanVar(False)
+    var_b = _FakeBooleanVar(False)
+    stub = _gui_stub(
+        pending_select_all_var=SimpleNamespace(get=lambda: True),
+        _pending_upload_vars={"song-a": var_a, "song-b": var_b},
+    )
+    LyricVideoGUI._on_toggle_pending_select_all(stub)
+
+    assert var_a.get() is True
+    assert var_b.get() is True

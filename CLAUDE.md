@@ -507,13 +507,19 @@ A "YouTube: not connected"/"YouTube:
 connected as <channel>" status label + "Connect to YouTube" button sit
 above the Settings panel (refreshed on a background thread -- YouTube is
 never called from the GUI thread). "Upload to YouTube" (below Redo) is the
-sole manual-upload UI: a `list_rendered_songs()` dropdown (any song with a
-video, uploaded or not) + Upload -- confirms first if that song already has
-a `youtube_state.json`, since a stray click can now reach any past song, not
-just the one just generated -- plus "Upload All Pending" over
-`list_pending_uploads()` (never-uploaded only, no confirm needed), both via
-`_retry_pending_uploads()`, ignoring `youtube_auto_upload` like a deliberate
-manual click always has (9-15).
+sole manual-upload UI: a `list_rendered_songs()` single-select scrollable
+list (any song with a video, uploaded or not) + Upload -- confirms first if
+that song already has a `youtube_state.json` -- plus a "Pending YouTube
+Uploads" checklist below it,
+populated live from `list_pending_uploads()` (never-uploaded only), with a
+"Select All" toggle and an "Upload Selected" button; both share
+`_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
+`youtube_auto_upload` like a deliberate manual click always has (9-15). The
+Redo dropdown, this list, and the Pending checklist are each
+`CTkRadioButton`/`CTkCheckBox` rows in a `CTkScrollableFrame` fixed to
+`SONG_LIST_HEIGHT` (~15 rows, scrolls for the rest; CLAUDE_HISTORY 9-15).
+Everything above the log console (`left_scroll`) scrolls as one unit via a
+3:2 grid row-weight split on `left`.
 `lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies
