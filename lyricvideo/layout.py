@@ -290,16 +290,34 @@ def build_image_timeline(
         ]
         return _merge_into_hold_blocks(micro, min_hold_seconds)
 
+    def extend_into_gap_or_insert(gap_start: float, gap_end: float) -> None:
+        # A gap SHORTER than min_hold_seconds gets no segment of its own at
+        # all -- hold whatever image is already showing (the previous
+        # segment) straight through it, rather than swap to a distinct
+        # instrumental image for a moment and swap again just as fast once
+        # the next line begins. Real owner complaint, 2026-09-15: a brief,
+        # ordinary pause between two sung lines read as chaotic image
+        # flicker. _merge_into_hold_blocks already merges short chords
+        # WITHIN one gap, but a gap with only a single short micro-segment
+        # has nothing there to merge with -- this is what actually prevents
+        # that segment from being emitted on its own. Only applies once a
+        # real segment already exists to extend (never the leading intro,
+        # which has nothing before it to hold).
+        if segments and (gap_end - gap_start) < min_hold_seconds:
+            segments[-1].end = gap_end
+        else:
+            segments.extend(instrumental_blocks(gap_start, gap_end))
+
     segments: list[ImageSegment] = []
     cursor = 0.0
     for start, end, key in vocal_intervals:
         if start > cursor:
-            segments.extend(instrumental_blocks(cursor, start))
+            extend_into_gap_or_insert(cursor, start)
         if end > cursor:
             segments.append(ImageSegment(max(start, cursor), end, key))
             cursor = end
     if cursor < audio_duration:
-        segments.extend(instrumental_blocks(cursor, audio_duration))
+        extend_into_gap_or_insert(cursor, audio_duration)
 
     return segments
 
@@ -325,6 +343,28 @@ def build_scene(
         raise ValueError("no lines to build a scene from")
 
     idx = find_current_line_index(lines, t)
+    # During a gap AFTER a line has already been sung -- not before the very
+    # first line, that's the intro, handled by current_has_started below --
+    # advance to the NEXT line early instead of leaving the finished one as
+    # "current" (blanked) with only the line after it visible as "upcoming".
+    # That read as the display having jumped ahead to the next line early,
+    # for both a song's musical intro and any mid-song instrumental break
+    # (owner complaint, 2026-09-15). Reuses the exact same unsung/not-yet-
+    # started preview state the intro case already gets right below, rather
+    # than a second, inconsistent blanked-current special case. Only
+    # advances onto a line with real timing (lines[idx + 1].start_time is
+    # not None) -- an untimed line was never reachable via
+    # find_current_line_index's own scan either, so this doesn't hand
+    # "current" to a line nothing else in this function is prepared for.
+    if idx + 1 < len(lines) and lines[idx + 1].start_time is not None:
+        plausible_end = _plausible_line_end(lines[idx])
+        # Strictly greater-than: AT the exact instant a line's own plausible
+        # content ends, it's still that line's own final frame (its scroll
+        # animation should read as fully complete, not already reset to the
+        # next line's not-yet-started state) -- only once t moves past that
+        # instant does the gap actually begin.
+        if plausible_end is not None and t > plausible_end:
+            idx += 1
     current = lines[idx]
 
     # Computed up front (not just where Ken Burns pacing already used it below)

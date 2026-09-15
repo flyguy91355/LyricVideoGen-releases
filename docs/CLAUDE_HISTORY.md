@@ -1999,3 +1999,75 @@ Phase 1 investigation only partially done (see the interrupted
 conversation for partial root-cause notes on `_in_a_line`'s per-gap
 `min_hold_seconds` merging not bridging across a short inter-line pause
 into the surrounding sung segments).
+
+## 2026-09-15 — Fixed both display-gap bugs: premature next-line text, and image flicker on short pauses
+
+Picked back up the interrupted systematic-debugging task from the entry
+above once the layout crisis was resolved. Owner report: during a song's
+musical intro, and during any mid-song instrumental break, the display
+showed the SECOND lyric line the whole time instead of the first/current
+one; separately, small natural pauses BETWEEN two sung lines (not real
+instrumental breaks) were read as instrumental gaps, flashing a distinct
+chord-following background image for a moment before reverting to the
+next line's own image -- "all very chaotic."
+
+Root-caused both with a synthetic repro script
+(`build_scene`/`_in_a_line`/`build_image_timeline` called directly with
+constructed `LyricLine`/`ChordTrack` data, matching this file's own test
+style) before touching any code, then re-verified both fixes against a
+REAL rendered song's `lyrics_timed.json` (`work/angie-rolling-stones/`) to
+confirm the synthetic repro generalized.
+
+**Bug 1 (premature next-line text):** `build_scene()`'s 2026-09-10 "stale
+line" fix blanked the CURRENT line's text once its own plausible singing
+was over, for the rest of the gap before the next line began -- but the
+"upcoming" (distance_from_current=1) line was ALWAYS shown in full
+regardless, with no visual distinction from a truly-current line (same
+font, same color; only actively-sung words get the karaoke highlight, and
+none are active on an unsung preview either way). So during any gap the
+ONLY visible text was the next line, reading as "the display already
+jumped to it" -- exactly the report, and NOT limited to the intro (the
+2026-09-14 fix already correctly special-cased the pre-first-line case;
+every OTHER inter-line gap still had this bug). Fix: once t moves past a
+line's own `_plausible_line_end()`, `build_scene()` now advances "current"
+to the next line early, so it displays in the exact same unsung/upcoming
+style the intro case already used correctly -- one consistent code path
+for "nothing is being sung right now, here's what's coming" instead of two
+(one correct, one buggy). Strictly `t > plausible_end` (not `>=`): at the
+exact instant a line ends, it's still that line's own final frame,
+confirmed by `test_build_scene_ken_burns_progress_spans_gap_until_next_line_not_just_singing_end`
+needing `scroll_progress == 1.0` right at that boundary. Only advances
+onto a line with real timing data, and only past the LAST line (nothing
+left to advance onto) does the old blanking behavior still apply, for the
+outro.
+
+**Bug 2 (image flicker on short pauses):** `build_image_timeline()`
+processes each gap between sung lines independently, merging short
+consecutive chord segments forward via `_merge_into_hold_blocks()` until
+they reach `min_hold_seconds` -- but a gap with only ONE short micro-
+segment inside it has nothing else in that same gap to merge with, so it
+always got emitted as its own block regardless of `min_hold_seconds`,
+by that function's own explicit, otherwise-correct design (a trailing
+short run at the very end of the SONG has nowhere else to go either, and
+should still be shown). Fix: `build_image_timeline()`'s new
+`extend_into_gap_or_insert()` checks the WHOLE gap's duration before
+calling into per-gap merging at all -- if it's shorter than
+`min_hold_seconds` AND a previous segment already exists to extend, that
+previous segment's own `.end` is pushed forward to swallow the gap
+entirely, with no new segment inserted. The one real transition then
+happens exactly at the next line's own start, once real singing resumes.
+Deliberately does not touch the leading intro (no previous segment exists
+yet there to extend) -- not what was reported, and a good default anyway
+(a short intro's own instrumental image is still worth showing).
+
+Two existing tests encoded the old (buggy) behavior as intentional and
+needed rewriting rather than just extending:
+`test_build_scene_blanks_stale_current_line_during_a_real_instrumental_gap`
+(renamed `..._advances_to_the_upcoming_line_...`) and
+`test_build_scene_still_blanks_a_finished_line_in_the_gap_before_the_next_one`
+(renamed `..._still_blanks_the_last_line_during_the_outro`, since that's
+the only case still covered post-fix). Four new tests added covering the
+next-line advance (mid-gap, and with a further line after that as the new
+"upcoming"), the short-pause text case, and three new image-timeline tests
+(short gap holds through, long gap still gets its own segment, leading
+intro unaffected). Full suite: 590 passed.

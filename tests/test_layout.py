@@ -292,15 +292,24 @@ def test_build_scene_instrumental_ken_burns_paces_to_the_active_chord_not_the_mi
     assert late.ken_burns_progress - early.ken_burns_progress > 0.3
 
 
-def test_build_scene_blanks_stale_current_line_during_a_real_instrumental_gap():
+def test_build_scene_advances_to_the_upcoming_line_during_a_real_instrumental_gap():
     """Real bug, 2026-09-10 ("Wish You Were Here"): a line's forced-alignment
     end_time stretched 85 seconds past its own real content, all the way to
     the next real line's start_time (radio-dialogue intro text with nothing
     to align against until real singing resumed) -- find_current_line_index
     keys only on start_time, so that stale line's text just sat on screen
     the entire gap even though _in_a_line already knew nothing was actually
-    being sung there. The upcoming (distance_from_current=1) line must still
-    show normally -- only the CURRENT slot goes blank."""
+    being sung there.
+
+    The original 2026-09-10 fix blanked the CURRENT slot for the rest of the
+    gap, leaving only the (distance_from_current=1) "upcoming" line visible.
+    Real owner complaint, 2026-09-15: that read as the display having jumped
+    ahead to the next line early, both for this kind of mid-song
+    instrumental break and for a song's own musical intro. Fixed by
+    advancing "current" itself to the next line once the previous one's
+    real content is over -- it shows in the exact same unsung/upcoming style
+    the pre-intro case already used correctly, and (being the last line
+    here) there's nothing left to show as a further "upcoming" preview."""
     lines = [
         LyricLine(
             words=[
@@ -320,14 +329,49 @@ def test_build_scene_blanks_stale_current_line_during_a_real_instrumental_gap():
 
     mid_gap = build_scene(lines, t=50.0, window=1)
     current = next(l for l in mid_gap.lines if l.distance_from_current == 0)
-    upcoming = next(l for l in mid_gap.lines if l.distance_from_current == 1)
-    assert current.words == []
-    assert current.text == ""
-    assert [w.text for w in upcoming.words] == ["Now", "which"]
+    assert [w.text for w in current.words] == ["Now", "which"]
+    assert not any(w.word_active for w in current.words)
+    assert not any(l.distance_from_current == 1 for l in mid_gap.lines)
 
     within_real_content = build_scene(lines, t=9.7, window=1)
     still_current = next(l for l in within_real_content.lines if l.distance_from_current == 0)
     assert [w.text for w in still_current.words] == ["Yes", "nonsense"]
+
+
+def test_build_scene_advancing_past_a_finished_line_still_shows_the_line_after_next():
+    """The same gap-advance as above, but with a third line available -- the
+    advanced-to line (2) is "current" and the one after it (3) still shows
+    as the "upcoming" preview, exactly like the normal in-song case."""
+    lines = [
+        LyricLine(words=[Word(word="first", start_time=0.0, end_time=0.5)], start_time=0.0, end_time=0.5),
+        LyricLine(words=[Word(word="second", start_time=20.0, end_time=20.5)], start_time=20.0, end_time=20.5),
+        LyricLine(words=[Word(word="third", start_time=21.0, end_time=21.5)], start_time=21.0, end_time=21.5),
+    ]
+
+    gap = build_scene(lines, t=10.0, window=1)
+    current = next(l for l in gap.lines if l.distance_from_current == 0)
+    upcoming = next(l for l in gap.lines if l.distance_from_current == 1)
+
+    assert [w.text for w in current.words] == ["second"]
+    assert [w.text for w in upcoming.words] == ["third"]
+
+
+def test_build_scene_shows_the_upcoming_line_during_a_brief_pause_between_two_lines():
+    """A short, ordinary pause between two consecutive lines (not a long
+    instrumental break) must show the same "current = upcoming line,
+    unsung" preview as any other gap, not a blank slot -- real owner
+    complaint, 2026-09-15: brief natural pauses read as the display jumping
+    to the next line early."""
+    lines = [
+        LyricLine(words=[Word(word="first", start_time=8.0, end_time=8.5)], start_time=8.0, end_time=8.5),
+        LyricLine(words=[Word(word="second", start_time=8.8, end_time=9.3)], start_time=8.8, end_time=9.3),
+    ]
+
+    mid_pause = build_scene(lines, t=8.6, window=1)
+    current = next(l for l in mid_pause.lines if l.distance_from_current == 0)
+
+    assert [w.text for w in current.words] == ["second"]
+    assert not any(w.word_active for w in current.words)
 
 
 def test_build_image_timeline_merges_short_chords_until_min_hold_reached():
@@ -363,7 +407,65 @@ def test_build_image_timeline_leaves_a_trailing_short_run_unmerged_with_anything
     assert len(timeline) == 2
     assert timeline[1].start == 3.0
     assert timeline[1].end == 3.4
-    assert timeline[1].image_key == line_hash("[Instrumental — chord: G]")
+
+
+def test_build_image_timeline_holds_the_previous_image_through_a_short_gap_between_lines():
+    """Real owner complaint, 2026-09-15: a brief, ordinary pause between two
+    sung lines got its own short-lived instrumental image (a different chord
+    was playing), which read as chaotic flicker -- swap to it, then swap
+    again just as fast once the next line began. A gap shorter than
+    min_hold_seconds must not get a segment of its own at all: the previous
+    line's own image should just hold straight through the pause, with the
+    only real transition happening at the next line's own start."""
+    lines = [
+        LyricLine(words=[Word(word="first", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0),
+        LyricLine(words=[Word(word="second", start_time=1.4, end_time=2.4)], start_time=1.4, end_time=2.4),
+    ]
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 1.0, "C"), ChordEvent(1.0, 2.4, "G")])
+
+    timeline = build_image_timeline(lines, chord_track, audio_duration=2.4, min_hold_seconds=2.0)
+
+    assert [(s.start, s.end, s.image_key) for s in timeline] == [
+        (0.0, 1.4, line_hash("first")),
+        (1.4, 2.4, line_hash("second")),
+    ]
+
+
+def test_build_image_timeline_still_gives_a_long_gap_between_lines_its_own_segment():
+    """The fix above must not swallow a REAL instrumental break -- once a gap
+    reaches min_hold_seconds it still gets its own chord-following image,
+    exactly as before."""
+    lines = [
+        LyricLine(words=[Word(word="first", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0),
+        LyricLine(words=[Word(word="second", start_time=5.0, end_time=6.0)], start_time=5.0, end_time=6.0),
+    ]
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 1.0, "C"), ChordEvent(1.0, 6.0, "G")])
+
+    timeline = build_image_timeline(lines, chord_track, audio_duration=6.0, min_hold_seconds=2.0)
+
+    assert [(s.start, s.end, s.image_key) for s in timeline] == [
+        (0.0, 1.0, line_hash("first")),
+        (1.0, 5.0, line_hash("[Instrumental — chord: G]")),
+        (5.0, 6.0, line_hash("second")),
+    ]
+
+
+def test_build_image_timeline_short_leading_intro_still_gets_its_own_segment():
+    """The hold-through-a-short-gap fix only kicks in once a previous
+    segment already exists to extend -- a short INTRO (nothing sung yet)
+    has nothing before it to hold, so it's unaffected and still gets its
+    own segment, same as before this fix."""
+    lines = [
+        LyricLine(words=[Word(word="first", start_time=1.5, end_time=2.5)], start_time=1.5, end_time=2.5),
+    ]
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 4.0, "C")])
+
+    timeline = build_image_timeline(lines, chord_track, audio_duration=2.5, min_hold_seconds=2.0)
+
+    assert [(s.start, s.end, s.image_key) for s in timeline] == [
+        (0.0, 1.5, line_hash("[Instrumental — chord: C]")),
+        (1.5, 2.5, line_hash("first")),
+    ]
 
 
 def test_build_image_timeline_does_not_merge_chords_that_already_meet_the_minimum():
@@ -525,18 +627,19 @@ def test_build_scene_shows_the_first_line_as_upcoming_during_the_intro():
     assert intro.scroll_progress == 0.0
 
 
-def test_build_scene_still_blanks_a_finished_line_in_the_gap_before_the_next_one():
-    """The intro exception above must not weaken the real gap behavior: once
-    a line has started and its plausible content is over, its slot goes
-    blank until the next line begins."""
+def test_build_scene_still_blanks_the_last_line_during_the_outro():
+    """The gap-advance fix above only applies when there's a next line to
+    advance to. Past the LAST line, with nothing left to advance onto, the
+    original 2026-09-10 blanking behavior still applies -- there's no
+    "upcoming" line to show instead, so the slot must go blank rather than
+    leaving stale finished text on screen for the rest of the song."""
     lines = [
         LyricLine(words=[Word(word="first", start_time=10.0, end_time=10.5)], start_time=10.0, end_time=10.5),
-        LyricLine(words=[Word(word="second", start_time=20.0, end_time=20.5)], start_time=20.0, end_time=20.5),
+        LyricLine(words=[Word(word="last", start_time=20.0, end_time=20.5)], start_time=20.0, end_time=20.5),
     ]
 
-    gap = build_scene(lines, t=15.0, window=1)
-    current = next(l for l in gap.lines if l.distance_from_current == 0)
-    upcoming = next(l for l in gap.lines if l.distance_from_current == 1)
+    outro = build_scene(lines, t=25.0, window=1)
+    current = next(l for l in outro.lines if l.distance_from_current == 0)
 
     assert current.words == []
-    assert [w.text for w in upcoming.words] == ["second"]
+    assert not any(l.distance_from_current == 1 for l in outro.lines)
