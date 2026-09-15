@@ -510,16 +510,16 @@ never called from the GUI thread). "Upload to YouTube" (below Redo) is the
 sole manual-upload UI: a `list_rendered_songs()` single-select scrollable
 list (any song, uploaded or not) + Upload -- confirms first if that song
 has a `youtube_state.json` -- plus a "Pending YouTube Uploads" checklist
-below it, live from `list_pending_uploads()` (never-uploaded only), with a
+below, live from `list_pending_uploads()` (never-uploaded only), with a
 "Select All" toggle and an "Upload Selected" button; both share
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
-`youtube_auto_upload` like a deliberate manual click always has. The Redo
+`youtube_auto_upload` (a deliberate click always has). The Redo
 dropdown, this list, and the Pending checklist are each
 `CTkRadioButton`/`CTkCheckBox` rows in a `CTkScrollableFrame` fixed to
-`SONG_LIST_HEIGHT` (~15 rows, scrolls for the rest); everything above the
-log console (`left_scroll`) scrolls as one unit via a 3:2 grid row-weight
-split on `left`. Each row has a Watch button and a ✕ that hides it from
-that list, files untouched (9-15).
+`SONG_LIST_HEIGHT` (~15 rows, scrolls for the rest), in a section that
+starts CLOSED (`_make_collapsible_section`), opened on click -- never nest
+a `CTkScrollableFrame` in another (9-15). Each row has a Watch button and
+✕ that hides it from that list, files untouched.
 `lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies

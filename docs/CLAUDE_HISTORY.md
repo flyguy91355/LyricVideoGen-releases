@@ -1936,3 +1936,66 @@ across ~15 real songs from `work/`. Did not attempt to click-verify the
 buttons themselves, for the same synthetic-input-doesn't-reach-the-window
 reason logged earlier today -- Watch/Remove still want a manual pass by the
 owner.
+
+## 2026-09-15 — Reverted the outer-scroll layout: nesting CTkScrollableFrame is broken
+
+v2.0.9's outer-scroll fix (the previous entry above) shipped broken. The
+owner's own long-running GUI session -- already open, mid-batch, untouched
+by any of this session's testing -- hit it live within minutes of the
+release: everything below the Redo list (Upload to YouTube, Pending
+Uploads, Batch, the log console, even the right-hand YouTube panel column)
+was permanently unreachable. Screenshotting the owner's actual live window
+(read-only, never interacted with) confirmed it precisely: the outer
+scrollbar was visibly present but never moved no matter how it was
+dragged, trapping the whole rest of the page behind roughly the top third
+of a single 420px-tall Redo list.
+
+Root cause: `customtkinter.CTkScrollableFrame` binds mouse-wheel handling
+via `bind_all` per instance and its ownership check
+(`_check_if_valid_scroll`) returns False the instant it walks up the
+widget tree and hits ANY OTHER `CTkScrollableFrame` instance, rather than
+continuing further up to check if that one's own ancestor eventually
+belongs to the outer frame. Nesting one `CTkScrollableFrame` inside
+another is fundamentally unreliable in this customtkinter version -- see
+[[feedback-never-nest-ctkscrollableframe]] memory. (The scrollbar-thumb-
+drag path also never worked for the owner in practice; not fully
+diagnosed once the nesting itself was identified as the thing to remove
+rather than chase further.)
+
+Fix: reverted `left_scroll` entirely -- `left` is back to a plain
+pack()'d column, `log_widget` back to `.pack(fill="both", expand=True)`.
+In the same pass, the owner asked for the three song lists to be CLOSED by
+default rather than always open (a request that also happens to solve the
+underlying space problem cleanly): new `_make_collapsible_section()`
+builds a header button that `pack()`/`pack_forget()`s a content frame --
+no nested scroll regions, no `bind_all` conflicts, just ordinary Tkinter
+geometry management. Each of the three sections (Redo, Upload to YouTube,
+Pending Uploads) now starts collapsed; clicking the header (▶ ↔ ▼) expands
+it in place. `SONG_LIST_HEIGHT` went back up to 420 (~15 rows) since only
+open sections compete for space now. Window default height bumped
+900 -> 1000 for a bit more breathing room when a section is open; still a
+plain resizable window (never was overridden), so anything that still
+doesn't fit is one drag/maximize away, not trapped.
+
+Verification this time: couldn't trust synthetic clicks (see the
+GUI-automation-limitation memory), so built a throwaway script
+(`verify_toggle2.py`) that constructs the real `LyricVideoGUI` instance
+against a real (shown, not withdrawn) `ctk.CTk()` root, calls
+`_make_collapsible_section()` for real, and invokes the toggle button's
+`command` callback directly via `.cget("command")()` -- confirmed
+`content.winfo_ismapped()` flips 0 -> 1 -> 0 across two toggles, with the
+button label flipping ▶ ↔ ▼ in step. This exercises the real code path
+end-to-end without depending on synthetic mouse events reaching the
+window, unlike the visual-only screenshot checks used earlier today. Full
+suite: 585 passed (no test changes needed -- this was a pure layout
+revert plus new widget-construction code that isn't unit-tested the same
+way, consistent with this file's existing GUI-construction methods).
+
+Also fixed live during this investigation: the systematic-debugging task
+the owner had queued (musical-intro/instrumental-gap line-display and
+image-flicker bugs in `layout.py`/`render.py`) was interrupted mid-Phase-1
+by this more urgent live breakage -- still open, not started on a fix,
+Phase 1 investigation only partially done (see the interrupted
+conversation for partial root-cause notes on `_in_a_line`'s per-gap
+`min_hold_seconds` merging not bridging across a short inter-line pause
+into the surrounding sung segments).

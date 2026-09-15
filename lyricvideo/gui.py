@@ -161,9 +161,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_FILE_PATH = PROJECT_ROOT / "VERSION"
 
 # Height (px) of each scrollable song-list panel (Redo / Upload to YouTube /
-# Pending Uploads) -- ~15 rows visible before it scrolls for the rest (owner
-# request, 2026-09-15: these lists were growing too long for a fixed-size
-# dropdown to show).
+# Pending Uploads) -- replaces the old CTkComboBox dropdown (a native OS menu
+# that could run off-screen once a song list got long enough; owner request,
+# 2026-09-15). First tried wrapping all three lists in an outer
+# CTkScrollableFrame so the whole page would scroll -- reverted the same day:
+# nesting a CTkScrollableFrame inside another one is unreliable in this
+# customtkinter version (its scrollbar/mouse-wheel handling is keyed off a
+# single bind_all per instance, and the outer one never actually scrolled for
+# the owner, trapping everything below the Redo list). Each section now
+# starts CLOSED (see _make_collapsible_section) and is opened on demand, so
+# there's no more fight for vertical space -- ~15 rows visible per list,
+# scrolling (via that list's own, proven-working scrollbar) for the rest.
 SONG_LIST_HEIGHT = 420
 
 
@@ -218,7 +226,7 @@ class LyricVideoGUI:
         self.root = root
         current_version = read_local_version(str(_VERSION_FILE_PATH)) or "v0.0.0"
         root.title(f"PlayAlongVideoProduction {current_version}")
-        root.geometry("1400x900")
+        root.geometry("1400x1000")
         root.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         self._queue: "queue.Queue" = queue.Queue()
@@ -289,19 +297,8 @@ class LyricVideoGUI:
 
         left = ctk.CTkFrame(body)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        left.grid_columnconfigure(0, weight=1)
-        # Song-list panels below (Redo/Upload to YouTube/Pending Uploads) can
-        # each run SONG_LIST_HEIGHT px tall (~15 rows) -- more than fits in
-        # the window alongside the log console, so everything above the log
-        # scrolls as one unit (left_scroll) instead of the window just
-        # growing past the screen (owner request, 2026-09-15).
-        left.grid_rowconfigure(0, weight=3)
-        left.grid_rowconfigure(1, weight=2)
 
-        left_scroll = ctk.CTkScrollableFrame(left, fg_color="transparent")
-        left_scroll.grid(row=0, column=0, sticky="nsew")
-
-        form = ctk.CTkFrame(left_scroll, fg_color="transparent")
+        form = ctk.CTkFrame(left, fg_color="transparent")
         form.pack(fill="x", padx=10, pady=10)
         form.grid_columnconfigure(1, weight=1)
 
@@ -339,28 +336,24 @@ class LyricVideoGUI:
         )
         self.new_song_button.pack(side="left", padx=4)
 
-        status_frame = ctk.CTkFrame(left_scroll, fg_color="transparent")
+        status_frame = ctk.CTkFrame(left, fg_color="transparent")
         status_frame.pack(fill="x", padx=10, pady=(0, 4))
         ctk.CTkLabel(status_frame, text="Status:").pack(side="left")
         ctk.CTkLabel(status_frame, textvariable=self.status_var, text_color="#3ecf8e").pack(
             side="left", padx=6
         )
 
-        self.progress_bar = ctk.CTkProgressBar(left_scroll)
+        self.progress_bar = ctk.CTkProgressBar(left)
         self.progress_bar.set(0.0)
         self.progress_bar.pack(fill="x", padx=10, pady=(0, 10))
 
-        redo_frame = ctk.CTkFrame(left_scroll)
-        redo_frame.pack(fill="x", padx=10, pady=(0, 10))
-        ctk.CTkLabel(redo_frame, text="Redo an Existing Song", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", padx=8, pady=(8, 4)
-        )
-        self.redo_list_frame = ctk.CTkScrollableFrame(redo_frame, height=SONG_LIST_HEIGHT)
+        redo_content = self._make_collapsible_section(left, "Redo an Existing Song")
+        self.redo_list_frame = ctk.CTkScrollableFrame(redo_content, height=SONG_LIST_HEIGHT)
         self.redo_list_frame.pack(fill="x", padx=8, pady=(0, 4))
         self._populate_song_radio_list(
             self.redo_list_frame, "redo", list_redoable_songs(PROJECT_ROOT / "work"), self.redo_song_var,
         )
-        redo_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
+        redo_controls = ctk.CTkFrame(redo_content, fg_color="transparent")
         redo_controls.pack(fill="x", padx=8, pady=(0, 8))
         ctk.CTkCheckBox(
             redo_controls, text="Generate new images", variable=self.redo_new_images_var,
@@ -368,46 +361,42 @@ class LyricVideoGUI:
         self.redo_button = ctk.CTkButton(redo_controls, text="Redo", command=self._on_redo, width=80)
         self.redo_button.pack(side="left", padx=8)
 
-        ctk.CTkLabel(redo_frame, text="Upload to YouTube", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", padx=8, pady=(4, 4)
-        )
-        self.retry_upload_list_frame = ctk.CTkScrollableFrame(redo_frame, height=SONG_LIST_HEIGHT)
+        upload_content = self._make_collapsible_section(left, "Upload to YouTube")
+        self.retry_upload_list_frame = ctk.CTkScrollableFrame(upload_content, height=SONG_LIST_HEIGHT)
         self.retry_upload_list_frame.pack(fill="x", padx=8, pady=(0, 4))
         self._populate_song_radio_list(
             self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
             self.retry_upload_song_var,
         )
-        retry_upload_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
+        retry_upload_controls = ctk.CTkFrame(upload_content, fg_color="transparent")
         retry_upload_controls.pack(fill="x", padx=8, pady=(0, 8))
         self.retry_upload_button = ctk.CTkButton(
             retry_upload_controls, text="Upload", command=self._on_retry_upload, width=80,
         )
         self.retry_upload_button.pack(side="left", padx=8)
 
-        pending_frame = ctk.CTkFrame(left_scroll)
-        pending_frame.pack(fill="x", padx=10, pady=(0, 10))
-        pending_header = ctk.CTkFrame(pending_frame, fg_color="transparent")
-        pending_header.pack(fill="x", padx=8, pady=(8, 4))
-        ctk.CTkLabel(pending_header, text="Pending YouTube Uploads", font=ctk.CTkFont(weight="bold")).pack(
-            side="left"
+        def _add_pending_select_all(header: ctk.CTkFrame) -> None:
+            self.pending_select_all_var = tk.BooleanVar(value=True)
+            ctk.CTkCheckBox(
+                header, text="Select All", variable=self.pending_select_all_var,
+                command=self._on_toggle_pending_select_all,
+            ).pack(side="right", padx=8)
+
+        pending_content = self._make_collapsible_section(
+            left, "Pending YouTube Uploads", header_extra=_add_pending_select_all,
         )
-        self.pending_select_all_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            pending_header, text="Select All", variable=self.pending_select_all_var,
-            command=self._on_toggle_pending_select_all,
-        ).pack(side="right")
-        self.pending_uploads_list_frame = ctk.CTkScrollableFrame(pending_frame, height=SONG_LIST_HEIGHT)
+        self.pending_uploads_list_frame = ctk.CTkScrollableFrame(pending_content, height=SONG_LIST_HEIGHT)
         self.pending_uploads_list_frame.pack(fill="x", padx=8, pady=(0, 4))
         self._pending_upload_vars: dict[str, tk.BooleanVar] = {}
         self._refresh_pending_uploads_list()
-        pending_controls = ctk.CTkFrame(pending_frame, fg_color="transparent")
+        pending_controls = ctk.CTkFrame(pending_content, fg_color="transparent")
         pending_controls.pack(fill="x", padx=8, pady=(0, 8))
         self.upload_selected_button = ctk.CTkButton(
             pending_controls, text="Upload Selected", command=self._on_upload_selected_pending, width=140,
         )
         self.upload_selected_button.pack(side="left", padx=8)
 
-        batch_frame = ctk.CTkFrame(left_scroll)
+        batch_frame = ctk.CTkFrame(left)
         batch_frame.pack(fill="x", padx=10, pady=(0, 10))
         ctk.CTkLabel(batch_frame, text="Batch: Process a Folder", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=8, pady=(8, 4)
@@ -424,7 +413,7 @@ class LyricVideoGUI:
         self.batch_button.pack(side="left", padx=8)
 
         self.log_widget = ctk.CTkTextbox(left, state="disabled", wrap="word")
-        self.log_widget.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.log_widget.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         right = ctk.CTkFrame(body)
         right.grid(row=0, column=1, sticky="nsew")
@@ -514,6 +503,39 @@ class LyricVideoGUI:
             dialog.destroy()
 
         dialog.protocol("WM_DELETE_WINDOW", _on_close)
+
+    def _make_collapsible_section(self, parent, title: str, header_extra=None) -> ctk.CTkFrame:
+        """A section that starts CLOSED (owner request, 2026-09-15, after the
+        three song lists being open by default made the window unmanageably
+        tall) -- clicking the header toggles a content frame the caller packs
+        its own widgets into. `header_extra(header_row)`, if given, adds
+        something that stays visible whether the section is open or not (the
+        Pending list's Select All checkbox)."""
+        section = ctk.CTkFrame(parent)
+        section.pack(fill="x", padx=10, pady=(0, 10))
+        header = ctk.CTkFrame(section, fg_color="transparent")
+        header.pack(fill="x")
+        content = ctk.CTkFrame(section, fg_color="transparent")
+        state = {"expanded": False}
+
+        def toggle() -> None:
+            if state["expanded"]:
+                content.pack_forget()
+                toggle_button.configure(text=f"▶ {title}")
+            else:
+                content.pack(fill="x")
+                toggle_button.configure(text=f"▼ {title}")
+            state["expanded"] = not state["expanded"]
+
+        toggle_button = ctk.CTkButton(
+            header, text=f"▶ {title}", command=toggle, anchor="w",
+            fg_color="transparent", hover_color=("gray80", "gray25"),
+            font=ctk.CTkFont(weight="bold"),
+        )
+        toggle_button.pack(side="left", fill="x", expand=True, padx=8, pady=8)
+        if header_extra is not None:
+            header_extra(header)
+        return content
 
     def _add_row(self, frame: ctk.CTkFrame, row: int, label: str, var: tk.StringVar) -> None:
         ctk.CTkLabel(frame, text=label).grid(row=row, column=0, sticky="w")
