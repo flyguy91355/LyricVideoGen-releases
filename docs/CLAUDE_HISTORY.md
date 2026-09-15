@@ -2129,3 +2129,44 @@ line starts at 18.90s): scene text is empty at t=0, 2, and 13.9-15.4
 current+next preview starting at t=16.4 (2.5s before) through the line's
 own start -- confirms the fix's real-world behavior directly, not just
 the synthetic unit tests.
+
+## 2026-09-15 — Fixed the "always extremely slow" launch: lazy song-list widgets
+
+Owner reported the app opening to a black, unresponsive window -- twice in
+one session, once genuinely waiting 3 minutes before it finally rendered.
+Not a hang: measured `LyricVideoGUI(root)` construction directly against
+the owner's real 65-song `work/` folder and found it took **28 seconds**
+by itself (vs. 0.05s for `list_redoable_songs`/`list_rendered_songs`/
+`list_pending_uploads` combined -- the filesystem scan was never the
+problem). Root cause: `_build_widgets()` eagerly populated all three song
+lists (Redo/Upload to YouTube/Pending Uploads) at startup regardless of
+each section being closed by default (the same-day collapsible-section
+fix) -- building a `CTkRadioButton`/`CTkCheckBox` row plus a Watch and a
+Remove button (4 widgets each) for every song, across all three lists,
+whether or not the owner ever opened any of them. CustomTkinter widget
+construction itself is what's slow here, not I/O -- each widget does real
+per-instance theming/image work.
+
+Fix: `_make_collapsible_section()` gained an `on_first_expand` callback,
+invoked once, only the first time that section is actually toggled open
+-- never during `_build_widgets()`. The three `_populate_song_radio_list`/
+`_refresh_pending_uploads_list` calls that used to run immediately after
+building each section now run lazily through this instead; the (cheap)
+`CTkScrollableFrame` container itself still builds immediately so nothing
+about the layout changes, it just starts empty until first opened.
+Re-measured the same way: `LyricVideoGUI(root)` init dropped from 28s to
+**2.6s** (real launch on the owner's machine should drop from ~3 minutes
+to well under 30s). First-time expansion of the Redo list (50 songs) still
+takes ~7.6s to build its rows -- a real, unavoidable CustomTkinter cost --
+but now it's paid only by someone who actually opens that list, not by
+every single launch regardless of use.
+
+Verified end-to-end with a throwaway script constructing a real
+`LyricVideoGUI` against a real (shown) `ctk.CTk()` root: confirmed 0
+children in `redo_list_frame`/`pending_uploads_list_frame` before any
+expand, invoked each section's toggle button's `command` directly (the
+same technique from earlier today's collapsible-section verification),
+and confirmed the expected row counts (50, then 9) after. Full suite:
+591 passed (no test changes needed -- this is a pure startup-timing fix
+to GUI-construction code this project's tests don't exercise directly,
+same as the collapsible-section work itself).

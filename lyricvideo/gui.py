@@ -347,12 +347,16 @@ class LyricVideoGUI:
         self.progress_bar.set(0.0)
         self.progress_bar.pack(fill="x", padx=10, pady=(0, 10))
 
-        redo_content = self._make_collapsible_section(left, "Redo an Existing Song")
+        def _populate_redo_list_now() -> None:
+            self._populate_song_radio_list(
+                self.redo_list_frame, "redo", list_redoable_songs(PROJECT_ROOT / "work"), self.redo_song_var,
+            )
+
+        redo_content = self._make_collapsible_section(
+            left, "Redo an Existing Song", on_first_expand=_populate_redo_list_now,
+        )
         self.redo_list_frame = ctk.CTkScrollableFrame(redo_content, height=SONG_LIST_HEIGHT)
         self.redo_list_frame.pack(fill="x", padx=8, pady=(0, 4))
-        self._populate_song_radio_list(
-            self.redo_list_frame, "redo", list_redoable_songs(PROJECT_ROOT / "work"), self.redo_song_var,
-        )
         redo_controls = ctk.CTkFrame(redo_content, fg_color="transparent")
         redo_controls.pack(fill="x", padx=8, pady=(0, 8))
         ctk.CTkCheckBox(
@@ -361,13 +365,17 @@ class LyricVideoGUI:
         self.redo_button = ctk.CTkButton(redo_controls, text="Redo", command=self._on_redo, width=80)
         self.redo_button.pack(side="left", padx=8)
 
-        upload_content = self._make_collapsible_section(left, "Upload to YouTube")
+        def _populate_upload_list_now() -> None:
+            self._populate_song_radio_list(
+                self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
+                self.retry_upload_song_var,
+            )
+
+        upload_content = self._make_collapsible_section(
+            left, "Upload to YouTube", on_first_expand=_populate_upload_list_now,
+        )
         self.retry_upload_list_frame = ctk.CTkScrollableFrame(upload_content, height=SONG_LIST_HEIGHT)
         self.retry_upload_list_frame.pack(fill="x", padx=8, pady=(0, 4))
-        self._populate_song_radio_list(
-            self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
-            self.retry_upload_song_var,
-        )
         retry_upload_controls = ctk.CTkFrame(upload_content, fg_color="transparent")
         retry_upload_controls.pack(fill="x", padx=8, pady=(0, 8))
         self.retry_upload_button = ctk.CTkButton(
@@ -382,13 +390,13 @@ class LyricVideoGUI:
                 command=self._on_toggle_pending_select_all,
             ).pack(side="right", padx=8)
 
+        self._pending_upload_vars: dict[str, tk.BooleanVar] = {}
         pending_content = self._make_collapsible_section(
             left, "Pending YouTube Uploads", header_extra=_add_pending_select_all,
+            on_first_expand=self._refresh_pending_uploads_list,
         )
         self.pending_uploads_list_frame = ctk.CTkScrollableFrame(pending_content, height=SONG_LIST_HEIGHT)
         self.pending_uploads_list_frame.pack(fill="x", padx=8, pady=(0, 4))
-        self._pending_upload_vars: dict[str, tk.BooleanVar] = {}
-        self._refresh_pending_uploads_list()
         pending_controls = ctk.CTkFrame(pending_content, fg_color="transparent")
         pending_controls.pack(fill="x", padx=8, pady=(0, 8))
         self.upload_selected_button = ctk.CTkButton(
@@ -504,25 +512,39 @@ class LyricVideoGUI:
 
         dialog.protocol("WM_DELETE_WINDOW", _on_close)
 
-    def _make_collapsible_section(self, parent, title: str, header_extra=None) -> ctk.CTkFrame:
+    def _make_collapsible_section(
+        self, parent, title: str, header_extra=None, on_first_expand=None,
+    ) -> ctk.CTkFrame:
         """A section that starts CLOSED (owner request, 2026-09-15, after the
         three song lists being open by default made the window unmanageably
         tall) -- clicking the header toggles a content frame the caller packs
         its own widgets into. `header_extra(header_row)`, if given, adds
         something that stays visible whether the section is open or not (the
-        Pending list's Select All checkbox)."""
+        Pending list's Select All checkbox). `on_first_expand`, if given, is
+        called once -- only the first time the section is actually opened,
+        never during startup -- to build its (possibly expensive) contents
+        lazily: real owner complaint, 2026-09-15, "always extremely slow" to
+        launch -- eagerly building a CTkRadioButton/CTkCheckBox row (plus a
+        Watch and a Remove button each) for every song in a 65-song work/
+        folder across all three lists, whether or not anyone ever opens them,
+        measured at 28 SECONDS of `LyricVideoGUI.__init__` alone (vs. 0.05s
+        for the actual filesystem scan behind them -- CustomTkinter widget
+        construction, not I/O, is what's slow here)."""
         section = ctk.CTkFrame(parent)
         section.pack(fill="x", padx=10, pady=(0, 10))
         header = ctk.CTkFrame(section, fg_color="transparent")
         header.pack(fill="x")
         content = ctk.CTkFrame(section, fg_color="transparent")
-        state = {"expanded": False}
+        state = {"expanded": False, "populated": on_first_expand is None}
 
         def toggle() -> None:
             if state["expanded"]:
                 content.pack_forget()
                 toggle_button.configure(text=f"▶ {title}")
             else:
+                if not state["populated"]:
+                    on_first_expand()
+                    state["populated"] = True
                 content.pack(fill="x")
                 toggle_button.configure(text=f"▼ {title}")
             state["expanded"] = not state["expanded"]

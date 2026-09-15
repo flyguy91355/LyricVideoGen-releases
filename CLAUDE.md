@@ -281,13 +281,12 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    6.86s duration). Word-highlight timing (`word_sung`/`word_active`) keys
    only on a word's own start time, never a duration, and is unaffected.
    `build_scene()`'s CURRENT-LINE TEXT is also gated on `_in_a_line()`
-   (HISTORY 2026-09-10, "Wish You Were Here"): once past a line's own
-   plausible end, "current" advances to the NEXT line early rather than
-   blanking it -- shown as the same unsung preview the pre-first-line intro
-   already used (9-15); past the last line it still blanks.
-   `find_current_line_index` untouched. That preview stays hidden until
-   `Settings.lyric_preview_lead_seconds` (default 3.0s) before
-   the line's own start -- no lyrics through most of an intro or solo.
+   (HISTORY 2026-09-10): once past a line's own plausible end, "current"
+   advances to the NEXT line early rather than blanking it -- shown as the
+   same unsung preview the pre-first-line intro already used (9-15); past
+   the last line it still blanks. That preview itself stays hidden until
+   `Settings.lyric_preview_lead_seconds` (default 3.0s) before the line's
+   own start -- no lyrics through most of an intro or solo.
    The scrolling timeline lane's per-segment chord label (`render.py`'s
    `_lane_label_font`) shrinks to fit a short-duration chord's narrow box
    instead of being skipped entirely when it doesn't fit at the default size
@@ -516,10 +515,11 @@ below, live from `list_pending_uploads()` (never-uploaded only), with a
 `youtube_auto_upload` (a deliberate click always has). The Redo
 dropdown, this list, and the Pending checklist are each
 `CTkRadioButton`/`CTkCheckBox` rows in a `CTkScrollableFrame` fixed to
-`SONG_LIST_HEIGHT` (~15 rows, scrolls for the rest), in a section that
-starts CLOSED (`_make_collapsible_section`), opened on click -- never nest
-a `CTkScrollableFrame` in another (9-15). Each row has a Watch button and
-✕ that hides it from that list, files untouched.
+`SONG_LIST_HEIGHT` (~15 rows, scrolls for rest), in a section starting
+CLOSED (`_make_collapsible_section`), opened on click -- never nest a
+`CTkScrollableFrame` in another. Rows build lazily on first expand, never
+at launch (9-15: eager was 28s of init on 65 songs). Each row: a Watch
+button and ✕ that hides it, files untouched.
 `lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies
