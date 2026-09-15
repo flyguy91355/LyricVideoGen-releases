@@ -363,6 +363,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._slider("image_min_hold_seconds", "Minimum image hold (instrumental sections)", 0.5, 8.0, 15,
                      lambda v: f"{v:.1f}s")
         self._slider("image_transition_seconds", "Crossfade length", 0.0, 1.5, 30, lambda v: f"{v:.2f}s")
+        self._slider("lyric_preview_lead_seconds", "Lyric preview lead-in", 0.0, 10.0, 20,
+                     lambda v: f"{v:.1f}s")
 
         self._section("Support overlay & description")
         self._text("support_overlay_text", "Overlay text (blank = off)")

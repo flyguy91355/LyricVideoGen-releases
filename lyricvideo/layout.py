@@ -338,6 +338,7 @@ def build_scene(
     min_hold_seconds: float = 2.0,
     image_transition_seconds: float = 0.25,
     image_timeline: list[ImageSegment] | None = None,
+    lyric_preview_lead_seconds: float = 3.0,
 ) -> Scene:
     if not lines:
         raise ValueError("no lines to build a scene from")
@@ -387,6 +388,19 @@ def build_scene(
     # (regression from the 2026-09-10 blanking fix, found by code review,
     # 2026-09-14).
     current_has_started = current.start_time is None or t >= current.start_time
+    # No lyric text at all during most of an intro or a solo -- both current
+    # and upcoming stay hidden until vocals are about to resume, not shown
+    # the instant a line finishes (owner request, 2026-09-15: "I don't want
+    # the lyric displayed in any just music... in intro and solos no
+    # lyrics"). Only gates the case where "current" is itself an upcoming,
+    # not-yet-started line (current_has_started False) -- once real singing
+    # is underway this never applies, and past the last line there's no
+    # start_time left to measure a lead-in against anyway.
+    hide_until_vocals_are_close = (
+        not current_has_started
+        and current.start_time is not None
+        and t < current.start_time - lyric_preview_lead_seconds
+    )
 
     scene_lines: list[SceneLine] = []
     # Only current (0) and upcoming (+1..+window) lines are shown -- no previous line.
@@ -397,7 +411,8 @@ def build_scene(
         line = lines[i]
         is_current = offset == 0
         words = []
-        if not (is_current and current_has_started and not in_a_line):
+        stale_finished_line = is_current and current_has_started and not in_a_line
+        if not stale_finished_line and not hide_until_vocals_are_close:
             for w in line.words:
                 word_sung = bool(is_current and w.start_time is not None and w.start_time <= t)
                 words.append(SceneWord(text=w.word, word_active=word_sung))

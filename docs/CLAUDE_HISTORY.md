@@ -2071,3 +2071,61 @@ next-line advance (mid-gap, and with a further line after that as the new
 "upcoming"), the short-pause text case, and three new image-timeline tests
 (short gap holds through, long gap still gets its own segment, leading
 intro unaffected). Full suite: 590 passed.
+
+## 2026-09-15 — No lyrics at all during most of an intro or a solo
+
+Follow-up to the same-day fix above. Once that shipped, the owner tried it
+and had a different, more specific preference than "show the upcoming line
+the whole time a gap lasts": "I don't want the lyric displayed in any just
+music... right before vocals start the current and next line are
+displayed, in intro and solos no lyrics." So the unsung-preview text
+(current AND next line together) should stay hidden through most of an
+intro or a mid-song solo, and only appear in the final stretch before
+vocals actually resume -- not the instant the previous line finishes.
+
+Asked one clarifying question (AskUserQuestion) on how many seconds of
+lead-in to default to; owner picked 3 seconds over 5 or a custom value.
+
+New `Settings.lyric_preview_lead_seconds: float = 3.0`, following the
+exact same "owner-tunable *_seconds field" pattern as
+`support_overlay_lead_seconds` (which gates when THAT overlay shows,
+relative to the song's end, rather than a line's start). Added to
+`render_kwargs()`, a new slider in `SettingsPanel`'s existing "Image
+pacing" section (`settings_panel.py` field labels must stay short -- see
+CLAUDE.md's own warning on this -- so "Lyric preview lead-in", not a
+longer description), and threaded as a new `build_scene()` parameter
+(default matches Settings' own default) through `assemble.py`'s per-frame
+call. The countdown's own separate `build_scene(..., t=0.0, ...)` call in
+`assemble.py` doesn't need it -- it only reads `scene.image_key`, never
+`scene.lines`. `settings_preview.py`'s live preview pane builds a
+hand-crafted fake `Scene` directly rather than calling `build_scene()` at
+all, so it needed no changes.
+
+Implementation: a new `hide_until_vocals_are_close` condition in
+`build_scene()`, true whenever "current" is itself an upcoming (not yet
+started) line AND `t` is still more than `lyric_preview_lead_seconds`
+before that line's own `start_time`. Applied to BOTH the current and
+upcoming slots in the scene_lines loop (unlike the pre-existing
+stale-finished-line blank, which only ever applied to the current slot) --
+deliberately independent of `is_current`, since the whole point is hiding
+everything during the bulk of an intro/solo, not just one slot. Only
+gates the "current is an unsung, not-yet-started line" case; once real
+singing is underway (`in_a_line`/`current_has_started` both handle that
+already) or past the last line (nothing left to gate against), this new
+condition can never fire.
+
+Three existing tests needed their sample `t` moved closer to the relevant
+line's own start (they were unknowingly relying on the old
+"show-immediately" behavior, now superseded by the 3-second default lead):
+the gap-advance test, the third-line "upcoming" test, and the intro test
+(renamed `..._close_to_the_intro_ending`). Added one new test covering
+both halves of the request directly -- blank early in a real intro AND
+blank in the middle of a real mid-song solo -- plus a settings render-
+kwargs test update for the new dict key. Full suite: 591 passed.
+
+Re-verified against the real "Angie" song's actual timing data (first
+line starts at 18.90s): scene text is empty at t=0, 2, and 13.9-15.4
+(all more than 3s before the first line), then shows the normal
+current+next preview starting at t=16.4 (2.5s before) through the line's
+own start -- confirms the fix's real-world behavior directly, not just
+the synthetic unit tests.

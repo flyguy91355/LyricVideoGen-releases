@@ -309,7 +309,10 @@ def test_build_scene_advances_to_the_upcoming_line_during_a_real_instrumental_ga
     advancing "current" itself to the next line once the previous one's
     real content is over -- it shows in the exact same unsung/upcoming style
     the pre-intro case already used correctly, and (being the last line
-    here) there's nothing left to show as a further "upcoming" preview."""
+    here) there's nothing left to show as a further "upcoming" preview.
+    Sampled close to the next line's own start (within the default
+    lyric_preview_lead_seconds) -- see the no-lyrics-during-a-solo test
+    below for the "still deep in the gap" case, added the same day."""
     lines = [
         LyricLine(
             words=[
@@ -327,11 +330,11 @@ def test_build_scene_advances_to_the_upcoming_line_during_a_real_instrumental_ga
         ),
     ]
 
-    mid_gap = build_scene(lines, t=50.0, window=1)
-    current = next(l for l in mid_gap.lines if l.distance_from_current == 0)
+    close_to_next = build_scene(lines, t=93.5, window=1)
+    current = next(l for l in close_to_next.lines if l.distance_from_current == 0)
     assert [w.text for w in current.words] == ["Now", "which"]
     assert not any(w.word_active for w in current.words)
-    assert not any(l.distance_from_current == 1 for l in mid_gap.lines)
+    assert not any(l.distance_from_current == 1 for l in close_to_next.lines)
 
     within_real_content = build_scene(lines, t=9.7, window=1)
     still_current = next(l for l in within_real_content.lines if l.distance_from_current == 0)
@@ -341,14 +344,15 @@ def test_build_scene_advances_to_the_upcoming_line_during_a_real_instrumental_ga
 def test_build_scene_advancing_past_a_finished_line_still_shows_the_line_after_next():
     """The same gap-advance as above, but with a third line available -- the
     advanced-to line (2) is "current" and the one after it (3) still shows
-    as the "upcoming" preview, exactly like the normal in-song case."""
+    as the "upcoming" preview, exactly like the normal in-song case. Sampled
+    close to line 2's own start, within the default lead-in window."""
     lines = [
         LyricLine(words=[Word(word="first", start_time=0.0, end_time=0.5)], start_time=0.0, end_time=0.5),
         LyricLine(words=[Word(word="second", start_time=20.0, end_time=20.5)], start_time=20.0, end_time=20.5),
         LyricLine(words=[Word(word="third", start_time=21.0, end_time=21.5)], start_time=21.0, end_time=21.5),
     ]
 
-    gap = build_scene(lines, t=10.0, window=1)
+    gap = build_scene(lines, t=19.0, window=1)
     current = next(l for l in gap.lines if l.distance_from_current == 0)
     upcoming = next(l for l in gap.lines if l.distance_from_current == 1)
 
@@ -605,19 +609,22 @@ def test_build_image_timeline_uncovered_sliver_adopts_the_nearest_chord_not_a_ge
     assert timeline[0].start == 0.0 and timeline[-1].end == 10.0
 
 
-def test_build_scene_shows_the_first_line_as_upcoming_during_the_intro():
+def test_build_scene_shows_the_first_line_as_upcoming_close_to_the_intro_ending():
     """Before the first line starts, find_current_line_index still reports
-    index 0 -- that line is what's ABOUT to be sung, so it must be on screen
-    (unhighlighted), not blanked like a line that's already finished. The
-    2026-09-10 stale-line blanking fix had hidden it for the whole intro,
-    leaving line 2 as the only preview until line 1's first word popped in
-    (found by code review, 2026-09-14)."""
+    index 0 -- that line is what's ABOUT to be sung, so once vocals are
+    close it must be on screen (unhighlighted), not blanked like a line
+    that's already finished. The 2026-09-10 stale-line blanking fix had
+    hidden it for the whole intro, leaving line 2 as the only preview until
+    line 1's first word popped in (found by code review, 2026-09-14).
+    Sampled within the default lyric_preview_lead_seconds of line 1's own
+    start -- see the no-lyrics-during-most-of-the-intro test below (added
+    2026-09-15) for the "still early in the intro" case."""
     lines = [
         LyricLine(words=[Word(word="first", start_time=10.0, end_time=10.5)], start_time=10.0, end_time=10.5),
         LyricLine(words=[Word(word="second", start_time=12.0, end_time=12.5)], start_time=12.0, end_time=12.5),
     ]
 
-    intro = build_scene(lines, t=3.0, window=1)
+    intro = build_scene(lines, t=8.0, window=1)
     current = next(l for l in intro.lines if l.distance_from_current == 0)
     upcoming = next(l for l in intro.lines if l.distance_from_current == 1)
 
@@ -625,6 +632,29 @@ def test_build_scene_shows_the_first_line_as_upcoming_during_the_intro():
     assert not any(w.word_active for w in current.words)
     assert [w.text for w in upcoming.words] == ["second"]
     assert intro.scroll_progress == 0.0
+
+
+def test_build_scene_no_lyrics_during_most_of_the_intro_or_a_solo():
+    """Real owner request, 2026-09-15: "I don't want the lyric displayed in
+    any just music... in intro and solos no lyrics" -- the current/next
+    line preview should stay hidden until close to when vocals actually
+    resume, not shown for the whole stretch of an intro or an instrumental
+    solo. Covers both: the pre-first-line intro, and a long mid-song gap
+    (reusing the same advance-to-the-next-line mechanic as the gap-advance
+    tests above, just sampled further from the next line's own start)."""
+    intro_lines = [
+        LyricLine(words=[Word(word="first", start_time=10.0, end_time=10.5)], start_time=10.0, end_time=10.5),
+        LyricLine(words=[Word(word="second", start_time=12.0, end_time=12.5)], start_time=12.0, end_time=12.5),
+    ]
+    early_in_intro = build_scene(intro_lines, t=3.0, window=1)
+    assert [sl.words for sl in early_in_intro.lines] == [[], []]
+
+    solo_lines = [
+        LyricLine(words=[Word(word="first", start_time=0.0, end_time=0.5)], start_time=0.0, end_time=0.5),
+        LyricLine(words=[Word(word="second", start_time=20.0, end_time=20.5)], start_time=20.0, end_time=20.5),
+    ]
+    mid_solo = build_scene(solo_lines, t=10.0, window=1)
+    assert [sl.words for sl in mid_solo.lines] == [[]]
 
 
 def test_build_scene_still_blanks_the_last_line_during_the_outro():

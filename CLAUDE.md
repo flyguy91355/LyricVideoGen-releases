@@ -246,9 +246,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    instrumental chords shorter than `Settings.image_min_hold_seconds`
    (default 2.0s, owner-adjustable) forward into one block until the combined
    span reaches that minimum -- owner complaint, 2026-09-11: fast chord
-   changes flipped the background too often. A too-short gap between two
-   vocal segments gets no segment -- the prior image just holds through it
-   (HISTORY 9-15). Every block boundary is still a
+   changes flipped the background too often. A too-short gap gets no
+   segment -- the prior image holds through it (9-15). Every block boundary is still a
    real chord onset lifted from the detected chord track (never an
    independent timer), so a merged block can only show a chord's own image a
    little LONGER than that chord's raw span, never out of sync with the
@@ -282,13 +281,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    6.86s duration). Word-highlight timing (`word_sung`/`word_active`) keys
    only on a word's own start time, never a duration, and is unaffected.
    `build_scene()`'s CURRENT-LINE TEXT is also gated on `_in_a_line()`
-   (HISTORY 2026-09-10, "Wish You Were Here": scattered spoken-intro words
-   left one line "current" for 85 seconds): once past a line's own
+   (HISTORY 2026-09-10, "Wish You Were Here"): once past a line's own
    plausible end, "current" advances to the NEXT line early rather than
    blanking it -- shown as the same unsung preview the pre-first-line intro
-   already used (HISTORY 9-15: blanking read as a premature jump). Only
-   past the LAST line does it blank. `find_current_line_index` is
-   untouched.
+   already used (9-15); past the last line it still blanks.
+   `find_current_line_index` untouched. That preview stays hidden until
+   `Settings.lyric_preview_lead_seconds` (default 3.0s) before
+   the line's own start -- no lyrics through most of an intro or solo.
    The scrolling timeline lane's per-segment chord label (`render.py`'s
    `_lane_label_font`) shrinks to fit a short-duration chord's narrow box
    instead of being skipped entirely when it doesn't fit at the default size

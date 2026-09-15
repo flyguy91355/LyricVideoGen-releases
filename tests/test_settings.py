@@ -158,6 +158,7 @@ def test_render_kwargs_maps_resolution_and_colors():
         "chord_diagram_panel_alpha": 235,
         "min_hold_seconds": 2.0,
         "image_transition_seconds": 0.25,
+        "lyric_preview_lead_seconds": 3.0,
         "support_overlay_text": "",
         "support_overlay_scale": 1.0,
         "support_overlay_lead_seconds": 20.0,

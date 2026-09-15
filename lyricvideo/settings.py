@@ -59,6 +59,10 @@ class Settings:
                                           # pass within that window -- swap points are still
                                           # always real chord onsets, never a fixed timer
     image_transition_seconds: float = 0.25  # crossfade length between any two background images
+    lyric_preview_lead_seconds: float = 3.0  # no lyric text at all during an intro or a solo --
+                                              # the current/next line only appears this many
+                                              # seconds before vocals actually resume (owner
+                                              # request, 2026-09-15: "in intro and solos no lyrics")
 
     # --- Support overlay/description (render.py / assemble.py / youtube_schedule.py) --
     # Deliberately two SEPARATE fields, not one shared string: the on-screen
@@ -129,6 +133,7 @@ class Settings:
             "chord_diagram_panel_alpha": self.chord_diagram_panel_alpha,
             "min_hold_seconds": self.image_min_hold_seconds,
             "image_transition_seconds": self.image_transition_seconds,
+            "lyric_preview_lead_seconds": self.lyric_preview_lead_seconds,
             "support_overlay_text": self.support_overlay_text,
             "support_overlay_scale": self.support_overlay_size / 100.0,
             "support_overlay_lead_seconds": self.support_overlay_lead_seconds,

@@ -67,6 +67,7 @@ def assemble_video(
     countdown_beats: int = 4,
     min_hold_seconds: float = 2.0,
     image_transition_seconds: float = 0.25,
+    lyric_preview_lead_seconds: float = 3.0,
     support_overlay_text: str = "",
     support_overlay_scale: float = 1.0,
     support_overlay_lead_seconds: float = 20.0,
@@ -147,6 +148,7 @@ def assemble_video(
         scene = build_scene(
             lines, song_t, chord_track=chord_track, audio_duration=duration,
             image_timeline=image_timeline, image_transition_seconds=image_transition_seconds,
+            lyric_preview_lead_seconds=lyric_preview_lead_seconds,
         )
         start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(scene.image_key)
         bg = apply_ken_burns(
