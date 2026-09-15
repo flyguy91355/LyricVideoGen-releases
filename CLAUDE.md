@@ -506,20 +506,14 @@ and Redo refuse up front, naming the path, when the audio file is gone.
 A "YouTube: not connected"/"YouTube:
 connected as <channel>" status label + "Connect to YouTube" button sit
 above the Settings panel (refreshed on a background thread -- YouTube is
-never called from the GUI thread); a manual "Upload to YouTube" button next to the
-Status line (enabled once a video finishes and YouTube is connected)
-always performs a fresh `schedule_upload()` immediately, bypassing the
-auto-upload skip-checks -- the owner's deliberate override for a
-correction or any other manual re-post. `_update_upload_button_state(work_dir)`
-(verification on a background thread; a newer request supersedes an older
-one's result) swaps that button for a plain "✓ Uploaded to YouTube" label in the same
-spot whenever a saved `youtube_state.json` record's video_id still
-verifiably exists on YouTube (same `video_exists()` check as
-`_maybe_upload_to_youtube`, same fail-closed behavior on a verification
-error -- keeps showing "uploaded" instead of flashing wrong; a
-stale file alone once risked a duplicate upload). "Retry a Failed
-Upload" (below Redo) retries `list_pending_uploads()` songs, ignoring
-`youtube_auto_upload`.
+never called from the GUI thread). "Upload to YouTube" (below Redo) is the
+sole manual-upload UI: a `list_rendered_songs()` dropdown (any song with a
+video, uploaded or not) + Upload -- confirms first if that song already has
+a `youtube_state.json`, since a stray click can now reach any past song, not
+just the one just generated -- plus "Upload All Pending" over
+`list_pending_uploads()` (never-uploaded only, no confirm needed), both via
+`_retry_pending_uploads()`, ignoring `youtube_auto_upload` like a deliberate
+manual click always has (9-15).
 `lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies

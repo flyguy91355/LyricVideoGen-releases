@@ -87,6 +87,28 @@ def list_redoable_songs(work_root: Path) -> list[str]:
     )
 
 
+def list_rendered_songs(work_root: Path) -> list[str]:
+    """Names of work_root's immediate subdirectories that have a rendered
+    video, whether or not it's ever been uploaded to YouTube -- backs the
+    GUI's single-song Upload dropdown, which (unlike list_pending_uploads())
+    must also offer an already-uploaded song so the owner can force a fresh
+    re-upload (a correction/re-post) for any past song, not just the one
+    from the current session."""
+    if not work_root.exists():
+        return []
+    rendered = []
+    for entry in sorted(work_root.iterdir(), key=lambda p: p.name):
+        if not entry.is_dir():
+            continue
+        timed_path = entry / "lyrics_timed.json"
+        if not timed_path.exists():
+            continue
+        song = load_song(timed_path)
+        if (entry / f"{slugify(song.title)}.mp4").exists():
+            rendered.append(entry.name)
+    return rendered
+
+
 def list_pending_uploads(work_root: Path) -> list[str]:
     """Names of work_root's immediate subdirectories that have a rendered
     video but no recorded YouTube upload yet -- backs the GUI's retry-upload

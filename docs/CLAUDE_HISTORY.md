@@ -1798,3 +1798,33 @@ tomorrow, not today) both with and without an already-claimed date in the way.
 All 19 pre-existing tests in that file still pass unchanged -- every one of
 them used a `now` before that day's preferred hour, so none exercised this
 path. Full suite: 559 passed.
+
+## 2026-09-15 — Folded the manual "Upload to YouTube" button into the Retry Upload controls
+
+The owner had never once used the status-line manual "Upload to YouTube"
+button. Its only capability the new Retry Upload feature (same day, earlier
+entry) didn't already cover was forcing a fresh re-upload of a song that had
+already posted successfully (a correction/re-post) -- so rather than keep two
+separate upload UIs, folded that case into the one under Redo and deleted the
+standalone button.
+
+New `list_pending_uploads()`-style `list_rendered_songs()` in `pipeline.py`:
+every `work/*` song with a rendered video, uploaded or not (unlike
+`list_pending_uploads()`, which deliberately excludes anything already
+recorded). The single-song "Upload" dropdown now uses this instead, so any
+past song is reachable, not just the current session's just-finished one.
+Clicking Upload on a song that already has a `youtube_state.json` now shows a
+confirm dialog first ("upload again and create a duplicate?") -- a stray click
+reaching any historical song is a real risk the old button never had, since it
+only ever touched `self._last_work_dir`. "Upload All Pending" is untouched,
+still scoped to `list_pending_uploads()` only, no confirmation needed (no
+duplicate risk there).
+
+Deleted `_on_manual_upload`, `_update_upload_button_state`,
+`_upload_button_state_worker`, `_apply_upload_button_state`, the
+`upload_button`/`upload_status_label` widgets, and their one remaining test
+(`test_manual_upload_failure_shows_the_error_dialog`) -- replaced by three new
+stub tests covering the confirm/skip-confirm/decline paths on the single
+Upload button. Section header renamed "Retry a Failed Upload" ->
+"Upload to YouTube" since it's the only upload UI now. TDD throughout; full
+suite: 564 passed.

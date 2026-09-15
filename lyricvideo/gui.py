@@ -33,6 +33,7 @@ from .pipeline import (
     slugify as _slugify,
     list_redoable_songs,
     list_pending_uploads,
+    list_rendered_songs,
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
@@ -224,7 +225,6 @@ class LyricVideoGUI:
         self._batch_index = 0
         self._batch_results = {"succeeded": [], "skipped_already_done": [], "failed": []}
         self._last_work_dir: Path | None = None
-        self._upload_state_request = 0  # see _update_upload_button_state
 
         self.title_var.trace_add("write", self._on_title_changed)
 
@@ -314,13 +314,6 @@ class LyricVideoGUI:
         ctk.CTkLabel(status_frame, textvariable=self.status_var, text_color="#3ecf8e").pack(
             side="left", padx=6
         )
-        self.upload_button = ctk.CTkButton(
-            status_frame, text="Upload to YouTube", command=self._on_manual_upload, state="disabled", width=140,
-        )
-        self.upload_status_label = ctk.CTkLabel(
-            status_frame, text="✓ Uploaded to YouTube", text_color="#3ecf8e",
-        )
-        self.upload_button.pack(side="left", padx=(12, 0))
 
         self.progress_bar = ctk.CTkProgressBar(left)
         self.progress_bar.set(0.0)
@@ -344,14 +337,14 @@ class LyricVideoGUI:
         self.redo_button = ctk.CTkButton(redo_controls, text="Redo", command=self._on_redo, width=80)
         self.redo_button.pack(side="left", padx=8)
 
-        ctk.CTkLabel(redo_frame, text="Retry a Failed Upload", font=ctk.CTkFont(weight="bold")).pack(
+        ctk.CTkLabel(redo_frame, text="Upload to YouTube", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=8, pady=(4, 4)
         )
         retry_upload_controls = ctk.CTkFrame(redo_frame, fg_color="transparent")
         retry_upload_controls.pack(fill="x", padx=8, pady=(0, 8))
         self.retry_upload_combo = ctk.CTkComboBox(
             retry_upload_controls, variable=self.retry_upload_song_var,
-            values=list_pending_uploads(PROJECT_ROOT / "work"), width=260, state="readonly",
+            values=list_rendered_songs(PROJECT_ROOT / "work"), width=260, state="readonly",
         )
         self.retry_upload_combo.pack(side="left", padx=(0, 8))
         self.retry_upload_button = ctk.CTkButton(
@@ -798,7 +791,6 @@ class LyricVideoGUI:
         self.progress_bar.set(0.0)
         self._clear_log()
         self._last_work_dir = None
-        self._update_upload_button_state(None)
 
     def _on_close_window(self) -> None:
         """Bound to the window's own close (X) button, the only way to quit
@@ -1081,63 +1073,6 @@ class LyricVideoGUI:
         text = self._youtube_status_text()
         self.root.after(0, lambda: self.youtube_status_var.set(text))
 
-    def _update_upload_button_state(self, work_dir: Path | None) -> None:
-        """Swaps between the clickable "Upload to YouTube" button and a plain
-        "Uploaded to YouTube" label in the same spot -- an enabled button
-        right after an auto-upload already happened is misleading (looks
-        like a pending action) and clicking it would create a duplicate
-        video on the channel. Re-verifies the saved video_id against
-        YouTube's real state (not just "a local record exists") so the label
-        doesn't keep claiming a video is live after the owner deleted it
-        directly on YouTube -- see _maybe_upload_to_youtube's docstring.
-
-        That verification runs on a background thread: video_exists() is a
-        real API round trip (and load_credentials() can refresh a token over
-        the network), and this used to make both straight from the GUI
-        thread -- freezing the whole window for the round trip, or a full
-        timeout when offline, every time a video finished or New Song was
-        clicked (found by code review, 2026-09-14). The button shows
-        disabled while a check is in flight, and a newer request always
-        supersedes an older one's result, whichever thread answers first."""
-        self._upload_state_request += 1
-        request_id = self._upload_state_request
-        self.upload_status_label.pack_forget()
-        self.upload_button.configure(state="disabled")
-        self.upload_button.pack(side="left", padx=(12, 0))
-        if work_dir is None:
-            # New Song / nothing finished yet: there's no video to upload, so
-            # the button stays disabled -- no point asking YouTube anything.
-            return
-        threading.Thread(
-            target=self._upload_button_state_worker,
-            args=(load_youtube_state(work_dir), request_id), daemon=True,
-        ).start()
-
-    def _upload_button_state_worker(self, state, request_id: int) -> None:
-        credentials = youtube_auth.load_credentials()
-        already_uploaded = state is not None
-        if already_uploaded and credentials is not None:
-            try:
-                youtube_client = build("youtube", "v3", credentials=credentials)
-                already_uploaded = video_exists(youtube_client, state.video_id)
-            except Exception:
-                pass  # can't verify right now -- fail closed, keep showing "uploaded"
-        connected = credentials is not None
-        self.root.after(
-            0, lambda: self._apply_upload_button_state(request_id, already_uploaded, connected),
-        )
-
-    def _apply_upload_button_state(self, request_id: int, already_uploaded: bool, connected: bool) -> None:
-        if request_id != self._upload_state_request:
-            return  # a newer request (another song finished, New Song clicked) supersedes this one
-        if already_uploaded:
-            self.upload_button.pack_forget()
-            self.upload_status_label.pack(side="left", padx=(12, 0))
-            return
-        self.upload_status_label.pack_forget()
-        self.upload_button.configure(state="normal" if connected else "disabled")
-        self.upload_button.pack(side="left", padx=(12, 0))
-
     def _on_connect_youtube(self) -> None:
         secrets_path = self.settings.youtube_client_secrets_path
         if not secrets_path:
@@ -1163,40 +1098,22 @@ class LyricVideoGUI:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_manual_upload(self) -> None:
-        if self._last_work_dir is None:
-            return
-        work_dir = self._last_work_dir
-        self.upload_button.configure(state="disabled")
-
-        def worker():
-            credentials = youtube_auth.load_credentials()
-            if credentials is None:
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Not connected", "Connect to YouTube in Settings first.",
-                ))
-                self.root.after(0, lambda: self._update_upload_button_state(work_dir))
-                return
-            try:
-                youtube_client = build("youtube", "v3", credentials=credentials)
-                anthropic_client = anthropic.Anthropic()
-                schedule_upload(youtube_client, anthropic_client, work_dir, self.settings)
-                self.root.after(0, lambda: messagebox.showinfo("Uploaded", "Video uploaded to YouTube."))
-            except Exception as e:
-                message = f"{type(e).__name__}: {e}"  # see _on_connect_youtube: never read `e` inside the lambda
-                self.root.after(0, lambda: messagebox.showerror("Upload failed", message))
-            finally:
-                self.root.after(0, lambda: self._update_upload_button_state(work_dir))
-
-        threading.Thread(target=worker, daemon=True).start()
-
     def _on_retry_upload(self) -> None:
         if self._running:
             return
         slug = self.retry_upload_song_var.get().strip()
         if not slug:
-            messagebox.showerror("No song selected", "Pick a song from the Retry Upload dropdown.")
+            messagebox.showerror("No song selected", "Pick a song from the dropdown.")
             return
+        if load_youtube_state(PROJECT_ROOT / "work" / slug) is not None:
+            # Already uploaded -- reachable for any past song now, not just
+            # the one just generated, so a stray click shouldn't silently
+            # duplicate a video already live on the channel.
+            if not messagebox.askyesno(
+                "Already uploaded",
+                f'"{slug}" was already uploaded to YouTube. Upload again and create a duplicate video?',
+            ):
+                return
         self._start_retry_upload([slug])
 
     def _on_retry_upload_all(self) -> None:
@@ -1229,7 +1146,7 @@ class LyricVideoGUI:
         messagebox.showinfo("Retry upload results", "\n".join(lines))
 
     def _refresh_retry_upload_options(self) -> None:
-        values = list_pending_uploads(PROJECT_ROOT / "work")
+        values = list_rendered_songs(PROJECT_ROOT / "work")
         self.retry_upload_combo.configure(values=values)
         if self.retry_upload_song_var.get() not in values:
             self.retry_upload_song_var.set(values[0] if values else "")
@@ -1445,7 +1362,7 @@ class LyricVideoGUI:
                 self.generate_button.configure(state="normal")
                 self.redo_button.configure(state="normal")
                 self.batch_button.configure(state="normal")
-                self._update_upload_button_state(self._last_work_dir)
+                self._refresh_retry_upload_options()
                 messagebox.showinfo("Video ready", f"Wrote {payload}")
                 return
             elif kind == "error":

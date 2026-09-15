@@ -7,6 +7,7 @@ from lyricvideo.pipeline import (
     run_pipeline,
     list_redoable_songs,
     list_pending_uploads,
+    list_rendered_songs,
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
@@ -394,6 +395,34 @@ def test_load_redo_inputs_prefers_a_local_copy_in_work_dir_over_the_original_pat
 
     assert audio_path == song_dir / "angie.mp3"
     assert title == "Angie"
+
+
+def test_list_rendered_songs_includes_an_already_uploaded_song(tmp_path):
+    """Unlike list_pending_uploads(), this backs the single-song Upload
+    dropdown -- it must include a song that already uploaded, so the owner
+    can force a fresh re-upload (a correction/re-post) for any past song,
+    not just their most-recently-generated one."""
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "angie.mp4").write_bytes(b"video")
+    (song_dir / "youtube_state.json").write_text("{}", encoding="utf-8")
+
+    assert list_rendered_songs(work_root) == ["angie-rolling-stones"]
+
+
+def test_list_rendered_songs_excludes_a_song_with_no_rendered_video_yet(tmp_path):
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+
+    assert list_rendered_songs(work_root) == []
+
+
+def test_list_rendered_songs_returns_empty_list_when_work_dir_missing(tmp_path):
+    assert list_rendered_songs(tmp_path / "does-not-exist") == []
 
 
 def test_list_pending_uploads_finds_a_rendered_song_with_no_youtube_state(tmp_path):

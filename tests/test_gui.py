@@ -356,33 +356,6 @@ def test_connect_youtube_success_refreshes_the_status_label(monkeypatch):
     assert refreshed == [True]
 
 
-def test_manual_upload_failure_shows_the_error_dialog(monkeypatch, tmp_path):
-    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
-    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
-    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
-    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
-
-    def failing_upload(*args, **kwargs):
-        raise RuntimeError("uploadLimitExceeded")
-
-    monkeypatch.setattr("lyricvideo.gui.schedule_upload", failing_upload)
-    shown = []
-    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
-    button_states = []
-    refreshed_for = []
-
-    stub = _gui_stub(
-        _last_work_dir=tmp_path,
-        upload_button=SimpleNamespace(configure=lambda **kw: button_states.append(kw)),
-        _update_upload_button_state=refreshed_for.append,
-    )
-    LyricVideoGUI._on_manual_upload(stub)
-
-    assert shown == [("Upload failed", "RuntimeError: uploadLimitExceeded")]
-    assert button_states == [{"state": "disabled"}]
-    assert refreshed_for == [tmp_path]  # the finally-block refresh still ran
-
-
 def test_approve_reply_failure_shows_the_error_dialog_and_keeps_the_draft(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
@@ -453,6 +426,61 @@ def test_retry_upload_refuses_when_nothing_is_selected(monkeypatch):
     LyricVideoGUI._on_retry_upload(stub)
 
     assert [title for title, _ in shown] == ["No song selected"]
+
+
+def test_retry_upload_confirms_before_re_uploading_an_already_uploaded_song(monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.gui.load_youtube_state",
+        lambda work_dir: YoutubeState(video_id="abc", uploaded_at="2026-01-01T00:00:00", title="t"),
+    )
+    asked = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.messagebox.askyesno", lambda title, msg: asked.append((title, msg)) or False,
+    )
+    started = []
+
+    stub = _gui_stub(
+        _running=False,
+        retry_upload_song_var=SimpleNamespace(get=lambda: "angie"),
+        _start_retry_upload=lambda slugs: started.append(slugs),
+    )
+    LyricVideoGUI._on_retry_upload(stub)
+
+    assert len(asked) == 1
+    assert started == []  # declined -- must not proceed
+
+
+def test_retry_upload_proceeds_after_confirming_an_already_uploaded_song(monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.gui.load_youtube_state",
+        lambda work_dir: YoutubeState(video_id="abc", uploaded_at="2026-01-01T00:00:00", title="t"),
+    )
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, msg: True)
+    started = []
+
+    stub = _gui_stub(
+        _running=False,
+        retry_upload_song_var=SimpleNamespace(get=lambda: "angie"),
+        _start_retry_upload=lambda slugs: started.append(slugs),
+    )
+    LyricVideoGUI._on_retry_upload(stub)
+
+    assert started == [["angie"]]
+
+
+def test_retry_upload_skips_confirmation_for_a_never_uploaded_song(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.load_youtube_state", lambda work_dir: None)
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", _must_not_run)
+    started = []
+
+    stub = _gui_stub(
+        _running=False,
+        retry_upload_song_var=SimpleNamespace(get=lambda: "angie"),
+        _start_retry_upload=lambda slugs: started.append(slugs),
+    )
+    LyricVideoGUI._on_retry_upload(stub)
+
+    assert started == [["angie"]]
 
 
 def test_retry_upload_all_shows_a_summary_and_refreshes_the_dropdown(monkeypatch, tmp_path):
