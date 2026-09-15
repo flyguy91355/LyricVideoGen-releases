@@ -1763,3 +1763,38 @@ Built via the brainstorming skill's bounded path (short in-chat design, no spec
 file) and TDD throughout; `tests/test_pipeline.py` and `tests/test_gui.py` grew
 new coverage for `list_pending_uploads()`, the redo audio-copy fallback, and
 `_retry_pending_uploads()`. Full suite: 557 passed.
+
+## 2026-09-15 — Two videos published within hours instead of days: `compute_next_publish_slot()` never checked whether its own answer was still in the future
+
+The owner noticed the night before that two of that batch run's videos (`Ready
+For Love / After Lights`, `Purple Rain`) had gone fully public within 1.5-3
+hours of upload, instead of landing on a future scheduled date days out like
+every other video from that same run -- and had already corrected the schedule
+on YouTube directly by the time this was reported.
+
+Root-caused by pulling each affected video's real `status`/`snippet` straight
+from the Data API (`videos().list`) and cross-referencing against each song's
+own `youtube_state.json` `uploaded_at` timestamp, rather than guessing: real
+settings at the time were `youtube_preferred_upload_hour=14`,
+`youtube_min_days_between_uploads=1`. `compute_next_publish_slot()`
+(`youtube_schedule.py`) walked forward day by day looking only for a DATE with
+no scheduling conflict -- it never checked whether the resulting DATETIME (that
+date at the preferred hour) was still ahead of `now`. A video uploaded late in
+the evening that happened to find "today" still unclaimed (legitimate under the
+gap-filling design -- e.g. an earlier video in that slot already published)
+got back "today at 2pm", several hours in the past by 8pm; YouTube auto-
+publishes a past `publishAt` almost immediately rather than holding it for a
+future date. The function's own docstring had actually documented this as
+deliberate ("in the past if `now` is already later than that today ... this
+still means 'now'") for the very-first-video-ever case, but nothing
+distinguished that intended case from this unintended one.
+
+Fix: the slot search now also requires the candidate to be strictly after
+`now`, rolling to tomorrow (re-checking for date conflicts there too) when
+today's preferred hour has already passed, instead of ever returning a stale
+time. Two new regression tests in `tests/test_youtube_schedule.py` pin the
+exact failure (`now` at 8pm, preferred_hour 14, nothing claimed -> must return
+tomorrow, not today) both with and without an already-claimed date in the way.
+All 19 pre-existing tests in that file still pass unchanged -- every one of
+them used a `now` before that day's preferred hour, so none exercised this
+path. Full suite: 559 passed.

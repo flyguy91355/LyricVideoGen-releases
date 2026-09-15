@@ -81,6 +81,30 @@ def test_compute_next_publish_slot_respects_spacing_on_both_sides_of_a_gap():
     assert slot == datetime(2026, 9, 14, 15, 0, 0)  # the 11th is skipped -- too close to both sides
 
 
+def test_compute_next_publish_slot_never_returns_a_time_already_in_the_past():
+    """Real incident, night of 2026-09-14 into 2026-09-15: two videos
+    uploaded late in the evening, after that day's preferred_hour had
+    already passed, both landed on an unclaimed "today" and got a
+    publishAt already in the past -- YouTube auto-published them within a
+    few hours instead of scheduling them into the future like every other
+    video that same night. An unclaimed date isn't enough on its own; the
+    resulting datetime must still be ahead of `now`."""
+    now = datetime(2026, 9, 14, 20, 0, 0)  # 8pm, well past preferred_hour=14
+
+    slot = compute_next_publish_slot(now, set(), min_days_between=1, preferred_hour=14)
+
+    assert slot == datetime(2026, 9, 15, 14, 0, 0)
+
+
+def test_compute_next_publish_slot_keeps_walking_past_a_claim_after_skipping_a_stale_today():
+    claimed = {date(2026, 9, 15)}
+    now = datetime(2026, 9, 14, 20, 0, 0)  # today's preferred_hour already passed
+
+    slot = compute_next_publish_slot(now, claimed, min_days_between=1, preferred_hour=14)
+
+    assert slot == datetime(2026, 9, 16, 14, 0, 0)
+
+
 def test_compute_next_publish_slot_chain_spaces_multiple_batch_items_evenly():
     claimed: set[date] = set()
     slot1 = compute_next_publish_slot(datetime(2026, 9, 10, 8, 0), claimed, min_days_between=2, preferred_hour=15)

@@ -460,8 +460,9 @@ also `run_pipeline`'s `--title` override (lyrics search + filename).
 a Public target it uploads immediately as YouTube-Private with a computed
 future `publishAt` (`compute_next_publish_slot()` gap-fills: first date
 >= `youtube_min_days_between_uploads` days from every date the channel
-already claims, live via `reserved_publish_dates()`, not a local file --
-9-13), snapped to `youtube_preferred_upload_hour` local time;
+already claims, live via `reserved_publish_dates()`, not a file --
+9-13), snapped to `youtube_preferred_upload_hour`, rolled to tomorrow
+past that hour;
 Unlisted/Private upload immediately, no scheduling at all. `lyricvideo/youtube_auth.py` owns the OAuth
 connection lifecycle: `connect()` opens the owner's browser once for
 consent (using a `client_secret_*.json` downloaded from Google Cloud
@@ -515,8 +516,8 @@ one's result) swaps that button for a plain "✓ Uploaded to YouTube" label in t
 spot whenever a saved `youtube_state.json` record's video_id still
 verifiably exists on YouTube (same `video_exists()` check as
 `_maybe_upload_to_youtube`, same fail-closed behavior on a verification
-error -- keeps showing "uploaded" rather than flash a wrong button; a
-stale local file alone once risked a duplicate upload). "Retry a Failed
+error -- keeps showing "uploaded" instead of flashing wrong; a
+stale file alone once risked a duplicate upload). "Retry a Failed
 Upload" (below Redo) retries `list_pending_uploads()` songs, ignoring
 `youtube_auto_upload`.
 `lyricvideo/youtube_comment_state.py`

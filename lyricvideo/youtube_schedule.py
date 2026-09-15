@@ -61,19 +61,27 @@ def compute_next_publish_slot(
     later upload), the very next new upload lands back in that opened-up
     gap instead of stacking further out past it. With `claimed_dates`
     empty (the very first video ever), today's date has no conflict and is
-    returned immediately, snapped to `preferred_hour` LOCAL time -- in the
-    past if `now` is already later than that today (YouTube auto-publishes
-    immediately on a past publishAt, so this still means "now", just
-    without a special case for it). `min_days_between=1` (the common case)
-    means simply "any date with no existing video on it, in either
-    direction" -- checked against BOTH neighbors, so filling a gap can
-    never land a new video too close to what's already scheduled on
-    either side of it."""
+    returned right away, snapped to `preferred_hour` LOCAL time -- unless
+    that time has already passed today, in which case the walk rolls over
+    to tomorrow instead (real incident, night of 2026-09-14 into
+    2026-09-15: two videos uploaded late in the evening, after that day's
+    preferred_hour had already gone by, landed on an unclaimed "today" and
+    got a publishAt already in the past -- YouTube auto-published both
+    within a few hours instead of scheduling them into the future like
+    every other video that same night; an unclaimed date is no longer
+    enough on its own, the candidate must also still be ahead of `now`).
+    `min_days_between=1` (the common case) means simply "any date with no
+    existing video on it, in either direction" -- checked against BOTH
+    neighbors, so filling a gap can never land a new video too close to
+    what's already scheduled on either side of it."""
     local_now = now.astimezone() if now.tzinfo is not None else now
     candidate_date = local_now.date()
-    while any(abs((candidate_date - claimed).days) < min_days_between for claimed in claimed_dates):
+    while True:
+        conflicts = any(abs((candidate_date - claimed).days) < min_days_between for claimed in claimed_dates)
+        candidate = datetime.combine(candidate_date, time(hour=preferred_hour), tzinfo=local_now.tzinfo)
+        if not conflicts and candidate > local_now:
+            return candidate
         candidate_date += timedelta(days=1)
-    return datetime.combine(candidate_date, time(hour=preferred_hour), tzinfo=local_now.tzinfo)
 
 
 def schedule_upload(
