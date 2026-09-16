@@ -660,3 +660,26 @@ def test_refresh_song_list_pending_refreshes_the_pending_checklist(monkeypatch):
     LyricVideoGUI._refresh_song_list(stub, "pending")
 
     assert refreshed == [True]
+
+
+def test_refresh_retry_upload_options_invalidates_rather_than_rebuilds_directly(monkeypatch):
+    """Real owner complaint, 2026-09-15: rebuilding the (possibly closed,
+    never-opened) Upload-to-YouTube and Pending lists directly after every
+    upload was the same expensive CTk-widget-construction cost as the
+    launch-time slowness fixed the same day, just re-triggered by a
+    different event -- freezing the window for a stretch even when nobody
+    had those lists open. _invalidate_*_list() defers the actual rebuild
+    unless that section is currently expanded."""
+    button_states = []
+    invalidated = []
+    stub = _gui_stub(
+        retry_upload_button=SimpleNamespace(configure=lambda **kw: button_states.append(("upload", kw))),
+        upload_selected_button=SimpleNamespace(configure=lambda **kw: button_states.append(("selected", kw))),
+        _invalidate_upload_list=lambda: invalidated.append("upload"),
+        _invalidate_pending_list=lambda: invalidated.append("pending"),
+    )
+    LyricVideoGUI._refresh_retry_upload_options(stub)
+
+    assert invalidated == ["upload", "pending"]
+    assert ("upload", {"state": "normal"}) in button_states
+    assert ("selected", {"state": "normal"}) in button_states

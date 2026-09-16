@@ -352,7 +352,7 @@ class LyricVideoGUI:
                 self.redo_list_frame, "redo", list_redoable_songs(PROJECT_ROOT / "work"), self.redo_song_var,
             )
 
-        redo_content = self._make_collapsible_section(
+        redo_content, self._invalidate_redo_list = self._make_collapsible_section(
             left, "Redo an Existing Song", on_first_expand=_populate_redo_list_now,
         )
         self.redo_list_frame = ctk.CTkScrollableFrame(redo_content, height=SONG_LIST_HEIGHT)
@@ -366,12 +366,16 @@ class LyricVideoGUI:
         self.redo_button.pack(side="left", padx=8)
 
         def _populate_upload_list_now() -> None:
+            # auto_select_first=True unconditionally (not just on a later
+            # refresh): this only ever runs when the owner actually opens the
+            # section, never automatically at launch, so there's no "blank
+            # dropdown at startup" state left to preserve here.
             self._populate_song_radio_list(
                 self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
-                self.retry_upload_song_var,
+                self.retry_upload_song_var, auto_select_first=True,
             )
 
-        upload_content = self._make_collapsible_section(
+        upload_content, self._invalidate_upload_list = self._make_collapsible_section(
             left, "Upload to YouTube", on_first_expand=_populate_upload_list_now,
         )
         self.retry_upload_list_frame = ctk.CTkScrollableFrame(upload_content, height=SONG_LIST_HEIGHT)
@@ -391,7 +395,7 @@ class LyricVideoGUI:
             ).pack(side="right", padx=8)
 
         self._pending_upload_vars: dict[str, tk.BooleanVar] = {}
-        pending_content = self._make_collapsible_section(
+        pending_content, self._invalidate_pending_list = self._make_collapsible_section(
             left, "Pending YouTube Uploads", header_extra=_add_pending_select_all,
             on_first_expand=self._refresh_pending_uploads_list,
         )
@@ -514,7 +518,7 @@ class LyricVideoGUI:
 
     def _make_collapsible_section(
         self, parent, title: str, header_extra=None, on_first_expand=None,
-    ) -> ctk.CTkFrame:
+    ):
         """A section that starts CLOSED (owner request, 2026-09-15, after the
         three song lists being open by default made the window unmanageably
         tall) -- clicking the header toggles a content frame the caller packs
@@ -529,7 +533,18 @@ class LyricVideoGUI:
         folder across all three lists, whether or not anyone ever opens them,
         measured at 28 SECONDS of `LyricVideoGUI.__init__` alone (vs. 0.05s
         for the actual filesystem scan behind them -- CustomTkinter widget
-        construction, not I/O, is what's slow here)."""
+        construction, not I/O, is what's slow here).
+
+        Returns (content_frame, invalidate) -- `invalidate()` is for a caller
+        whose underlying data changed (e.g. after an upload) to call INSTEAD
+        of rebuilding the list itself: if the section is open it rebuilds
+        right away (via `on_first_expand` again), but if it's closed it just
+        marks the content stale for the next real open. Real owner
+        complaint, 2026-09-15: rebuilding a still-CLOSED, never-opened list
+        after every single upload was the exact same expensive-widget-
+        construction cost as the launch-time bug above, just re-triggered on
+        a different event -- freezing the window for a stretch even though
+        nobody was even looking at that list."""
         section = ctk.CTkFrame(parent)
         section.pack(fill="x", padx=10, pady=(0, 10))
         header = ctk.CTkFrame(section, fg_color="transparent")
@@ -537,17 +552,27 @@ class LyricVideoGUI:
         content = ctk.CTkFrame(section, fg_color="transparent")
         state = {"expanded": False, "populated": on_first_expand is None}
 
+        def populate_now() -> None:
+            if on_first_expand is not None:
+                on_first_expand()
+            state["populated"] = True
+
         def toggle() -> None:
             if state["expanded"]:
                 content.pack_forget()
                 toggle_button.configure(text=f"▶ {title}")
             else:
                 if not state["populated"]:
-                    on_first_expand()
-                    state["populated"] = True
+                    populate_now()
                 content.pack(fill="x")
                 toggle_button.configure(text=f"▼ {title}")
             state["expanded"] = not state["expanded"]
+
+        def invalidate() -> None:
+            if state["expanded"]:
+                populate_now()
+            else:
+                state["populated"] = False
 
         toggle_button = ctk.CTkButton(
             header, text=f"▶ {title}", command=toggle, anchor="w",
@@ -557,7 +582,7 @@ class LyricVideoGUI:
         toggle_button.pack(side="left", fill="x", expand=True, padx=8, pady=8)
         if header_extra is not None:
             header_extra(header)
-        return content
+        return content, invalidate
 
     def _add_row(self, frame: ctk.CTkFrame, row: int, label: str, var: tk.StringVar) -> None:
         ctk.CTkLabel(frame, text=label).grid(row=row, column=0, sticky="w")
@@ -1250,19 +1275,27 @@ class LyricVideoGUI:
         messagebox.showinfo("Retry upload results", "\n".join(lines))
 
     def _refresh_retry_upload_options(self) -> None:
-        values = list_rendered_songs(PROJECT_ROOT / "work")
-        self._populate_song_radio_list(
-            self.retry_upload_list_frame, "upload", values, self.retry_upload_song_var, auto_select_first=True,
-        )
+        # invalidate(), not a direct rebuild: real owner complaint,
+        # 2026-09-15 -- rebuilding a CLOSED, never-opened list of up to ~50
+        # CTk widgets after every single upload was the same expensive-
+        # widget-construction cost as the launch-time slowness fixed the
+        # same day, just re-triggered by a different event. A closed
+        # section just gets marked stale, rebuilt lazily next time it's
+        # actually opened; an OPEN one still rebuilds immediately, same as
+        # before.
+        self._invalidate_upload_list()
         self.retry_upload_button.configure(state="normal")
         self.upload_selected_button.configure(state="normal")
-        self._refresh_pending_uploads_list()
+        self._invalidate_pending_list()
 
     def _refresh_song_list(self, list_name: str) -> None:
         """Rebuilds a single list (by its dismissed_songs.py list_name) after
         a Remove click -- deliberately scoped to just that one list, since
         removal is per-list (owner request, 2026-09-15: a song dismissed from
-        Pending Uploads should still be reachable via Upload to YouTube)."""
+        Pending Uploads should still be reachable via Upload to YouTube).
+        Removing a row is only ever possible from a list that's already
+        open, so these always rebuild immediately -- no need to route
+        through invalidate() here."""
         if list_name == "redo":
             self._populate_song_radio_list(
                 self.redo_list_frame, "redo", list_redoable_songs(PROJECT_ROOT / "work"),
@@ -1293,10 +1326,21 @@ class LyricVideoGUI:
         if variable.get() not in songs:
             variable.set((songs[0] if songs and auto_select_first else ""))
         for song in songs:  # already alphabetical -- see list_redoable_songs/list_rendered_songs
-            self._build_song_list_row(
-                frame, list_name, song,
-                lambda row, song=song: ctk.CTkRadioButton(row, text=song, variable=variable, value=song),
-            )
+            try:
+                self._build_song_list_row(
+                    frame, list_name, song,
+                    lambda row, song=song: ctk.CTkRadioButton(row, text=song, variable=variable, value=song),
+                )
+            except Exception as e:
+                # One bad row must never blank the WHOLE list silently --
+                # real owner-observed symptom, 2026-09-15: a "Pending
+                # YouTube Uploads" list showed nothing at all despite real
+                # pending songs on disk, with no visible error anywhere
+                # (a Tkinter callback exception just gets printed to
+                # stderr, easy to miss on a desktop launch).
+                print(f"WARNING: could not build a list row for {song!r}: {type(e).__name__}: {e}", file=sys.stderr)
+        if not songs:
+            ctk.CTkLabel(frame, text="(none)", text_color="gray60").pack(anchor="w", padx=6, pady=6)
 
     def _refresh_pending_uploads_list(self) -> None:
         """Rebuilds the Pending Uploads checklist from the filesystem (never
@@ -1308,15 +1352,24 @@ class LyricVideoGUI:
             child.destroy()
         dismissed = load_dismissed("pending")
         select_all = self.pending_select_all_var.get()
+        pending_slugs = [s for s in list_pending_uploads(PROJECT_ROOT / "work") if s not in dismissed]
         self._pending_upload_vars = {}
-        for slug in list_pending_uploads(PROJECT_ROOT / "work"):
-            if slug in dismissed:
-                continue
+        for slug in pending_slugs:
             var = tk.BooleanVar(value=select_all)
             self._pending_upload_vars[slug] = var
-            self._build_song_list_row(
-                self.pending_uploads_list_frame, "pending", slug,
-                lambda row, var=var: ctk.CTkCheckBox(row, text=slug, variable=var),
+            try:
+                self._build_song_list_row(
+                    self.pending_uploads_list_frame, "pending", slug,
+                    lambda row, var=var: ctk.CTkCheckBox(row, text=slug, variable=var),
+                )
+            except Exception as e:
+                # See the identical guard in _populate_song_radio_list --
+                # one bad row must never blank the whole list silently.
+                print(f"WARNING: could not build a pending-upload row for {slug!r}: {type(e).__name__}: {e}",
+                      file=sys.stderr)
+        if not pending_slugs:
+            ctk.CTkLabel(self.pending_uploads_list_frame, text="(none)", text_color="gray60").pack(
+                anchor="w", padx=6, pady=6
             )
 
     def _build_song_list_row(self, frame, list_name: str, song: str, selector_factory) -> None:

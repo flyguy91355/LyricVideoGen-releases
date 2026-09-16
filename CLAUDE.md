@@ -508,20 +508,20 @@ A "YouTube: not connected"/"YouTube:
 connected as <channel>" status label + "Connect to YouTube" button sit
 above the Settings panel (refreshed on a background thread -- YouTube is
 never called from the GUI thread). "Upload to YouTube" (below Redo) is the
-sole manual-upload UI: a `list_rendered_songs()` single-select scrollable
-list (any song, uploaded or not) + Upload -- confirms first if that song
-has a `youtube_state.json` -- plus a "Pending YouTube Uploads" checklist
-below, live from `list_pending_uploads()` (never-uploaded only), with a
-"Select All" toggle and an "Upload Selected" button; both share
+sole manual-upload UI: a `list_rendered_songs()` single-select list (any
+song, uploaded or not) + Upload -- confirms first if that song has a
+`youtube_state.json` -- plus a "Pending YouTube Uploads" checklist below,
+live from `list_pending_uploads()` (never-uploaded only), with "Select
+All" and an "Upload Selected" button; both share
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
-`youtube_auto_upload` (a deliberate click always has). The Redo
-dropdown, this list, and the Pending checklist are each
-`CTkRadioButton`/`CTkCheckBox` rows in a `CTkScrollableFrame` fixed to
+`youtube_auto_upload` (a deliberate click always has). Redo's list, this
+one, and the Pending checklist are each `CTkRadioButton`/`CTkCheckBox`
+rows in a `CTkScrollableFrame` fixed to
 `SONG_LIST_HEIGHT` (~15 rows, scrolls for rest), in a section starting
 CLOSED (`_make_collapsible_section`), opened on click -- never nest a
 `CTkScrollableFrame` in another. Rows build lazily on first expand, never
-at launch (9-15: eager was 28s of init on 65 songs). Each row: a Watch
-button and ✕ that hides it, files untouched.
+at launch or a later refresh while closed (`invalidate()` marks stale;
+9-15). Each row: a Watch button and ✕ that hides it, files untouched.
 `lyricvideo/youtube_comment_state.py`
 persists which comment ids have already been seen
 (`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies

@@ -2196,3 +2196,60 @@ New test asserts `fetch_lyric_lines()` is called with the `work_dir` copy
 path, not an external original location, by constructing the audio file
 in a separate `external/staging/` directory and capturing what path the
 mocked call actually receives. Full suite: 592 passed.
+
+## 2026-09-15 — The lazy-loading fix didn't cover refresh, just launch
+
+Same-day follow-up to the "always extremely slow" launch fix. The owner
+hit a real, live freeze again -- this time after uploading songs from the
+Pending Uploads checklist -- and separately reported the Pending list
+showing completely blank while open despite real pending songs still on
+disk. Confirmed the blank-list report against the real `work/` folder
+(`list_pending_uploads()` returned 9 real songs) before touching any code.
+
+Root cause of the freeze: `_refresh_retry_upload_options()` (called after
+every single upload finishes, `_on_retry_upload_done` -> here) rebuilt the
+Upload-to-YouTube list (up to ~50 `CTkRadioButton` rows) AND the Pending
+list directly and unconditionally -- the exact same expensive
+CustomTkinter widget-construction cost the launch-time fix (earlier the
+same day) addressed, just re-triggered by a different event, and NOT
+gated on whether either section was even open. A closed list nobody was
+looking at still paid the full rebuild cost on the main thread, freezing
+the window for a stretch each time.
+
+Fix: `_make_collapsible_section()` now returns `(content, invalidate)`.
+`invalidate()` rebuilds immediately only if the section is currently
+expanded; otherwise it just marks the content stale, deferring the real
+rebuild to the next actual open (reusing the same `on_first_expand`/
+`populated` machinery, refactored slightly to share a `populate_now()`
+helper between the toggle and invalidate paths). `_refresh_retry_upload_options()`
+now calls `self._invalidate_upload_list()` / `self._invalidate_pending_list()`
+instead of rebuilding directly. `_refresh_song_list()` (used by the ✕
+Remove button) is left calling the direct populate functions -- removing a
+row is only ever possible from an already-open list, so there's no
+closed-list case to guard there.
+
+The blank-list report was never fully root-caused to a specific exception
+(no matching traceback found in `.xsession-errors` for the relevant
+timestamps -- the ones present there were stale `_mouse_wheel_all`
+failures from testing the NOW-REMOVED nested-scrollable-frame layout
+earlier that same day), but a Tkinter callback exception mid-rebuild would
+produce exactly this symptom (some rows destroyed, an exception before the
+rest get built, nothing printed anywhere the owner would see on a desktop
+launch) and was already the suspected mechanism behind other silent
+failures logged earlier today. Hardened defensively either way:
+`_populate_song_radio_list()` and `_refresh_pending_uploads_list()` now
+wrap each row's construction in its own try/except (one bad row logs a
+warning and is skipped, never aborting the rest of the list silently), and
+an empty list now shows a "(none)" label instead of bare empty space, so a
+genuinely-empty list can never again be mistaken for a broken one.
+
+New test: `test_refresh_retry_upload_options_invalidates_rather_than_rebuilds_directly`
+(stub-based, asserts `_invalidate_upload_list`/`_invalidate_pending_list`
+are called instead of a direct rebuild). Verified the actual mechanism
+against a real `ctk.CTk()` root + real `LyricVideoGUI` instance
+(`verify_invalidate.py`, same direct-command-invocation technique as
+earlier collapsible-section verification): invalidating a CLOSED list
+measured 0.000s (no rebuild at all); opening it for the first time
+populated all 9 real pending songs; invalidating it again while OPEN
+rebuilt immediately (3.79s, expected -- the section is actually visible).
+Full suite: 593 passed.
