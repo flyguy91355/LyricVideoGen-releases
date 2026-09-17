@@ -451,6 +451,7 @@ a Public target it uploads immediately as YouTube-Private with a computed
 future `publishAt` (`compute_next_publish_slot()` gap-fills against the
 channel's own live schedule, `reserved_publish_datetimes()`, not a file --
 9-13; multiple-times-a-day scheduling via `Settings.youtube_upload_times`,
+quota-cooldown auto-retry via `Settings.youtube_quota_retry_hours`,
 HISTORY 2026-09-17). Unlisted/Private upload immediately, no scheduling. `lyricvideo/youtube_auth.py` owns the OAuth
 connection lifecycle: `connect()` opens the owner's browser once for
 consent (using a `client_secret_*.json` downloaded from Google Cloud

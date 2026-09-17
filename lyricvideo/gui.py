@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 import traceback
 from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -54,7 +55,10 @@ from .update.apply import (
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 from . import youtube_auth
-from .youtube import is_video_public, list_new_comments, post_reply, post_top_level_comment, video_exists
+from .youtube import (
+    is_quota_exceeded_error, is_video_public, list_new_comments, post_reply, post_top_level_comment,
+    video_exists,
+)
 from .youtube_comment_state import (
     PendingComment,
     PendingReply,
@@ -68,6 +72,7 @@ from .youtube_comment_state import (
 )
 from .youtube_metadata import build_play_along_title, draft_comment_reply
 from .youtube_playlists import organize_video
+from .youtube_quota_state import load_quota_blocked_until, save_quota_blocked_until
 from .youtube_schedule import schedule_upload
 from .youtube_state import load_youtube_state, save_youtube_state
 
@@ -117,12 +122,19 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     showing "already uploaded" forever after its manual deletion, since
     nothing ever re-checked the saved state against YouTube's real state).
     Any failure is caught and logged -- an upload problem must never make an
-    otherwise-successful video generation look like it failed."""
+    otherwise-successful video generation look like it failed. A quota-
+    exceeded failure (2026-09-17) additionally records a cooldown
+    (Settings.youtube_quota_retry_hours) so every OTHER song doesn't also
+    immediately retry into the same wall -- see _retry_pending_uploads_if_due,
+    which auto-resumes once that cooldown passes."""
     if not settings.youtube_auto_upload:
         return
     credentials = youtube_auth.load_credentials()
     if credentials is None:
         return
+    blocked_until = load_quota_blocked_until()
+    if blocked_until is not None and datetime.now().astimezone() < blocked_until:
+        return  # still cooling down from a prior quota-exceeded error
 
     try:
         youtube_client = build("youtube", "v3", credentials=credentials)
@@ -144,7 +156,16 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
                 f"{type(e).__name__}: {e}", file=sys.stderr,
             )
     except Exception as e:
-        print(f"WARNING: YouTube upload failed for {work_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
+        if is_quota_exceeded_error(e):
+            save_quota_blocked_until(
+                datetime.now().astimezone() + timedelta(hours=settings.youtube_quota_retry_hours)
+            )
+            print(
+                f"WARNING: YouTube quota exceeded uploading {work_dir.name}; will retry "
+                f"automatically in {settings.youtube_quota_retry_hours}h.", file=sys.stderr,
+            )
+        else:
+            print(f"WARNING: YouTube upload failed for {work_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 def _retry_pending_uploads(
@@ -153,14 +174,21 @@ def _retry_pending_uploads(
     """Uploads every song named in `slugs` (default: every list_pending_uploads()
     result) via the same schedule_upload() code path as auto-upload and the
     manual Upload button -- backs the GUI's retry-upload controls for a song
-    that failed to upload (e.g. YouTube's daily uploadLimitExceeded cap) and
-    isn't self._last_work_dir. One song's failure is logged and skipped,
-    never aborting the rest -- same "keep going" behavior as the batch
-    pipeline worker, since a still-active daily cap would otherwise fail
-    every remaining song in the same way anyway."""
+    that failed to upload and isn't self._last_work_dir. One song's failure
+    is logged and skipped, never aborting the rest -- EXCEPT a quota-exceeded
+    failure (2026-09-17), which stops the loop immediately (every remaining
+    song would fail identically right now) and records a cooldown
+    (Settings.youtube_quota_retry_hours) instead of grinding through the rest
+    reporting the same root cause fifty times over."""
     credentials = youtube_auth.load_credentials()
     if credentials is None:
         raise RuntimeError("Not connected to YouTube.")
+    blocked_until = load_quota_blocked_until()
+    if blocked_until is not None and datetime.now().astimezone() < blocked_until:
+        raise RuntimeError(
+            f"YouTube's daily quota is exceeded; will retry automatically after "
+            f"{blocked_until.astimezone():%Y-%m-%d %H:%M}."
+        )
     youtube_client = build("youtube", "v3", credentials=credentials)
     anthropic_client = anthropic.Anthropic()
 
@@ -181,6 +209,11 @@ def _retry_pending_uploads(
             results["succeeded"].append(slug)
         except Exception as e:
             results["failed"].append((slug, f"{type(e).__name__}: {e}"))
+            if is_quota_exceeded_error(e):
+                save_quota_blocked_until(
+                    datetime.now().astimezone() + timedelta(hours=settings.youtube_quota_retry_hours)
+                )
+                break
     return results
 
 
@@ -1641,6 +1674,32 @@ class LyricVideoGUI:
         self.root.after(0, lambda: self.youtube_status_var.set(status_text))
         # Returns immediately on its own when there are no credentials.
         self._check_youtube_comments_worker()
+        try:
+            self._retry_pending_uploads_if_due()
+        except Exception as e:
+            print(f"WARNING: automatic pending-upload retry failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+    def _retry_pending_uploads_if_due(self) -> None:
+        """Auto-recovers from a quota-exceeded day without the owner having
+        to notice and click Retry (owner request, 2026-09-17) -- runs on the
+        same 20-minute background tick that already refreshes comments and
+        connect-status. Only acts when auto-upload is on (an owner who wants
+        manual control over uploads shouldn't have this silently upload in
+        the background either), and never while a Generate/Redo/Batch is
+        already active."""
+        if self._running or not self.settings.youtube_auto_upload:
+            return
+        if youtube_auth.load_credentials() is None:
+            return
+        blocked_until = load_quota_blocked_until()
+        if blocked_until is not None and datetime.now().astimezone() < blocked_until:
+            return
+        dismissed = load_dismissed("pending")
+        pending = [s for s in list_pending_uploads(PROJECT_ROOT / "work") if s not in dismissed]
+        if not pending:
+            return
+        _retry_pending_uploads(PROJECT_ROOT / "work", self.settings, pending)
+        self.root.after(0, self._refresh_retry_upload_options)
 
     def _run_worker(
         self,

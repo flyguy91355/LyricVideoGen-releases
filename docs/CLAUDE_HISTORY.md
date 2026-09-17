@@ -2404,3 +2404,47 @@ and times once after this update; nothing crashes or silently misbehaves
 in the meantime.
 
 Full suite: 645 passed.
+
+## 2026-09-17 — Automatic quota-cooldown retry, after the real backfill run hit YouTube's daily cap live
+
+Owner asked for this directly after watching the channel-organization
+backfill script hit YouTube's real 429 quota wall twice in one morning:
+"we need a way to do this in the program. Like a retry setting in hours
+till it allows uploads again." With multiple-times-a-day scheduling
+shipped the same day, quota exhaustion stops being a rare one-off and
+becomes a real recurring operational condition, so this needed to be
+automatic, not something the owner has to notice and manually retry.
+
+New `youtube.is_quota_exceeded_error(exc)` -- `isinstance(exc, HttpError)
+and exc.status_code == 429` -- gives every caller one shared way to
+recognize this specific failure instead of treating all upload errors
+the same. New `youtube_quota_state.py` (pure persistence, same shape as
+every other small state file in this app) holds a single `blocked_until`
+timestamp. `Settings.youtube_quota_retry_hours` (1-48 slider, default 24
+-- long enough to always cross YouTube's actual midnight-Pacific reset
+regardless of what time of day the block started, while still matching
+the owner's own "a setting in hours" framing rather than computing the
+exact reset instant) drives how far out that timestamp gets set.
+
+Three integration points: `_maybe_upload_to_youtube` and
+`_retry_pending_uploads` both check the cooldown up front (skip / raise a
+clear message rather than attempting a call already known to fail) and
+both save a fresh cooldown the moment `is_quota_exceeded_error()` matches
+an actual failure -- `_retry_pending_uploads` additionally `break`s its
+loop right there instead of grinding through every remaining pending song
+reporting the identical root cause. The existing 20-minute
+`_youtube_periodic_tick` (already refreshing comments and connect-status
+in the background) gained a third job, `_retry_pending_uploads_if_due()`:
+once the cooldown has passed, it automatically retries whatever's still
+in the Pending Uploads list -- gated on auto-upload being on, nothing else
+actively running (Generate/Redo/Batch), and honoring dismissed songs the
+same way the Pending list's own display already does -- so a quota-
+exhausted day now recovers on its own next time the app happens to be
+open, with no owner action required.
+
+Refactored `scripts/backfill_channel_organization.py` to call the new
+shared `is_quota_exceeded_error()` too, dropping its own separate inline
+`HttpError`/`status_code` check -- same detection logic, one fewer
+place it could drift out of sync.
+
+Full suite: 663 passed.

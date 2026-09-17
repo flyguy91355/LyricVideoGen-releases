@@ -165,6 +165,19 @@ def update_video_description(youtube_client, video_id: str, description: str) ->
     youtube_client.videos().update(part="snippet", body={"id": video_id, "snippet": snippet}).execute()
 
 
+def is_quota_exceeded_error(exc: Exception) -> bool:
+    """Whether exc is YouTube's daily API quota being exhausted (a 429
+    RATE_LIMIT_EXCEEDED) -- distinct from any other HttpError, so callers
+    can back off specifically for this one instead of treating every
+    upload failure the same way. Real incident, 2026-09-17: creating
+    playlists and adding videos both cost real quota, and organizing many
+    songs at once (or, going forward, uploading several times a day) can
+    exhaust the channel's daily cap."""
+    from googleapiclient.errors import HttpError
+
+    return isinstance(exc, HttpError) and exc.status_code == 429
+
+
 def video_exists(youtube_client, video_id: str) -> bool:
     """Whether video_id is still a real, live video on YouTube -- a locally
     saved video_id (youtube_state.json) can go stale if the owner deletes

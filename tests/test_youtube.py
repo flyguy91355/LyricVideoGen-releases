@@ -3,9 +3,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from lyricvideo.youtube import (
-    add_video_to_playlist, create_playlist, find_playlist_by_id, get_video_snippet, is_video_in_playlist,
-    is_video_public, list_new_comments, post_reply, post_top_level_comment, reserved_publish_datetimes,
-    update_video_description, upload_video, video_exists,
+    add_video_to_playlist, create_playlist, find_playlist_by_id, get_video_snippet, is_quota_exceeded_error,
+    is_video_in_playlist, is_video_public, list_new_comments, post_reply, post_top_level_comment,
+    reserved_publish_datetimes, update_video_description, upload_video, video_exists,
 )
 
 
@@ -472,3 +472,22 @@ def test_reserved_publish_datetimes_ignores_videos_with_neither_field():
     result = reserved_publish_datetimes(client)
 
     assert result == {datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc).astimezone()}
+
+
+def _make_http_error(status: int):
+    from googleapiclient.errors import HttpError
+
+    resp = SimpleNamespace(status=status, reason="")
+    return HttpError(resp, b'{"error": {"message": "boom"}}')
+
+
+def test_is_quota_exceeded_error_true_for_a_429():
+    assert is_quota_exceeded_error(_make_http_error(429)) is True
+
+
+def test_is_quota_exceeded_error_false_for_a_different_http_status():
+    assert is_quota_exceeded_error(_make_http_error(404)) is False
+
+
+def test_is_quota_exceeded_error_false_for_a_non_http_error():
+    assert is_quota_exceeded_error(RuntimeError("boom")) is False

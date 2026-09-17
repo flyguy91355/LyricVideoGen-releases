@@ -103,6 +103,8 @@ class Settings:
     youtube_upload_times: str = "15:00"      # comma-separated 24h HH:MM local times, one per daily
                                               # upload slot -- its own length IS the uploads-per-day
                                               # count actually used at schedule time
+    youtube_quota_retry_hours: int = 24      # once an upload hits YouTube's daily quota, how long to
+                                              # wait before automatically retrying pending uploads
 
     def render_kwargs(self) -> dict:
         """The subset of these settings that draw_scene()/draw_chord_bar() (via

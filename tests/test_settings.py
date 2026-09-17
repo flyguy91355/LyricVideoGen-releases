@@ -47,6 +47,7 @@ def test_youtube_settings_defaults():
     assert s.youtube_made_for_kids is False
     assert s.youtube_uploads_per_day == 1
     assert s.youtube_upload_times == "15:00"
+    assert s.youtube_quota_retry_hours == 24
 
 
 def test_resolutions_encoders_fps_options_are_nonempty():

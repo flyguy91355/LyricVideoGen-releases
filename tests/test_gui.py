@@ -1,9 +1,22 @@
+from datetime import datetime, timedelta
+
+import pytest
+
 from lyricvideo.gui import (
     PROJECT_ROOT, _default_work_dir_from_audio, _maybe_upload_to_youtube, _retry_pending_uploads,
     _slugify, _split_log_text,
 )
 from lyricvideo.settings import Settings
 from lyricvideo.youtube_state import YoutubeState, load_youtube_state, save_youtube_state
+
+
+@pytest.fixture(autouse=True)
+def _no_quota_block_by_default(monkeypatch):
+    # Isolates every test in this file from whatever's actually on disk at
+    # ~/.playalongvideoproduction/youtube_quota_state.json -- a test that
+    # specifically wants a quota block in effect overrides this with its
+    # own later monkeypatch.setattr call on the same name.
+    monkeypatch.setattr("lyricvideo.gui.load_quota_blocked_until", lambda: None)
 
 
 def test_maybe_upload_to_youtube_skips_when_auto_upload_disabled(tmp_path, monkeypatch):
@@ -120,6 +133,61 @@ def test_maybe_upload_to_youtube_never_raises_on_upload_failure(tmp_path, monkey
     _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
 
 
+def test_maybe_upload_to_youtube_skips_when_still_in_quota_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr(
+        "lyricvideo.gui.load_quota_blocked_until",
+        lambda: datetime.now().astimezone() + timedelta(hours=1),
+    )
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload during a quota cooldown")),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+
+def test_maybe_upload_to_youtube_proceeds_once_quota_cooldown_has_expired(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr(
+        "lyricvideo.gui.load_quota_blocked_until",
+        lambda: datetime.now().astimezone() - timedelta(hours=1),
+    )
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)
+
+    assert calls == [tmp_path]
+
+
+def test_maybe_upload_to_youtube_saves_a_quota_cooldown_on_a_quota_exceeded_error(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("quota exceeded")),
+    )
+    monkeypatch.setattr("lyricvideo.gui.is_quota_exceeded_error", lambda e: True)
+    saved = []
+    monkeypatch.setattr("lyricvideo.gui.save_quota_blocked_until", lambda dt: saved.append(dt))
+    settings = Settings(youtube_auto_upload=True, youtube_quota_retry_hours=6)
+
+    before = datetime.now().astimezone()
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+    assert len(saved) == 1
+    assert before + timedelta(hours=5, minutes=59) < saved[0] < before + timedelta(hours=6, minutes=1)
+
+
 def test_maybe_upload_to_youtube_calls_organize_video_after_a_successful_upload(tmp_path, monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
     monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
@@ -207,6 +275,49 @@ def test_retry_pending_uploads_raises_when_not_connected(tmp_path, monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError:
         pass
+
+
+def test_retry_pending_uploads_raises_while_still_in_a_quota_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr(
+        "lyricvideo.gui.load_quota_blocked_until",
+        lambda: datetime.now().astimezone() + timedelta(hours=1),
+    )
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload")),
+    )
+
+    try:
+        _retry_pending_uploads(tmp_path, Settings())
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass
+
+
+def test_retry_pending_uploads_stops_and_saves_a_cooldown_on_quota_exceeded(tmp_path, monkeypatch):
+    """Every remaining song would fail identically right now -- stop after
+    the first quota-exceeded failure instead of reporting the same root
+    cause for every one of them."""
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b", "song-c"])
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.is_quota_exceeded_error", lambda e: True)
+    saved = []
+    monkeypatch.setattr("lyricvideo.gui.save_quota_blocked_until", lambda dt: saved.append(dt))
+
+    def upload(youtube_client, anthropic_client, work_dir, settings):
+        raise RuntimeError("quota exceeded")
+
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", upload)
+
+    results = _retry_pending_uploads(tmp_path, Settings())
+
+    assert results["succeeded"] == []
+    assert len(results["failed"]) == 1  # only song-a attempted -- b and c never even tried
+    assert results["failed"][0][0] == "song-a"
+    assert len(saved) == 1
 
 
 def test_retry_pending_uploads_only_attempts_the_given_slugs(tmp_path, monkeypatch):
@@ -524,6 +635,71 @@ def test_dismiss_comment_removes_from_queue_and_invalidates(monkeypatch):
 
     assert removed == ["vid123"]
     assert invalidated == [True]
+
+
+def test_retry_pending_uploads_if_due_skips_while_generate_redo_or_batch_is_running(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", _must_not_run)
+    stub = _gui_stub(_running=True, settings=Settings(youtube_auto_upload=True))
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)  # must not raise
+
+
+def test_retry_pending_uploads_if_due_skips_when_auto_upload_is_off(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", _must_not_run)
+    stub = _gui_stub(_running=False, settings=Settings(youtube_auto_upload=False))
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)  # must not raise
+
+
+def test_retry_pending_uploads_if_due_skips_when_not_connected(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: None)
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", _must_not_run)
+    stub = _gui_stub(_running=False, settings=Settings(youtube_auto_upload=True))
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)  # must not raise
+
+
+def test_retry_pending_uploads_if_due_skips_during_a_quota_cooldown(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr(
+        "lyricvideo.gui.load_quota_blocked_until",
+        lambda: datetime.now().astimezone() + timedelta(hours=1),
+    )
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", _must_not_run)
+    stub = _gui_stub(_running=False, settings=Settings(youtube_auto_upload=True))
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)  # must not raise
+
+
+def test_retry_pending_uploads_if_due_skips_when_nothing_is_pending(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: [])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: set())
+    monkeypatch.setattr("lyricvideo.gui._retry_pending_uploads", _must_not_run)
+    stub = _gui_stub(_running=False, settings=Settings(youtube_auto_upload=True))
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)  # must not raise
+
+
+def test_retry_pending_uploads_if_due_retries_pending_songs_excluding_dismissed_ones(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b"])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: {"song-b"})
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui._retry_pending_uploads",
+        lambda work_root, settings, slugs: calls.append(slugs),
+    )
+    refreshed = []
+    stub = _gui_stub(
+        _running=False, settings=Settings(youtube_auto_upload=True),
+        _refresh_retry_upload_options=lambda: refreshed.append(True),
+    )
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)
+
+    assert calls == [["song-a"]]
+    assert refreshed == [True]
 
 
 def test_generate_refuses_a_missing_audio_file_before_starting_anything(monkeypatch, tmp_path):

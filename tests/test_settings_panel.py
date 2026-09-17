@@ -39,6 +39,7 @@ def _raw_defaults() -> dict:
         "youtube_made_for_kids": False,
         "youtube_uploads_per_day": 1.0,
         "youtube_upload_times": "15:00",
+        "youtube_quota_retry_hours": 24.0,
     }
 
 
