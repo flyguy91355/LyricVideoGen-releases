@@ -95,3 +95,59 @@ def draft_comment_reply(
     fields = _parse_labeled_fields(_extract_text(response), ["IS_ERROR_REPORT", "REPLY"])
     is_error_report = fields["IS_ERROR_REPORT"].strip().upper().startswith("YES")
     return fields["REPLY"], is_error_report
+
+
+def classify_genre(
+    anthropic_client, song_title: str, artist: str, full_lyrics: str,
+    known_genres: list[str], model: str = "claude-sonnet-5",
+) -> str:
+    """Picks one genre for this song's Genre playlist. The list is shared
+    and growing (see youtube_playlist_state.py) -- Claude is told to reuse
+    an existing entry whenever one reasonably fits, and only mint a new one
+    when the song genuinely doesn't fit anything already there, so the
+    channel's genre vocabulary doesn't fragment into near-duplicates."""
+    known_artist = artist.strip()
+    artist_line = f'It is performed by "{known_artist}".\n' if known_artist else ""
+    genre_list = "\n".join(f"- {g}" for g in known_genres)
+    response = anthropic_client.messages.create(
+        model=model,
+        max_tokens=50,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
+                    f"{artist_line}"
+                    "Classify this song's musical genre for a YouTube playlist. Here is the "
+                    f"list of genres already used on this channel:\n{genre_list}\n\n"
+                    "If one of these already fits reasonably well, reuse it EXACTLY as written. "
+                    "Only propose a new genre name if none of them fit. Reply with EXACTLY one line:\n"
+                    "GENRE: <the genre name>"
+                ),
+            }
+        ],
+    )
+    fields = _parse_labeled_fields(_extract_text(response), ["GENRE"])
+    return fields["GENRE"].strip()
+
+
+def draft_engagement_comment(anthropic_client, song_title: str, model: str = "claude-sonnet-5") -> str:
+    response = anthropic_client.messages.create(
+        model=model,
+        max_tokens=150,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f'This is a "play along" lyric+chord tutorial video for the song "{song_title}". '
+                    "Write a short, friendly comment, as the channel owner, to post on the video, "
+                    "inviting musicians to engage -- e.g. asking which instrument they're playing "
+                    "along with (guitar, piano, bass, etc.) or what song/chord progression they'd "
+                    "like to see covered next. Reply with EXACTLY one line:\n"
+                    "COMMENT: <the comment text>"
+                ),
+            }
+        ],
+    )
+    fields = _parse_labeled_fields(_extract_text(response), ["COMMENT"])
+    return fields["COMMENT"].strip()

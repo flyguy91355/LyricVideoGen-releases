@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from lyricvideo.youtube import (
-    get_video_snippet, is_video_public, list_new_comments, post_reply, reserved_publish_dates,
+    add_video_to_playlist, create_playlist, find_playlist_by_id, get_video_snippet, is_video_in_playlist,
+    is_video_public, list_new_comments, post_reply, post_top_level_comment, reserved_publish_dates,
     update_video_description, upload_video, video_exists,
 )
 
@@ -102,12 +103,25 @@ def test_upload_video_sets_publish_at_as_utc_when_given(tmp_path):
     assert client._videos.insert_kwargs["body"]["status"]["privacyStatus"] == "private"
 
 
+class _FakeExecutable:
+    def __init__(self, result):
+        self._result = result
+
+    def execute(self):
+        return self._result
+
+
 class _FakeCommentThreadsResource:
     def __init__(self, items):
         self._items = items
+        self.insert_kwargs = None
 
     def list(self, **kwargs):
         return self
+
+    def insert(self, **kwargs):
+        self.insert_kwargs = kwargs
+        return _FakeExecutable({"id": "thread-new"})
 
     def execute(self):
         return {"items": self._items}
@@ -136,12 +150,18 @@ class _FakeCommentYoutubeClient:
     def __init__(self, items=None):
         self._comment_threads = _FakeCommentThreadsResource(items or [])
         self._comments = _FakeCommentsResource()
+        self._channels_resource = SimpleNamespace(list=lambda part, mine: _FakeExecutable(
+            {"items": [{"id": "UCmychannel"}]}
+        ))
 
     def commentThreads(self):
         return self._comment_threads
 
     def comments(self):
         return self._comments
+
+    def channels(self):
+        return self._channels_resource
 
 
 def _comment_thread_item(comment_id, author, text, published_at="2026-09-10T00:00:00Z"):
@@ -186,6 +206,117 @@ def test_post_reply_sends_the_correct_parent_and_text():
     assert client._comments.insert_kwargs["body"]["snippet"]["parentId"] == "c2"
     assert client._comments.insert_kwargs["body"]["snippet"]["textOriginal"] == "Thanks for catching that!"
     assert client._comments.executed == [None]
+
+
+def test_post_top_level_comment_sends_video_channel_and_text():
+    client = _FakeCommentYoutubeClient()
+
+    comment_id = post_top_level_comment(client, "vid1", "Which instrument are you playing along with?")
+
+    body = client._comment_threads.insert_kwargs["body"]["snippet"]
+    assert body["videoId"] == "vid1"
+    assert body["channelId"] == "UCmychannel"
+    assert body["topLevelComment"]["snippet"]["textOriginal"] == "Which instrument are you playing along with?"
+    assert comment_id == "thread-new"
+
+
+class _FakePlaylistsResource:
+    def __init__(self):
+        self.insert_kwargs = None
+        self.existing_playlist_ids: set[str] = set()
+        self.next_id = "PLnew"
+
+    def insert(self, **kwargs):
+        self.insert_kwargs = kwargs
+        return _FakeExecutable({"id": self.next_id})
+
+    def list(self, part, id):
+        requested = set(id.split(","))
+        items = [{"id": pid} for pid in requested if pid in self.existing_playlist_ids]
+        return _FakeExecutable({"items": items})
+
+
+class _FakePlaylistItemsResource:
+    def __init__(self):
+        self.insert_kwargs = None
+        self.members: dict[str, set[str]] = {}
+
+    def list(self, part, playlistId, videoId):
+        is_member = videoId in self.members.get(playlistId, set())
+        return _FakeExecutable({"items": [{"id": "item1"}] if is_member else []})
+
+    def insert(self, **kwargs):
+        self.insert_kwargs = kwargs
+        snippet = kwargs["body"]["snippet"]
+        self.members.setdefault(snippet["playlistId"], set()).add(snippet["resourceId"]["videoId"])
+        return _FakeExecutable({"id": "item-new"})
+
+
+class _FakePlaylistYoutubeClient:
+    def __init__(self):
+        self._playlists = _FakePlaylistsResource()
+        self._playlist_items = _FakePlaylistItemsResource()
+
+    def playlists(self):
+        return self._playlists
+
+    def playlistItems(self):
+        return self._playlist_items
+
+
+def test_create_playlist_returns_the_new_playlist_id_and_sends_title_and_description():
+    client = _FakePlaylistYoutubeClient()
+
+    playlist_id = create_playlist(client, "Pink Floyd - Play Along Videos", "Every Pink Floyd video.")
+
+    assert playlist_id == "PLnew"
+    body = client._playlists.insert_kwargs["body"]
+    assert body["snippet"]["title"] == "Pink Floyd - Play Along Videos"
+    assert body["snippet"]["description"] == "Every Pink Floyd video."
+
+
+def test_find_playlist_by_id_true_when_it_still_exists():
+    client = _FakePlaylistYoutubeClient()
+    client._playlists.existing_playlist_ids = {"PL1"}
+
+    assert find_playlist_by_id(client, "PL1") is True
+
+
+def test_find_playlist_by_id_false_when_deleted_directly_on_youtube():
+    client = _FakePlaylistYoutubeClient()
+
+    assert find_playlist_by_id(client, "PL1") is False
+
+
+def test_is_video_in_playlist_false_when_not_a_member():
+    client = _FakePlaylistYoutubeClient()
+
+    assert is_video_in_playlist(client, "PL1", "vid1") is False
+
+
+def test_is_video_in_playlist_true_when_a_member():
+    client = _FakePlaylistYoutubeClient()
+    client._playlist_items.members["PL1"] = {"vid1"}
+
+    assert is_video_in_playlist(client, "PL1", "vid1") is True
+
+
+def test_add_video_to_playlist_adds_a_new_member():
+    client = _FakePlaylistYoutubeClient()
+
+    add_video_to_playlist(client, "PL1", "vid1")
+
+    assert is_video_in_playlist(client, "PL1", "vid1") is True
+
+
+def test_add_video_to_playlist_is_a_noop_when_already_a_member():
+    """Backfill re-runs must never duplicate a playlist entry."""
+    client = _FakePlaylistYoutubeClient()
+    client._playlist_items.members["PL1"] = {"vid1"}
+
+    add_video_to_playlist(client, "PL1", "vid1")
+
+    assert client._playlist_items.insert_kwargs is None
 
 
 def test_video_exists_true_when_the_video_id_is_still_live():

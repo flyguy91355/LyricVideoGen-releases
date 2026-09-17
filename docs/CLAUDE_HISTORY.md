@@ -749,6 +749,21 @@ one-off script using the exact same code path as the manual upload
 button) -- new video_id `yyiyDvLizQw`, scheduled to publish
 2026-09-16T14:00 ET per the existing once-a-day release spacing.
 
+## 2026-09-10 — Comment-disabled videos were silently killing every future comment check
+
+Real live crash: `_check_youtube_comments_worker` looped over every song
+with a `youtube_state.json` and called `list_new_comments()` on each --
+completely uncaught. The first video in that loop with comments disabled
+(YouTube returns a totally normal `HttpError 403 commentsDisabled`, not a
+bug) raised out of the loop and aborted the check for every OTHER video
+too, silently, and since the exact same video hits the exact same failure
+on every future 20-minute tick, comment checking was effectively dead for
+the whole channel from that point on with nothing visible in the GUI to
+suggest why. Fixed by wrapping each video's own `list_new_comments()` call
+in its own try/except (logged, skipped, loop continues), plus a top-level
+try/except around the whole method as a last-resort safety net. One
+video's failure must never block checking the rest.
+
 ## 2026-09-10 — Settings no longer auto-save; itemized confirm before any write
 
 Owner reported having moved a settings slider by accident, without

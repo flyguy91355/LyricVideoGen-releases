@@ -189,9 +189,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    diagram highlighted; fingering data is extracted from `tombatossals/chords-db`
    (MIT licensed), not hand-authored — every one of the 12 roots x 5 qualities
    `detect_chords()` can produce resolves to a real shape. `chord_diagram.py`'s
-   `_legend_layout()` sizes the diagrams from the song's actual chord count (real
-   bug 2026-09-09: a 16-chord song wrapped to 4 rows and overlapped the lyrics and
-   the chord bar) -- never more than 2 rows, shrinking only as much as needed to
+   `_legend_layout()` sizes the diagrams from the song's actual chord count
+   (HISTORY 2026-09-09) -- never more than 2 rows, shrinking as needed to
    fit within a reserved upper region, and never growing past `Settings.
    chord_legend_size` (percent, owner-adjustable, default 100%). Each diagram's
    own panel opacity is its own separate owner-tunable slider,
@@ -206,19 +205,16 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `beat_duration = 60 / bpm` from the song's own detected
    `chord_track.bpm` (falling back to 120 if undetected/zero) and the
    countdown's actual real-time length is `countdown_beats * beat_duration`
-   (owner request, 2026-09-10: "should count down 4, and be in tempo with
-   the song"). Frozen on a GUARANTEED-real background (Ken Burns held at
+   (HISTORY 2026-09-10). Frozen on a GUARANTEED-real background (Ken Burns held at
    its own start position, so there's no visual jump into the real content)
    with a small centered `render.draw_countdown()` panel counting down --
    same rounded-box/accent-color language as the chord bar's own NOW/NEXT
    boxes (owner feedback: keep it modest, not "gaudy"), never more than
    ~15% of the frame. `_first_available_image_key()` picks the real first
    moment's own image when its file exists, otherwise ANY real image
-   already generated for the song, NEVER the flat `fallback_color` -- real
-   owner complaint, 2026-09-10 ("dont have a blank screen... fill it with
-   the beginning frame"): some songs' own first-moment image key had no
-   cached file, so the countdown fell through to a plain color (intermittent,
-   song-specific; HISTORY).
+   already generated for the song, NEVER the flat `fallback_color` (some
+   songs' first-moment image key had no cached file, so the countdown fell
+   through to a plain color; HISTORY 2026-09-10).
    `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
    (countdown-extended) timeline; real content uses `song_t = T -
    countdown_duration` throughout. Audio is delayed to match
@@ -247,8 +243,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    unchanged; one per instrumental chord otherwise) and merges consecutive
    instrumental chords shorter than `Settings.image_min_hold_seconds`
    (default 2.0s, owner-adjustable) forward into one block until the combined
-   span reaches that minimum -- owner complaint, 2026-09-11: fast chord
-   changes flipped the background too often. A too-short gap gets no
+   span reaches that minimum (HISTORY 2026-09-11). A too-short gap gets no
    segment -- the prior image holds through it (9-15). Every block boundary is still a
    real chord onset lifted from the detected chord track (never an
    independent timer), so a merged block can only show a chord's own image a
@@ -264,9 +259,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    "support this channel" watermark into the LAST `Settings.
    support_overlay_lead_seconds` (default 20s) of every video only -- never
    the countdown, never the whole video -- upper-RIGHT, below the Key/BPM
-   badge, NOT upper-left, which is the chord fingering legend's own corner
-   (confirmed by rendering an actual composite frame, not just code review,
-   since the original placement directly covered the legend).
+   badge, NOT upper-left, the chord legend's own corner (HISTORY 2026-09-11).
    `Settings.support_overlay_text` (blank = off) drives only this overlay;
    the separate `Settings.support_description_text` (blank = off) is what
    `schedule_upload()` appends to the YouTube description -- deliberately
@@ -291,13 +284,12 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    own start -- no lyrics through most of an intro or solo.
    The scrolling timeline lane's per-segment chord label (`render.py`'s
    `_lane_label_font`) shrinks to fit a short-duration chord's narrow box
-   instead of being skipped entirely when it doesn't fit at the default size
-   (real owner-reported issue, 2026-09-09) -- floored at 18pt. If even that
+   instead of being skipped entirely when it doesn't fit at the default
+   size -- floored at 18pt. If even that
    doesn't fit, the label is now omitted entirely (`_lane_label_visible`) --
    the colored block itself still draws, so a chord change stays visible,
-   but the text no longer overflows into the neighboring segment's own label
-   (HISTORY 2026-09-10: a spurious 0.51s chord smeared into the next
-   label). No song title or artist text is drawn into the frame
+   but the text no longer overflows into the neighboring segment's own
+   label (HISTORY 2026-09-10). No song title or artist text is drawn into the frame
    anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
    chord legend were added to the frame.
 
@@ -361,8 +353,7 @@ shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
 `focus_force`, plus a brief `-topmost` toggle — `lift`/`focus_force` alone
 are not reliably honored by every Linux window manager (Cinnamon
-included; confirmed live, 2026-09-10 recurrence of this same "invisible
-dialog" class of bug) — it must never be losable behind the main window)
+included) — it must never be losable behind the main window)
 with the release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-dependencies-if-changed/copies/writes the new
 VERSION) followed by a Relaunch Now button. No severity tiering, no
@@ -401,9 +392,7 @@ column is now preview pane (fixed, on top) + the scrollable `SettingsPanel` (whi
 also gained a "Reset to Defaults" button, confirmed via a dialog, that repopulates
 every control from `Settings()` in one on_change firing rather than one per field);
 main window widened to 1400x820 to fit it. **`SettingsPanel` never writes to disk
-except via its own "Save Settings" button** (2026-09-10, real owner incident: every
-slider drag used to call `Settings.save()` immediately, so one accidental bump
-silently became the permanent default forever) -- `self._baseline` (the settings
+except via its own "Save Settings" button** (HISTORY 2026-09-10) -- `self._baseline` (the settings
 actually on disk) is compared field-by-field against the live widgets on every
 change; any field that differs gets a small "●" marker directly on its own label
 (`_refresh_dirty_indicators`), and Save Settings/Discard changes only enable when
@@ -494,10 +483,7 @@ and is called from `_run_worker` (shared by both Generate and Redo) and
 per-item inside `_run_batch_worker`. "Never uploaded before" is verified
 live via `youtube.video_exists(client, video_id)`
 (`videos().list(part="id", id=...)`), not just "a `youtube_state.json`
-exists" -- real incident 2026-09-10: the owner deleted a video directly
-on YouTube Studio after a redo, and the stale local record left that song
-permanently stuck claiming "already uploaded" with no automatic recovery.
-A verification call that itself fails (network hiccup) fails CLOSED here
+exists" (HISTORY 2026-09-10). A verification call that itself fails (network hiccup) fails CLOSED here
 (skip, never risk a duplicate upload). Any upload failure is caught and
 logged as a warning, never raised. GUI worker threads format an error's
 text BEFORE the deferred `root.after` lambda: `except ... as e` unbinds `e`
@@ -537,12 +523,9 @@ song with a `youtube_state.json` for new comments, scoped to only videos
 this app uploaded; one Claude call per new comment drafts a reply and
 flags likely error reports. `_check_youtube_comments_worker` isolates each
 video's own `list_new_comments()` call in its own try/except (plus a
-top-level one around the whole method as a last resort) -- real live
-crash, 2026-09-10: a video with comments disabled (YouTube returns a
-completely normal `HttpError 403 commentsDisabled`, not a bug) was
-uncaught, silently aborting the check for every OTHER video too, forever,
-since the identical failure recurs on every future 20-minute tick. One
-video's failure must never block the rest. `is_video_public()` skips a
+top-level one around the whole method as a last resort), so one video's
+failure (e.g. comments disabled) never blocks checking the rest
+(HISTORY 2026-09-10). `is_video_public()` skips a
 still-scheduled video before the call (9-13). That same 20-minute tick
 (`_youtube_periodic_tick`, on a background thread -- both
 `load_credentials()`'s token refresh and `get_channel_title()` can make a
@@ -559,6 +542,26 @@ automatically on the next Redo/auto-upload check (via the `video_exists()`
 self-heal above); short of that specific case, there is still no
 automated "corrected video" relinking -- an in-session correction is the
 owner's own manual call via the upload button.
+
+**Channel organization** (playlists + per-video engagement comment,
+2026-09-17, spec `2026-09-17-youtube-channel-organization-design.md`):
+`YoutubeState` gained `engagement_comment_posted` (default `False`, so
+pre-existing `youtube_state.json` files still load) tracking whether a
+video's engagement comment has posted. `youtube_comment_state.py`'s new
+`PendingComment` mirrors `PendingReply`. `youtube.py` gained playlist
+calls and `post_top_level_comment` (`commentThreads().insert`, unlike
+`post_reply`'s `comments().insert`). `youtube_metadata.py` gained
+`classify_genre` and `draft_engagement_comment`. New
+`youtube_playlist_state.py` persists cached playlist ids and the growing
+genre list. `youtube_playlists.py`'s `organize_video()` adds a video to an
+All playlist, one per listed artist (exact string, no normalization), and
+a Genre playlist via `get_or_create_playlist()` (self-heals a deleted
+playlist); idempotent. `gui.py` calls it after every `schedule_upload()`
+-- failing soft. A "Pending Engagement Comments" panel (Redo/Upload's
+lazy-build pattern) has Approve (posts, marks
+`engagement_comment_posted`) and Dismiss.
+`scripts/backfill_channel_organization.py` applies this to older uploads,
+skipping deleted videos.
 
 This whole feature is complete and tested. What's NOT yet verified: the
 interactive OAuth `connect()` flow and live comment fetch/reply, both of which

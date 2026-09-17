@@ -1,4 +1,10 @@
-from lyricvideo.youtube_metadata import build_play_along_title, draft_comment_reply, generate_video_metadata
+from lyricvideo.youtube_metadata import (
+    build_play_along_title,
+    classify_genre,
+    draft_comment_reply,
+    draft_engagement_comment,
+    generate_video_metadata,
+)
 
 
 class _FakeTextBlock:
@@ -111,3 +117,47 @@ def test_draft_comment_reply_detects_non_error_comment():
 
     assert is_error_report is False
     assert reply == "Glad you liked it!"
+
+
+def test_classify_genre_returns_the_parsed_genre():
+    client = _FakeAnthropicClient("GENRE: Classic Rock")
+
+    genre = classify_genre(client, "Free Bird", "Lynyrd Skynyrd", "lyrics here", known_genres=["Classic Rock"])
+
+    assert genre == "Classic Rock"
+
+
+def test_classify_genre_includes_every_known_genre_in_the_prompt():
+    client = _FakeAnthropicClient("GENRE: Classic Rock")
+
+    classify_genre(client, "Free Bird", "Lynyrd Skynyrd", "lyrics here", known_genres=["Classic Rock", "Country"])
+
+    prompt = client.messages._prompt_text()
+    assert "Classic Rock" in prompt
+    assert "Country" in prompt
+
+
+def test_classify_genre_can_propose_a_genre_not_in_the_known_list():
+    """The list is a starting point, not a hard cap -- a genuinely new
+    genre gets minted rather than forced into an ill-fitting bucket."""
+    client = _FakeAnthropicClient("GENRE: Bluegrass")
+
+    genre = classify_genre(client, "Some Song", "Some Artist", "lyrics", known_genres=["Classic Rock"])
+
+    assert genre == "Bluegrass"
+
+
+def test_draft_engagement_comment_returns_the_parsed_text():
+    client = _FakeAnthropicClient("COMMENT: Which instrument are you playing along with?")
+
+    comment = draft_engagement_comment(client, "Free Bird")
+
+    assert comment == "Which instrument are you playing along with?"
+
+
+def test_draft_engagement_comment_mentions_the_song_title_in_the_prompt():
+    client = _FakeAnthropicClient("COMMENT: Nice!")
+
+    draft_engagement_comment(client, "Free Bird")
+
+    assert "Free Bird" in client.messages._prompt_text()

@@ -9,6 +9,7 @@ import tempfile
 import threading
 import tkinter as tk
 import traceback
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -53,18 +54,22 @@ from .update.apply import (
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 from . import youtube_auth
-from .youtube import is_video_public, list_new_comments, post_reply, video_exists
+from .youtube import is_video_public, list_new_comments, post_reply, post_top_level_comment, video_exists
 from .youtube_comment_state import (
+    PendingComment,
     PendingReply,
     add_pending_reply,
+    load_pending_comments,
     load_pending_replies,
     load_seen_comment_ids,
     mark_comments_seen,
+    remove_pending_comment,
     remove_pending_reply,
 )
 from .youtube_metadata import build_play_along_title, draft_comment_reply
+from .youtube_playlists import organize_video
 from .youtube_schedule import schedule_upload
-from .youtube_state import load_youtube_state
+from .youtube_state import load_youtube_state, save_youtube_state
 
 _CR_LF_RE = re.compile(r"[\r\n]")
 
@@ -92,6 +97,14 @@ def _split_log_text(pending: str, text: str) -> tuple[str, str]:
         start = idx + 1
     current += text[start:]
     return current, "".join(committed)
+
+
+def _mark_engagement_comment_posted(video_id: str) -> None:
+    for work_dir in (PROJECT_ROOT / "work").glob("*"):
+        state = load_youtube_state(work_dir)
+        if state is not None and state.video_id == video_id:
+            save_youtube_state(work_dir, replace(state, engagement_comment_posted=True))
+            return
 
 
 def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
@@ -123,6 +136,13 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
         anthropic_client = anthropic.Anthropic()
         schedule_upload(youtube_client, anthropic_client, work_dir, settings)
         print(f"Uploaded to YouTube: {work_dir.name}")
+        try:
+            organize_video(youtube_client, anthropic_client, work_dir)
+        except Exception as e:
+            print(
+                f"WARNING: could not organize {work_dir.name} into playlists/comment: "
+                f"{type(e).__name__}: {e}", file=sys.stderr,
+            )
     except Exception as e:
         print(f"WARNING: YouTube upload failed for {work_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
 
@@ -151,6 +171,13 @@ def _retry_pending_uploads(
     for slug in slugs:
         try:
             schedule_upload(youtube_client, anthropic_client, work_root / slug, settings)
+            try:
+                organize_video(youtube_client, anthropic_client, work_root / slug)
+            except Exception as e:
+                print(
+                    f"WARNING: could not organize {slug} into playlists/comment: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
             results["succeeded"].append(slug)
         except Exception as e:
             results["failed"].append((slug, f"{type(e).__name__}: {e}"))
@@ -451,6 +478,7 @@ class LyricVideoGUI:
         ).pack(side="right")
 
         self._build_youtube_panel(right)
+        self._build_pending_comments_panel(right)
 
     def _open_settings_window(self) -> None:
         if self._settings_window is not None:
@@ -1470,6 +1498,77 @@ class LyricVideoGUI:
     def _on_dismiss_reply(self, reply: PendingReply) -> None:
         remove_pending_reply(reply.comment_id)
         self._render_pending_replies()
+
+    def _build_pending_comments_panel(self, parent) -> None:
+        content, self._invalidate_pending_comments = self._make_collapsible_section(
+            parent, "Pending Engagement Comments", on_first_expand=self._refresh_pending_comments,
+        )
+        self.pending_comments_frame = ctk.CTkScrollableFrame(content, height=SONG_LIST_HEIGHT)
+        self.pending_comments_frame.pack(fill="x", padx=8, pady=(0, 8))
+
+    def _refresh_pending_comments(self) -> None:
+        for child in self.pending_comments_frame.winfo_children():
+            child.destroy()
+        comments = load_pending_comments()
+        for comment in comments:
+            try:
+                self._render_one_pending_comment(comment)
+            except Exception as e:
+                print(
+                    f"WARNING: could not build a pending-comment row for {comment.video_id!r}: "
+                    f"{type(e).__name__}: {e}", file=sys.stderr,
+                )
+        if not comments:
+            ctk.CTkLabel(self.pending_comments_frame, text="(none)", text_color="gray60").pack(
+                anchor="w", padx=6, pady=6
+            )
+
+    def _render_one_pending_comment(self, comment: PendingComment) -> None:
+        row = ctk.CTkFrame(self.pending_comments_frame)
+        row.pack(fill="x", pady=4)
+        ctk.CTkLabel(row, text=comment.song_title, anchor="w", font=ctk.CTkFont(weight="bold")).pack(
+            fill="x", padx=6, pady=(6, 2)
+        )
+        text_box = ctk.CTkTextbox(row, height=60)
+        text_box.insert("1.0", comment.draft_text)
+        text_box.pack(fill="x", padx=6, pady=(0, 4))
+        buttons = ctk.CTkFrame(row, fg_color="transparent")
+        buttons.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Approve", width=80, command=lambda: self._on_approve_comment(comment, text_box),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Dismiss", width=80, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_dismiss_comment(comment),
+        ).pack(side="left")
+
+    def _on_approve_comment(self, comment: PendingComment, text_box) -> None:
+        text = text_box.get("1.0", "end").strip()
+
+        def worker():
+            credentials = youtube_auth.load_credentials()
+            if credentials is None:
+                return
+            try:
+                youtube_client = build("youtube", "v3", credentials=credentials)
+                post_top_level_comment(youtube_client, comment.video_id, text)
+                remove_pending_comment(comment.video_id)
+                _mark_engagement_comment_posted(comment.video_id)
+                self.root.after(0, self._invalidate_pending_comments)
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Comment posted",
+                    "Posted. Remember to pin it from YouTube Studio -- the API has no way to do that part.",
+                ))
+            except Exception as e:
+                # See _on_connect_youtube: never read `e` inside the lambda.
+                message = f"{type(e).__name__}: {e}"
+                self.root.after(0, lambda: messagebox.showerror("Could not post comment", message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_dismiss_comment(self, comment: PendingComment) -> None:
+        remove_pending_comment(comment.video_id)
+        self._invalidate_pending_comments()
 
     def _on_check_youtube_comments(self) -> None:
         threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()

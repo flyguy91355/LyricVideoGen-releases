@@ -19,6 +19,7 @@ class YoutubeState:
     video_id: str
     uploaded_at: str
     title: str
+    engagement_comment_posted: bool = False
 
 
 def load_youtube_state(work_dir: Path) -> YoutubeState | None:

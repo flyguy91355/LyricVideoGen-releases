@@ -57,6 +57,35 @@ def upload_video(
     return response["id"]
 
 
+def create_playlist(youtube_client, title: str, description: str) -> str:
+    body = {"snippet": {"title": title, "description": description}, "status": {"privacyStatus": "public"}}
+    response = youtube_client.playlists().insert(part="snippet,status", body=body).execute()
+    return response["id"]
+
+
+def find_playlist_by_id(youtube_client, playlist_id: str) -> bool:
+    """Whether playlist_id is still real on the channel -- a locally cached
+    id can go stale if the owner deletes the playlist directly in Studio,
+    same self-heal role as video_exists() below."""
+    response = youtube_client.playlists().list(part="id", id=playlist_id).execute()
+    return bool(response.get("items"))
+
+
+def is_video_in_playlist(youtube_client, playlist_id: str, video_id: str) -> bool:
+    response = youtube_client.playlistItems().list(
+        part="id", playlistId=playlist_id, videoId=video_id,
+    ).execute()
+    return bool(response.get("items"))
+
+
+def add_video_to_playlist(youtube_client, playlist_id: str, video_id: str) -> None:
+    """No-op if already a member, so a backfill re-run never duplicates an entry."""
+    if is_video_in_playlist(youtube_client, playlist_id, video_id):
+        return
+    body = {"snippet": {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
+    youtube_client.playlistItems().insert(part="snippet", body=body).execute()
+
+
 def _all_uploaded_video_ids(youtube_client) -> list[str]:
     """Every video id ever uploaded to the connected channel, oldest first,
     via its own uploads playlist (the standard way to enumerate a channel's
@@ -180,3 +209,24 @@ def post_reply(youtube_client, comment_id: str, text: str) -> None:
     youtube_client.comments().insert(
         part="snippet", body={"snippet": {"parentId": comment_id, "textOriginal": text}},
     ).execute()
+
+
+def post_top_level_comment(youtube_client, video_id: str, text: str) -> str:
+    """A fresh standalone comment posted AS the channel, not a reply --
+    commentThreads().insert, distinct from post_reply's comments().insert
+    which can only reply to an existing comment. channelId is a required
+    field (confirmed against the current API reference), so this resolves
+    the connected channel's own id first -- channels().list(...) matches
+    the resource-then-method pattern every other call in this file already
+    uses (get_video_snippet, reserved_publish_dates), not a kwargs-taking
+    channels(...) call."""
+    channel_response = youtube_client.channels().list(part="id", mine=True).execute()
+    channel_id = channel_response["items"][0]["id"]
+    body = {
+        "snippet": {
+            "channelId": channel_id, "videoId": video_id,
+            "topLevelComment": {"snippet": {"textOriginal": text}},
+        }
+    }
+    response = youtube_client.commentThreads().insert(part="snippet", body=body).execute()
+    return response["id"]

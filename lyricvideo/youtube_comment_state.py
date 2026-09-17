@@ -11,6 +11,7 @@ from pathlib import Path
 CREDENTIALS_DIR = Path.home() / ".playalongvideoproduction"
 SEEN_COMMENTS_FILE = CREDENTIALS_DIR / "youtube_seen_comments.json"
 PENDING_REPLIES_FILE = CREDENTIALS_DIR / "youtube_pending_replies.json"
+PENDING_COMMENTS_FILE = CREDENTIALS_DIR / "youtube_pending_comments.json"
 
 
 def load_seen_comment_ids(path: Path = SEEN_COMMENTS_FILE) -> set[str]:
@@ -63,3 +64,40 @@ def add_pending_reply(reply: PendingReply, path: Path = PENDING_REPLIES_FILE) ->
 def remove_pending_reply(comment_id: str, path: Path = PENDING_REPLIES_FILE) -> None:
     replies = [r for r in load_pending_replies(path) if r.comment_id != comment_id]
     save_pending_replies(replies, path)
+
+
+@dataclass(frozen=True)
+class PendingComment:
+    """A Claude-drafted engagement comment awaiting the owner's review --
+    not a reply to anyone, a fresh standalone comment posted as the channel
+    owner, so it's keyed by video_id (there's no parent comment_id yet)."""
+
+    video_id: str
+    song_title: str
+    draft_text: str
+
+
+def load_pending_comments(path: Path = PENDING_COMMENTS_FILE) -> list[PendingComment]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [PendingComment(**item) for item in data]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def save_pending_comments(comments: list[PendingComment], path: Path = PENDING_COMMENTS_FILE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([asdict(c) for c in comments]), encoding="utf-8")
+
+
+def add_pending_comment(comment: PendingComment, path: Path = PENDING_COMMENTS_FILE) -> None:
+    comments = load_pending_comments(path)
+    comments.append(comment)
+    save_pending_comments(comments, path)
+
+
+def remove_pending_comment(video_id: str, path: Path = PENDING_COMMENTS_FILE) -> None:
+    comments = [c for c in load_pending_comments(path) if c.video_id != video_id]
+    save_pending_comments(comments, path)

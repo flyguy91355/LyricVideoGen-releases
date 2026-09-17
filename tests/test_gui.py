@@ -3,7 +3,7 @@ from lyricvideo.gui import (
     _slugify, _split_log_text,
 )
 from lyricvideo.settings import Settings
-from lyricvideo.youtube_state import YoutubeState, save_youtube_state
+from lyricvideo.youtube_state import YoutubeState, load_youtube_state, save_youtube_state
 
 
 def test_maybe_upload_to_youtube_skips_when_auto_upload_disabled(tmp_path, monkeypatch):
@@ -120,6 +120,41 @@ def test_maybe_upload_to_youtube_never_raises_on_upload_failure(tmp_path, monkey
     _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
 
 
+def test_maybe_upload_to_youtube_calls_organize_video_after_a_successful_upload(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.organize_video",
+        lambda youtube_client, anthropic_client, work_dir: calls.append((youtube_client, work_dir)),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)
+
+    assert calls == [("fake-youtube-client", tmp_path)]
+
+
+def test_maybe_upload_to_youtube_survives_organize_video_failure(tmp_path, monkeypatch):
+    """The video itself is the important part -- a playlist/comment
+    organization failure must never make an otherwise-successful upload
+    look like it failed."""
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **k: None)
+
+    def _raise(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("lyricvideo.gui.organize_video", _raise)
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
+
+
 def test_retry_pending_uploads_uploads_every_pending_song(tmp_path, monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b"])
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
@@ -191,6 +226,41 @@ def test_retry_pending_uploads_only_attempts_the_given_slugs(tmp_path, monkeypat
     results = _retry_pending_uploads(tmp_path, Settings(), slugs=["song-a"])
 
     assert calls == [tmp_path / "song-a"]
+    assert results == {"succeeded": ["song-a"], "failed": []}
+
+
+def test_retry_pending_uploads_calls_organize_video_for_each_succeeded_song(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a"])
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.organize_video",
+        lambda youtube_client, anthropic_client, work_dir: calls.append(work_dir),
+    )
+
+    results = _retry_pending_uploads(tmp_path, Settings())
+
+    assert calls == [tmp_path / "song-a"]
+    assert results == {"succeeded": ["song-a"], "failed": []}
+
+
+def test_retry_pending_uploads_still_succeeds_when_organize_video_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a"])
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **k: None)
+
+    def _raise(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("lyricvideo.gui.organize_video", _raise)
+
+    results = _retry_pending_uploads(tmp_path, Settings())
+
     assert results == {"succeeded": ["song-a"], "failed": []}
 
 
@@ -288,7 +358,7 @@ def test_split_log_text_empty_chunk_is_a_noop():
 from types import SimpleNamespace  # noqa: E402
 
 from lyricvideo.gui import LyricVideoGUI  # noqa: E402
-from lyricvideo.youtube_comment_state import PendingReply  # noqa: E402
+from lyricvideo.youtube_comment_state import PendingComment, PendingReply  # noqa: E402
 
 
 class _ImmediateThread:
@@ -377,6 +447,83 @@ def test_approve_reply_failure_shows_the_error_dialog_and_keeps_the_draft(monkey
     LyricVideoGUI._on_approve_reply(_gui_stub(), reply, text_box)
 
     assert shown == [("Could not post reply", "RuntimeError: commentsDisabled")]
+
+
+def test_mark_engagement_comment_posted_updates_the_matching_song(tmp_path, monkeypatch):
+    from lyricvideo.gui import _mark_engagement_comment_posted
+
+    work_dir = tmp_path / "work" / "my-song"
+    work_dir.mkdir(parents=True)
+    save_youtube_state(work_dir, YoutubeState(video_id="vid123", uploaded_at="2026-09-10T15:00:00", title="t"))
+    other_dir = tmp_path / "work" / "other-song"
+    other_dir.mkdir(parents=True)
+    save_youtube_state(other_dir, YoutubeState(video_id="vid999", uploaded_at="2026-09-10T15:00:00", title="t2"))
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+
+    _mark_engagement_comment_posted("vid123")
+
+    assert load_youtube_state(work_dir).engagement_comment_posted is True
+    assert load_youtube_state(other_dir).engagement_comment_posted is False
+
+
+def test_approve_comment_posts_marks_posted_and_removes_from_queue(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    posted = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.post_top_level_comment",
+        lambda client, video_id, text: posted.append((video_id, text)) or "new-comment-id",
+    )
+    removed = []
+    monkeypatch.setattr("lyricvideo.gui.remove_pending_comment", lambda video_id: removed.append(video_id))
+    marked = []
+    monkeypatch.setattr("lyricvideo.gui._mark_engagement_comment_posted", lambda video_id: marked.append(video_id))
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda *a, **k: None)
+    invalidated = []
+
+    comment = PendingComment(video_id="vid123", song_title="My Song", draft_text="Which instrument?")
+    text_box = SimpleNamespace(get=lambda start, end: "Which instrument are you playing?\n")
+    stub = _gui_stub(_invalidate_pending_comments=lambda: invalidated.append(True))
+    LyricVideoGUI._on_approve_comment(stub, comment, text_box)
+
+    assert posted == [("vid123", "Which instrument are you playing?")]
+    assert removed == ["vid123"]
+    assert marked == ["vid123"]
+    assert invalidated == [True]
+
+
+def test_approve_comment_failure_shows_the_error_dialog_and_keeps_the_draft(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+
+    def failing_post(client, video_id, text):
+        raise RuntimeError("commentsDisabled")
+
+    monkeypatch.setattr("lyricvideo.gui.post_top_level_comment", failing_post)
+    monkeypatch.setattr("lyricvideo.gui.remove_pending_comment", _must_not_run)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    comment = PendingComment(video_id="vid123", song_title="My Song", draft_text="Which instrument?")
+    text_box = SimpleNamespace(get=lambda start, end: "Which instrument are you playing?\n")
+    LyricVideoGUI._on_approve_comment(_gui_stub(), comment, text_box)
+
+    assert shown == [("Could not post comment", "RuntimeError: commentsDisabled")]
+
+
+def test_dismiss_comment_removes_from_queue_and_invalidates(monkeypatch):
+    removed = []
+    monkeypatch.setattr("lyricvideo.gui.remove_pending_comment", lambda video_id: removed.append(video_id))
+    invalidated = []
+
+    comment = PendingComment(video_id="vid123", song_title="My Song", draft_text="Which instrument?")
+    stub = _gui_stub(_invalidate_pending_comments=lambda: invalidated.append(True))
+    LyricVideoGUI._on_dismiss_comment(stub, comment)
+
+    assert removed == ["vid123"]
+    assert invalidated == [True]
 
 
 def test_generate_refuses_a_missing_audio_file_before_starting_anything(monkeypatch, tmp_path):
