@@ -7,27 +7,86 @@ upload time, and YouTube auto-publishes at that moment, even immediately if
 publishAt is already in the past).
 
 Spacing itself is computed from the channel's own real, live schedule
-(youtube.reserved_publish_dates), not a local running counter -- see that
-function's docstring for the 2026-09-13 incident that replaced a local
-youtube_next_slot.json file with this. compute_next_publish_slot below
-also fills gaps in that real schedule (e.g. the owner manually publishing
-an already-scheduled video early) rather than only ever pushing new
-uploads further into the future."""
+(youtube.reserved_publish_datetimes), not a local running counter -- see
+that function's docstring for the 2026-09-13 incident that replaced a
+local youtube_next_slot.json file with this. compute_next_publish_slot
+below also fills gaps in that real schedule (e.g. the owner manually
+publishing an already-scheduled video early) rather than only ever
+pushing new uploads further into the future.
+
+2026-09-17: replaced the old "N days between uploads, one per day at a
+single preferred hour" model with owner-configurable multiple-times-a-day
+scheduling (`Settings.youtube_upload_times`, a comma-separated list of
+real HH:MM local times -- its own length IS the uploads-per-day count,
+no separate number to keep in sync). `Settings.youtube_uploads_per_day`
+drives nothing at schedule time; it only feeds the Settings panel's
+auto-generated default times (evenly_spaced_upload_times below)."""
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, time, timedelta
+import re
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from .models import load_song
 from .pipeline import slugify
-from .youtube import reserved_publish_dates, upload_video
+from .youtube import reserved_publish_datetimes, upload_video
 from .youtube_metadata import generate_video_metadata
 from .youtube_state import YoutubeState, save_youtube_state
 
 log = logging.getLogger("playalongvideoproduction")
+
+_DEFAULT_UPLOAD_TIME = time(15, 0)
+_DAY_WINDOW_START_MINUTES = 9 * 60   # 9:00 AM
+_DAY_WINDOW_END_MINUTES = 21 * 60    # 9:00 PM
+_TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
+
+
+def parse_upload_times(text: str) -> list[time]:
+    """Turns Settings.youtube_upload_times ("9:30,14:00,19:00") into sorted,
+    deduplicated time objects. Tolerant of a stray malformed entry (skipped,
+    not fatal -- a typo in the settings box must never break scheduling);
+    falls back to a single sane default if every entry is unusable, or the
+    box is empty, so schedule_upload() always has at least one slot to work
+    with."""
+    seen: set[time] = set()
+    for part in text.split(","):
+        match = _TIME_RE.match(part)
+        if not match:
+            continue
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            seen.add(time(hour, minute))
+    return sorted(seen) if seen else [_DEFAULT_UPLOAD_TIME]
+
+
+def format_upload_times(times: list[time]) -> str:
+    return ",".join(f"{t.hour:02d}:{t.minute:02d}" for t in sorted(times))
+
+
+def evenly_spaced_upload_times(count: int) -> list[time]:
+    """Generates `count` sensible default upload times spread across a
+    single daytime window (9 AM-9 PM), for the Settings panel to fill
+    Settings.youtube_upload_times with when the owner moves the "Uploads
+    per day" slider (owner request, 2026-09-17: "put in time defaults
+    depending on the number per day" ... "during the day"). Whatever it
+    generates is a starting point, not a lock -- the owner can hand-edit
+    any individual time afterward (e.g. nudge one to 9:30); that edit
+    sticks until the slider moves again. count=1 keeps the app's original
+    single-upload default (3 PM); count>=2 spaces every slot evenly across
+    the window, both endpoints included, e.g. count=3 -> 9:00/15:00/21:00,
+    count=5 -> 9:00/12:00/15:00/18:00/21:00."""
+    count = max(1, count)
+    if count == 1:
+        return [_DEFAULT_UPLOAD_TIME]
+    span = _DAY_WINDOW_END_MINUTES - _DAY_WINDOW_START_MINUTES
+    times = []
+    for i in range(count):
+        minute_of_day = round(_DAY_WINDOW_START_MINUTES + i * span / (count - 1))
+        times.append(time(minute_of_day // 60, minute_of_day % 60))
+    return times
 
 
 def _load_artist(work_dir: Path) -> str:
@@ -46,41 +105,51 @@ def _load_artist(work_dir: Path) -> str:
 
 
 def compute_next_publish_slot(
-    now: datetime, claimed_dates: set[date], min_days_between: int, preferred_hour: int,
+    now: datetime, claimed_datetimes: set[datetime], upload_times: list[time],
 ) -> datetime:
     """The next publish time to reserve for a newly-scheduled video --
     fills gaps in the channel's real, live schedule rather than only ever
-    pushing new uploads further into the future. Walks forward day by day
-    from `now`'s own date, and picks the first date that's at least
-    `min_days_between` days from every date already claimed by an
-    existing video (scheduled OR already-published; see
-    youtube.reserved_publish_dates) -- so if the owner manually publishes
-    an already-scheduled video early, or a batch run's mid-stream settings
-    change once inflated the schedule by extra days (real incident,
-    2026-09-13: a stale local counter compounded a 14-day gap onto every
-    later upload), the very next new upload lands back in that opened-up
-    gap instead of stacking further out past it. With `claimed_dates`
-    empty (the very first video ever), today's date has no conflict and is
-    returned right away, snapped to `preferred_hour` LOCAL time -- unless
-    that time has already passed today, in which case the walk rolls over
-    to tomorrow instead (real incident, night of 2026-09-14 into
-    2026-09-15: two videos uploaded late in the evening, after that day's
-    preferred_hour had already gone by, landed on an unclaimed "today" and
-    got a publishAt already in the past -- YouTube auto-published both
-    within a few hours instead of scheduling them into the future like
-    every other video that same night; an unclaimed date is no longer
-    enough on its own, the candidate must also still be ahead of `now`).
-    `min_days_between=1` (the common case) means simply "any date with no
-    existing video on it, in either direction" -- checked against BOTH
-    neighbors, so filling a gap can never land a new video too close to
-    what's already scheduled on either side of it."""
+    pushing new uploads further into the future. `upload_times` is the
+    owner's configured list of daily slots (Settings.youtube_upload_times,
+    via parse_upload_times); a day only counts as full once it already
+    holds as many claimed videos (scheduled OR already-published; see
+    youtube.reserved_publish_datetimes) as there are configured times --
+    a claim at some OTHER hour entirely (a manual upload, or a leftover
+    from before the owner last changed their configured times) still
+    counts against that day's capacity even though it won't exact-match
+    any configured time. Within a day that still has room, each configured
+    time is tried in order and the first one that isn't itself already
+    claimed wins -- so if the owner manually publishes an already-
+    scheduled video early, freeing that exact slot, the very next new
+    upload lands back in it instead of stacking past a still-claimed later
+    slot (real incident, 2026-09-13, that motivated reading the channel's
+    live state instead of a local counter in the first place). A slot must
+    still be ahead of `now` to be used (real incident, night of 2026-09-14
+    into 2026-09-15: a slot time that had already passed today got a
+    publishAt already in the past, and YouTube auto-published immediately
+    instead of scheduling into the future) -- once today has no usable
+    slot left (full, or every remaining time already past), the walk rolls
+    over to tomorrow."""
     local_now = now.astimezone() if now.tzinfo is not None else now
+    claimed_by_date: dict = {}
+    for d in claimed_datetimes:
+        claimed_by_date.setdefault(d.date(), []).append((d.hour, d.minute))
+    sorted_times = sorted(upload_times)
     candidate_date = local_now.date()
     while True:
-        conflicts = any(abs((candidate_date - claimed).days) < min_days_between for claimed in claimed_dates)
-        candidate = datetime.combine(candidate_date, time(hour=preferred_hour), tzinfo=local_now.tzinfo)
-        if not conflicts and candidate > local_now:
-            return candidate
+        day_claims = claimed_by_date.get(candidate_date, [])
+        # A day is only "full" once it holds as many claims as there are
+        # configured slots -- a claim at some other hour entirely (a
+        # manual upload, or a leftover from before the owner changed their
+        # configured times) still counts against that day's capacity,
+        # even though it won't exact-match any configured time below.
+        if len(day_claims) < len(sorted_times):
+            for t in sorted_times:
+                if (t.hour, t.minute) in day_claims:
+                    continue  # exact slot already taken -- try the next one
+                candidate = datetime.combine(candidate_date, t, tzinfo=local_now.tzinfo)
+                if candidate > local_now:
+                    return candidate
         candidate_date += timedelta(days=1)
 
 
@@ -108,8 +177,8 @@ def schedule_upload(
 
     if settings.youtube_privacy == "public":
         slot = compute_next_publish_slot(
-            now, reserved_publish_dates(youtube_client),
-            settings.youtube_min_days_between_uploads, settings.youtube_preferred_upload_hour,
+            now, reserved_publish_datetimes(youtube_client),
+            parse_upload_times(settings.youtube_upload_times),
         )
         video_id = upload_video(
             youtube_client, video_path, title, description, tags,

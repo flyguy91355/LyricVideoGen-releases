@@ -7,7 +7,7 @@ call in tests. See docs/superpowers/specs/2026-09-10-youtube-upload-design.md.""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -106,26 +106,29 @@ def _all_uploaded_video_ids(youtube_client) -> list[str]:
     return video_ids
 
 
-def reserved_publish_dates(youtube_client) -> set[date]:
-    """Every LOCAL calendar date already claimed anywhere on this channel --
-    a still-scheduled private video's own publishAt, or an already-public
-    video's real publishedAt, converted from YouTube's UTC into this
-    machine's local date -- across every video ever uploaded. This is the
-    real ground truth for placing the NEXT scheduled upload (see
-    youtube_schedule.compute_next_publish_slot's gap-filling search),
-    used instead of a local running counter that silently drifts the
-    moment anything changes the channel out-of-band: the owner manually
-    publishing an already-scheduled video early, editing a schedule
-    directly in Studio, or even this app's own Apply Update touching
-    local state. Real incident, 2026-09-13: a stale local counter --
-    inflated once by a since-reverted mid-batch settings change -- kept
-    compounding that same 14-day gap onto every future upload instead of
-    resuming a normal cadence, and had no way to notice several already-
-    scheduled videos had since been published early by hand, which is
-    exactly the kind of gap this function lets the scheduler fill back in
-    with a new upload rather than just pushing further into the future.
-    Returns an empty set for a channel with zero uploads."""
-    claimed: set[date] = set()
+def reserved_publish_datetimes(youtube_client) -> set[datetime]:
+    """Every LOCAL publish moment already claimed anywhere on this channel,
+    down to the minute -- a still-scheduled private video's own publishAt,
+    or an already-public video's real publishedAt, converted from
+    YouTube's UTC into this machine's local time -- across every video
+    ever uploaded. This is the real ground truth for placing the NEXT
+    scheduled upload (see youtube_schedule.compute_next_publish_slot's
+    gap-filling search), used instead of a local running counter that
+    silently drifts the moment anything changes the channel out-of-band:
+    the owner manually publishing an already-scheduled video early,
+    editing a schedule directly in Studio, or even this app's own Apply
+    Update touching local state. Real incident, 2026-09-13: a stale local
+    counter -- inflated once by a since-reverted mid-batch settings change
+    -- kept compounding that same 14-day gap onto every future upload
+    instead of resuming a normal cadence, and had no way to notice several
+    already-scheduled videos had since been published early by hand,
+    which is exactly the kind of gap this function lets the scheduler
+    fill back in with a new upload rather than just pushing further into
+    the future. Minute-level (not just date-level, since 2026-09-17's
+    multiple-times-a-day scheduling) so two configured times on the same
+    day are tracked as distinct slots. Returns an empty set for a channel
+    with zero uploads."""
+    claimed: set[datetime] = set()
     video_ids = _all_uploaded_video_ids(youtube_client)
     for i in range(0, len(video_ids), 50):
         batch = video_ids[i:i + 50]
@@ -135,7 +138,7 @@ def reserved_publish_dates(youtube_client) -> set[date]:
             if not when:
                 continue
             parsed = datetime.fromisoformat(when.replace("Z", "+00:00"))
-            claimed.add(parsed.astimezone().date())
+            claimed.add(parsed.astimezone())
     return claimed
 
 
@@ -218,7 +221,7 @@ def post_top_level_comment(youtube_client, video_id: str, text: str) -> str:
     field (confirmed against the current API reference), so this resolves
     the connected channel's own id first -- channels().list(...) matches
     the resource-then-method pattern every other call in this file already
-    uses (get_video_snippet, reserved_publish_dates), not a kwargs-taking
+    uses (get_video_snippet, reserved_publish_datetimes), not a kwargs-taking
     channels(...) call."""
     channel_response = youtube_client.channels().list(part="id", mine=True).execute()
     channel_id = channel_response["items"][0]["id"]

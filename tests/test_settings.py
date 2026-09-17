@@ -45,8 +45,8 @@ def test_youtube_settings_defaults():
     assert s.youtube_privacy == "public"
     assert s.youtube_category_id == "27"
     assert s.youtube_made_for_kids is False
-    assert s.youtube_min_days_between_uploads == 2
-    assert s.youtube_preferred_upload_hour == 15
+    assert s.youtube_uploads_per_day == 1
+    assert s.youtube_upload_times == "15:00"
 
 
 def test_resolutions_encoders_fps_options_are_nonempty():

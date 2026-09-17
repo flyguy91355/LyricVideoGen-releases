@@ -37,8 +37,8 @@ def _raw_defaults() -> dict:
         "youtube_privacy": "public",
         "youtube_category_id": "Education",
         "youtube_made_for_kids": False,
-        "youtube_min_days_between_uploads": 2.0,
-        "youtube_preferred_upload_hour": 15.0,
+        "youtube_uploads_per_day": 1.0,
+        "youtube_upload_times": "15:00",
     }
 
 

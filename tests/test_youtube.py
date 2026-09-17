@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from lyricvideo.youtube import (
     add_video_to_playlist, create_playlist, find_playlist_by_id, get_video_snippet, is_video_in_playlist,
-    is_video_public, list_new_comments, post_reply, post_top_level_comment, reserved_publish_dates,
+    is_video_public, list_new_comments, post_reply, post_top_level_comment, reserved_publish_datetimes,
     update_video_description, upload_video, video_exists,
 )
 
@@ -412,7 +412,7 @@ def test_update_video_description_is_a_noop_when_video_no_longer_exists():
 
 class _FakeChannelUploadsClient:
     """A channel with a fixed uploads-playlist history, for
-    reserved_publish_dates() -- distinct from _FakeYoutubeClient above
+    reserved_publish_datetimes() -- distinct from _FakeYoutubeClient above
     since that one's videos().list() takes a single id, not a comma-
     joined batch."""
 
@@ -445,30 +445,30 @@ class _FakeChannelUploadsClient:
         return SimpleNamespace(list=list_)
 
 
-def test_reserved_publish_dates_includes_both_scheduled_and_published_videos():
+def test_reserved_publish_datetimes_includes_both_scheduled_and_published_videos():
     client = _FakeChannelUploadsClient([
         {"id": "old-public", "status": {}, "snippet": {"publishedAt": "2026-09-01T18:00:00Z"}},
         {"id": "still-scheduled", "status": {"publishAt": "2026-09-20T18:00:00Z"}, "snippet": {}},
     ])
 
-    result = reserved_publish_dates(client)
+    result = reserved_publish_datetimes(client)
 
     assert result == {
-        datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc).astimezone().date(),
-        datetime(2026, 9, 20, 18, 0, tzinfo=timezone.utc).astimezone().date(),
+        datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc).astimezone(),
+        datetime(2026, 9, 20, 18, 0, tzinfo=timezone.utc).astimezone(),
     }
 
 
-def test_reserved_publish_dates_returns_empty_set_for_an_empty_channel():
-    assert reserved_publish_dates(_FakeChannelUploadsClient([])) == set()
+def test_reserved_publish_datetimes_returns_empty_set_for_an_empty_channel():
+    assert reserved_publish_datetimes(_FakeChannelUploadsClient([])) == set()
 
 
-def test_reserved_publish_dates_ignores_videos_with_neither_field():
+def test_reserved_publish_datetimes_ignores_videos_with_neither_field():
     client = _FakeChannelUploadsClient([
         {"id": "processing", "status": {}, "snippet": {}},
         {"id": "real", "status": {}, "snippet": {"publishedAt": "2026-09-05T12:00:00Z"}},
     ])
 
-    result = reserved_publish_dates(client)
+    result = reserved_publish_datetimes(client)
 
-    assert result == {datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc).astimezone().date()}
+    assert result == {datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc).astimezone()}

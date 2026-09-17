@@ -2320,3 +2320,87 @@ Quota resets at midnight Pacific Time; the owner will re-run the backfill
 script after that to pick up where it left off. Both fixes shipped as
 part of the same session, pushed and released as part of the ongoing
 v2.0.x line.
+
+## 2026-09-17 — Multiple-times-a-day upload scheduling, replacing "N days between uploads"
+
+Owner wants to lean into aggressive early-channel growth ("only 5
+subscribers is the perfect time to get many videos on my channel") and
+schedule up to 10 public uploads per day, at real chosen times (e.g.
+9:30), rather than the old one-a-day cadence. Flagged once, briefly, that
+this runs counter to the "cap at 1-3/day" advice in an analytics
+write-up the owner had pasted earlier in the same session -- owner's
+call to make, not something to block on, and the feature was built as
+asked.
+
+**Settings redesign**, arrived at over a few back-and-forth exchanges:
+first proposed a single unified `youtube_upload_times` list (its length
+implicitly the per-day count); owner's own framing ("say 5 a day and the
+times for them") made clear they wanted an explicit count control too, so
+landed on two fields instead -- `youtube_uploads_per_day` (int, 1-10) and
+`youtube_upload_times` (str). The count field drives NOTHING at schedule
+time; it only exists so the Settings panel can generate sensible default
+times when the owner moves it. The real source of truth `schedule_upload()`
+reads is just `youtube_upload_times`'s own parsed length -- avoids ever
+having the two fields disagree.
+
+`youtube_schedule.py` gained three small functions: `parse_upload_times()`
+(comma-separated "H:MM" -> sorted, deduped `time` objects, tolerant of a
+malformed entry, falls back to a single default rather than ever leaving
+scheduling with zero slots), `format_upload_times()` (the inverse, for
+writing the regenerated list back into the settings box), and
+`evenly_spaced_upload_times(count)` (owner request: "put in time defaults
+depending on the number per day" ... "during the day" -- spreads `count`
+times evenly across a fixed 9 AM-9 PM window, both endpoints included;
+count=1 keeps the app's original 3 PM default for exact backward
+compatibility). `SettingsPanel._slider()` gained an optional
+`on_value_change` callback (guarded by the same `_suppress_change` flag
+`_changed()` already uses) so moving the new "Uploads per day" slider
+regenerates the times box live -- verified directly against a real
+`ctk.CTk()` root (this project's established GUI-verification technique,
+no synthetic clicks): dragging the slider to 5 filled the box with
+"09:00,12:00,15:00,18:00,21:00"; hand-editing one time afterward stuck
+until the slider moved again (confirmed it then got overwritten, as
+designed); loading a `Settings` object with pre-existing custom times
+via `load_from()` did NOT trigger a regenerate (the exact class of bug
+the `_suppress_change` guard exists to prevent elsewhere in this file).
+
+**`compute_next_publish_slot()` rewrite.** The old version tracked one
+claimed DATE per video and blocked `min_days_between` days around each.
+First redesign attempt matched claimed slots by exact (date, hour,
+minute) only -- passed every new test but broke an old one
+(`test_schedule_upload_public_spaces_past_a_date_already_claimed...`,
+which expects a same-day claim at a totally different, unrelated hour to
+still push a single-slot-per-day config to tomorrow). Root cause: exact-
+time matching lets an oddly-timed claim (a manual Studio upload, or a
+leftover from before the owner last changed their configured times)
+silently NOT count against that day's capacity at all. Fixed by
+splitting the check in two: a day is "full" once it holds as many total
+claims (any hour) as there are configured times, and only within a day
+that still has room does exact-time matching decide WHICH specific
+configured time to use (so an early manual publish still frees its exact
+slot back up for the next upload, preserving the original gap-filling
+behavior from the 2026-09-13 fix). Hand-traced this against every new
+test before running any of them; every trace matched, and the full run
+confirmed it on the first try -- including, notably, that the OLD
+pre-existing `schedule_upload()`-level tests (written for the single-
+time-per-day case, values just swapped to the new settings field) kept
+passing unmodified in their assertions, which is exactly what backward
+compatibility for the count=1 case should look like.
+
+`youtube.reserved_publish_dates()` (returned bare `date`s) became
+`reserved_publish_datetimes()` (returns full local-aware `datetime`s, so
+two configured times on the same calendar day are tracked as distinct
+slots) -- same live-channel-truth philosophy as before, just finer
+grained. `date` became a dead import in `youtube.py` and was removed.
+
+**Not migrated:** the owner's real, currently-saved `settings.json` still
+has the old `youtube_min_days_between_uploads`/`youtube_preferred_upload_hour`
+keys. `Settings.from_dict()` already silently drops unknown keys and
+fills in defaults for missing ones (existing tolerant-load behavior, no
+new code needed) -- so it loads fine, but lands on the new defaults
+(1/day at 15:00) rather than carrying forward the old "1 day apart, 2 PM"
+values. The owner needs to open Settings and set their real desired count
+and times once after this update; nothing crashes or silently misbehaves
+in the meantime.
+
+Full suite: 645 passed.

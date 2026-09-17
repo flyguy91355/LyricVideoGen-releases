@@ -15,6 +15,7 @@ from typing import Optional
 import customtkinter as ctk
 
 from .settings import ENCODERS, FPS_OPTIONS, RESOLUTIONS, Settings, hex_to_rgb
+from .youtube_schedule import evenly_spaced_upload_times, format_upload_times
 
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -31,8 +32,7 @@ def _parse_clamped_float(text: str, lo: float, hi: float) -> float:
 
 _INT_FIELDS = {
     "fps", "crf", "countdown_beats", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
-    "chord_legend_size", "chord_diagram_panel_alpha", "youtube_min_days_between_uploads",
-    "youtube_preferred_upload_hour", "support_overlay_size",
+    "chord_legend_size", "chord_diagram_panel_alpha", "youtube_uploads_per_day", "support_overlay_size",
 }
 
 _YOUTUBE_CATEGORY_IDS = {"Howto & Style": "26", "Education": "27", "Music": "10"}
@@ -168,7 +168,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._row += 1
         self._register_field_label(name, label, check)
 
-    def _slider(self, name: str, label: str, lo: float, hi: float, steps: int, fmt) -> None:
+    def _slider(self, name: str, label: str, lo: float, hi: float, steps: int, fmt, on_value_change=None) -> None:
         # Registered before _add() below so _default_text() can already use
         # this field's real formatter (e.g. "2.0s") instead of a plain str().
         self._field_formatters[name] = fmt
@@ -190,6 +190,12 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         # through the one mechanism, rather than needing each path to
         # remember to refresh the display itself.
         var.trace_add("write", _refresh_entry_text)
+        # Fires on every path that changes this slider's value (drag, typed
+        # entry, load_from(), Reset to Defaults) -- guarded the same way
+        # _changed() is, so it only actually acts on a real owner edit, never
+        # while a saved/default value is being programmatically loaded in.
+        if on_value_change is not None:
+            var.trace_add("write", lambda *_: None if self._suppress_change else on_value_change(var.get()))
 
         def _on_entry_commit(_event=None) -> None:
             # Typing an exact value (owner request) -- tolerates a stray unit
@@ -211,6 +217,15 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
         _refresh_entry_text()
         self._add(name, label, frame)
+
+    def _regenerate_upload_times(self, count: float) -> None:
+        # Owner request, 2026-09-17: moving the "Uploads per day" slider
+        # fills the times box with that many sensible defaults spread
+        # across the day, which the owner can then hand-edit further (e.g.
+        # nudge one to 9:30) -- that edit sticks until the slider moves
+        # again. The slider is purely a default-generator; the times text
+        # itself is what schedule_upload() actually reads.
+        self.vars["youtube_upload_times"].set(format_upload_times(evenly_spaced_upload_times(int(count))))
 
     def _color(self, name: str, label: str) -> None:
         var = self._var(name, tk.StringVar)
@@ -387,10 +402,11 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._option("youtube_privacy", "Privacy", ["public", "unlisted", "private"])
         self._option("youtube_category_id", "Category", list(_YOUTUBE_CATEGORY_IDS.keys()))
         self._check("youtube_made_for_kids", "Made for kids")
-        self._slider("youtube_min_days_between_uploads", "Minimum days between uploads", 1, 14, 13,
-                     lambda v: f"{int(v)}d")
-        self._slider("youtube_preferred_upload_hour", "Preferred upload hour", 0, 23, 23,
-                     lambda v: f"{int(v) % 12 or 12}{'AM' if int(v) < 12 else 'PM'}")
+        self._text("youtube_upload_times", "Upload times (comma-separated HH:MM)")
+        self._slider(
+            "youtube_uploads_per_day", "Uploads per day", 1, 10, 9, lambda v: f"{int(v)}/day",
+            on_value_change=self._regenerate_upload_times,
+        )
 
     def load_from(self, settings: Settings) -> None:
         # Suppressed while populating every var individually -- each .set() below

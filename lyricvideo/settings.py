@@ -98,9 +98,11 @@ class Settings:
                                               # video -- that field only appears under Education, and
                                               # isn't reachable through the Data API at all)
     youtube_made_for_kids: bool = False      # COPPA declaration, required on every upload
-    youtube_min_days_between_uploads: int = 2
-    youtube_preferred_upload_hour: int = 15  # 24h local time (0-23); 3 PM matches research
-                                              # on peak engagement windows
+    youtube_uploads_per_day: int = 1         # drives the Settings panel's auto-generated default
+                                              # times (see youtube_schedule.evenly_spaced_upload_times)
+    youtube_upload_times: str = "15:00"      # comma-separated 24h HH:MM local times, one per daily
+                                              # upload slot -- its own length IS the uploads-per-day
+                                              # count actually used at schedule time
 
     def render_kwargs(self) -> dict:
         """The subset of these settings that draw_scene()/draw_chord_bar() (via

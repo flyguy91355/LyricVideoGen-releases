@@ -448,12 +448,10 @@ also `run_pipeline`'s `--title` override (lyrics search + filename).
 `lyricvideo/youtube_schedule.py`'s
 `schedule_upload()` is the single upload code path (auto AND manual): for
 a Public target it uploads immediately as YouTube-Private with a computed
-future `publishAt` (`compute_next_publish_slot()` gap-fills: first date
->= `youtube_min_days_between_uploads` days from every date the channel
-already claims, live via `reserved_publish_dates()`, not a file --
-9-13), snapped to `youtube_preferred_upload_hour`, rolled to tomorrow
-past that hour;
-Unlisted/Private upload immediately, no scheduling at all. `lyricvideo/youtube_auth.py` owns the OAuth
+future `publishAt` (`compute_next_publish_slot()` gap-fills against the
+channel's own live schedule, `reserved_publish_datetimes()`, not a file --
+9-13; multiple-times-a-day scheduling via `Settings.youtube_upload_times`,
+HISTORY 2026-09-17). Unlisted/Private upload immediately, no scheduling. `lyricvideo/youtube_auth.py` owns the OAuth
 connection lifecycle: `connect()` opens the owner's browser once for
 consent (using a `client_secret_*.json` downloaded from Google Cloud
 Console) and saves a refresh token to
@@ -465,11 +463,12 @@ gained seven YouTube fields (`youtube_auto_upload`,
 `youtube_category_id` default `"27"` ("Education," so the "How-to"
 subcategory -- Data-API-unreachable, Studio-only -- is at least pickable
 by hand; HISTORY 2026-09-10),
-`youtube_made_for_kids` default
-`False`, `youtube_min_days_between_uploads` default `2`,
-`youtube_preferred_upload_hour` default `15`). `SettingsPanel` gained a
-"YouTube" section (client-secrets file picker, auto-upload checkbox,
-privacy/category dropdowns, made-for-kids checkbox, two sliders) --
+`youtube_made_for_kids` default `False`, `youtube_upload_times` default
+`"15:00"`, `youtube_uploads_per_day` default `1` (a Settings-panel
+default-time-generator only, HISTORY 2026-09-17). `SettingsPanel` gained a
+"YouTube" section (secrets picker, auto-upload checkbox, privacy/category
+dropdowns, made-for-kids checkbox, an upload-times text box, an
+"Uploads per day" slider) --
 the Category dropdown shows friendly labels ("Howto & Style"/"Education"/
 "Music") while `Settings.youtube_category_id` stores the real numeric
 YouTube category id; `values_to_settings()`/`load_from()` translate
