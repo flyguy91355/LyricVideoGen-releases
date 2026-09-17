@@ -2268,3 +2268,55 @@ measured 0.000s (no rebuild at all); opening it for the first time
 populated all 9 real pending songs; invalidating it again while OPEN
 rebuilt immediately (3.79s, expected -- the section is actually visible).
 Full suite: 593 passed.
+
+## 2026-09-17 — Channel organization (playlists + engagement comments) shipped, then hit a real YouTube quota wall on first backfill run
+
+Built and shipped the channel-organization feature (see
+`docs/superpowers/specs/2026-09-17-youtube-channel-organization-design.md`
+and the matching plan doc): every future upload now automatically gets
+added to an All playlist, one playlist per listed artist, and a Genre
+playlist Claude picks from a shared, growing list; a drafted engagement
+comment queues in a new GUI panel for owner approval, same pattern as
+comment replies. Ten TDD tasks, 634 tests passing, confirmed the exact
+request-body shapes for `playlists.insert`/`playlistItems.insert`/
+`commentThreads.insert` against Google's own current API docs before
+writing any code against them (two of the three things the owner asked
+about -- pinning a comment, and end-screen/card links between videos --
+turned out to have zero API support at all, confirmed the same way, and
+were scoped out entirely rather than half-built).
+
+First real run of `scripts/backfill_channel_organization.py` against the
+owner's 67 already-uploaded videos surfaced two real bugs immediately:
+
+**Bug 1: missing `.env` load.** The script never called `load_dotenv()`
+(every other entry point that needs `ANTHROPIC_API_KEY` does this via
+`gui.py`'s `_check_api_keys`) -- every single song failed instantly with
+an Anthropic auth error before any YouTube call was even attempted. Fixed
+by loading `.env` at the top of `main()`, same as the app does.
+
+**Bug 2: no quota handling.** Re-run after the fix worked for real --
+14 playlists were actually created live on the channel (confirmed by
+reading `~/.playalongvideoproduction/youtube_playlists.json` afterward)
+-- but creating a playlist costs real API quota (50 units), and adding a
+video to one costs another 50, so a ~50-song backfill each needing up to
+three playlist creates plus three inserts blew through YouTube's default
+10,000-unit daily cap partway through. The script kept going anyway,
+reporting the identical 429 `RATE_LIMIT_EXCEEDED` error as a "FAILED" for
+every remaining song -- 50 failures logged for what was really one root
+cause. A few of the very first songs also hit a transient 404 on
+`playlistItems.list` for a playlist that had just that moment been
+created via `playlists.insert` -- YouTube's own eventual-consistency lag,
+not a bug; a later retry (once quota resets) resolves it on its own since
+`organize_video()` is idempotent either way. Fixed the script to catch
+`HttpError` specifically, check `status_code == 429`, and stop the loop
+immediately with a clear "re-run after quota resets" message instead of
+grinding through the rest. Genre classification results already written
+to each song's `song_info.json` before the failure are preserved (checked
+directly: `08-anyhow`'s `song_info.json` already had `"genre": "Blues"`
+after the failed run), so a later re-run never re-spends Claude calls on
+songs it already got partway through.
+
+Quota resets at midnight Pacific Time; the owner will re-run the backfill
+script after that to pick up where it left off. Both fixes shipped as
+part of the same session, pushed and released as part of the ongoing
+v2.0.x line.

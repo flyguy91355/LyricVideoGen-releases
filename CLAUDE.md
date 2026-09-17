@@ -462,11 +462,9 @@ returns `None` for "not connected" (never raises) and auto-refreshes an
 expired token; `get_channel_title()` confirms which channel is connected. `Settings`
 gained seven YouTube fields (`youtube_auto_upload`,
 `youtube_client_secrets_path`, `youtube_privacy` default `"public"`,
-`youtube_category_id` default `"27"` ("Education" -- real 2026-09-10
-finding: YouTube Studio's "How-to" *subcategory* only appears under the
-Education top-level category and isn't reachable through the Data API at
-all, so the owner sets it manually per video in Studio; the app just
-needs to leave the video on Education for that option to be there),
+`youtube_category_id` default `"27"` ("Education," so the "How-to"
+subcategory -- Data-API-unreachable, Studio-only -- is at least pickable
+by hand; HISTORY 2026-09-10),
 `youtube_made_for_kids` default
 `False`, `youtube_min_days_between_uploads` default `2`,
 `youtube_preferred_upload_hour` default `15`). `SettingsPanel` gained a
@@ -561,7 +559,8 @@ playlist); idempotent. `gui.py` calls it after every `schedule_upload()`
 lazy-build pattern) has Approve (posts, marks
 `engagement_comment_posted`) and Dismiss.
 `scripts/backfill_channel_organization.py` applies this to older uploads,
-skipping deleted videos.
+loads `.env` itself, and stops cleanly on a quota error rather than
+failing every remaining song (HISTORY 2026-09-17).
 
 This whole feature is complete and tested. What's NOT yet verified: the
 interactive OAuth `connect()` flow and live comment fetch/reply, both of which
