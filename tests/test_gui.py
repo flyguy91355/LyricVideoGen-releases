@@ -1,3 +1,4 @@
+import queue
 from datetime import datetime, timedelta
 
 import pytest
@@ -117,6 +118,43 @@ def test_maybe_upload_to_youtube_calls_schedule_upload_when_eligible(tmp_path, m
     _maybe_upload_to_youtube(tmp_path, settings)
 
     assert calls == [("fake-youtube-client", "fake-anthropic-client", tmp_path, settings)]
+
+
+def test_maybe_upload_to_youtube_skips_a_song_flagged_for_lyrics_review(tmp_path, monkeypatch):
+    from lyricvideo.models import Song, save_song
+
+    save_song(
+        Song(title="t", audio_path="a.mp3", lyrics_accuracy_concern="looks like the wrong song"),
+        tmp_path / "lyrics_timed.json",
+    )
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    calls = []
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: calls.append("build") or "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **k: calls.append("schedule_upload"))
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)
+
+    assert calls == []  # never even got as far as building a YouTube client
+
+
+def test_maybe_upload_to_youtube_uploads_a_song_with_no_concern(tmp_path, monkeypatch):
+    from lyricvideo.models import Song, save_song
+
+    save_song(Song(title="t", audio_path="a.mp3"), tmp_path / "lyrics_timed.json")
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload",
+        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+    )
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path, settings)
+
+    assert calls == [tmp_path]
 
 
 def test_maybe_upload_to_youtube_never_raises_on_upload_failure(tmp_path, monkeypatch):
@@ -685,6 +723,7 @@ def test_retry_pending_uploads_if_due_retries_pending_songs_excluding_dismissed_
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
     monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b"])
     monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: {"song-b"})
+    monkeypatch.setattr("lyricvideo.gui.list_flagged_songs", lambda work_root: [])
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui._retry_pending_uploads",
@@ -700,6 +739,28 @@ def test_retry_pending_uploads_if_due_retries_pending_songs_excluding_dismissed_
 
     assert calls == [["song-a"]]
     assert refreshed == [True]
+
+
+def test_retry_pending_uploads_if_due_excludes_flagged_songs(monkeypatch):
+    """A song flagged for lyrics review must never auto-retry -- only a
+    deliberate owner click (Upload Anyway) uploads one of these."""
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b"])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: set())
+    monkeypatch.setattr("lyricvideo.gui.list_flagged_songs", lambda work_root: ["song-b"])
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.gui._retry_pending_uploads",
+        lambda work_root, settings, slugs: calls.append(slugs),
+    )
+    stub = _gui_stub(
+        _running=False, settings=Settings(youtube_auto_upload=True),
+        _refresh_retry_upload_options=lambda: None,
+    )
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)
+
+    assert calls == [["song-a"]]
 
 
 def test_generate_refuses_a_missing_audio_file_before_starting_anything(monkeypatch, tmp_path):
@@ -1000,9 +1061,66 @@ def test_refresh_retry_upload_options_invalidates_rather_than_rebuilds_directly(
         upload_selected_button=SimpleNamespace(configure=lambda **kw: button_states.append(("selected", kw))),
         _invalidate_upload_list=lambda: invalidated.append("upload"),
         _invalidate_pending_list=lambda: invalidated.append("pending"),
+        _invalidate_flagged_list=lambda: invalidated.append("flagged"),
     )
     LyricVideoGUI._refresh_retry_upload_options(stub)
 
-    assert invalidated == ["upload", "pending"]
+    assert invalidated == ["upload", "pending", "flagged"]
     assert ("upload", {"state": "normal"}) in button_states
     assert ("selected", {"state": "normal"}) in button_states
+
+
+def test_redo_flagged_sets_the_redo_dropdown_and_calls_on_redo(monkeypatch):
+    calls = []
+    stub = _gui_stub(
+        redo_song_var=SimpleNamespace(set=lambda slug: calls.append(("set", slug))),
+        _on_redo=lambda: calls.append(("on_redo",)),
+    )
+
+    LyricVideoGUI._on_redo_flagged(stub, "angie-rolling-stones")
+
+    assert calls == [("set", "angie-rolling-stones"), ("on_redo",)]
+
+
+def test_upload_anyway_flagged_reuses_the_existing_retry_upload_path(monkeypatch):
+    calls = []
+    stub = _gui_stub(_start_retry_upload=lambda slugs: calls.append(slugs))
+
+    LyricVideoGUI._on_upload_anyway_flagged(stub, "angie-rolling-stones")
+
+    assert calls == [["angie-rolling-stones"]]
+
+
+def test_poll_queue_refreshes_retry_upload_options_on_each_batch_item_done():
+    """Real gap found 2026-09-18: a 100-song Batch run only refreshed the
+    Pending/Flagged/Upload lists once, at the very end -- a song flagged
+    for lyrics review mid-batch wouldn't show up until the whole batch
+    finished. _run_batch_worker now emits one "batch_item_done" per
+    completed song specifically so this fires live."""
+    refreshed = []
+    q = queue.Queue()
+    q.put(("batch_item_done", None))
+    stub = _gui_stub(
+        _queue=q, _running=False, _refresh_retry_upload_options=lambda: refreshed.append(True),
+    )
+
+    LyricVideoGUI._poll_queue(stub)
+
+    assert refreshed == [True]
+
+
+def test_on_batch_done_refreshes_retry_upload_options(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda *a, **k: None)
+    refreshed = []
+    stub = _gui_stub(
+        generate_button=SimpleNamespace(configure=lambda **kw: None),
+        redo_button=SimpleNamespace(configure=lambda **kw: None),
+        batch_button=SimpleNamespace(configure=lambda **kw: None),
+        progress_bar=SimpleNamespace(set=lambda v: None),
+        status_var=SimpleNamespace(set=lambda v: None),
+        _refresh_retry_upload_options=lambda: refreshed.append(True),
+    )
+
+    LyricVideoGUI._on_batch_done(stub, {"succeeded": ["Angie"], "skipped_already_done": [], "failed": []})
+
+    assert refreshed == [True]

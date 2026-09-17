@@ -79,6 +79,8 @@ class Song:
     lines: list[LyricLine] = field(default_factory=list)
     chord_track: ChordTrack = field(default_factory=ChordTrack)
     image_cache: dict[str, str] = field(default_factory=dict)
+    lyrics_source: str = ""             # which fetch_lyric_lines_verified() source won ("", if unchecked)
+    lyrics_accuracy_concern: str = ""   # "" means check_lyric_accuracy() passed; non-empty = flagged
 
 
 def line_hash(text: str) -> str:
@@ -119,6 +121,8 @@ def _song_from_dict(data: dict) -> Song:
         lines=lines,
         chord_track=chord_track,
         image_cache=data.get("image_cache", {}),
+        lyrics_source=data.get("lyrics_source", ""),
+        lyrics_accuracy_concern=data.get("lyrics_accuracy_concern", ""),
     )
 
 

@@ -128,7 +128,9 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    path; a resume at fetch_lyrics/align/detect_chords whose stems are missing
    re-runs Demucs instead of crashing. Demucs's own output is relayed through
    `sys.stdout` (`_run_demucs`) so the GUI log shows its progress.
-3. **fetch_lyrics** (`fetch_lyrics.py` + `vocal_onset.py`) — plain lyric-line
+3. **fetch_lyrics** (`fetch_lyrics.py` + `vocal_onset.py` + `lyric_accuracy.py`,
+   HISTORY 2026-09-18) — `fetch_lyric_lines_verified()` tries each real
+   source until one passes a check, recorded on `Song`. Plain lyric-line
    text, no manual input required: a sidecar `.lrc`/`.txt` next to the
    audio file `run_pipeline()` now uses (its `work_dir` copy, not the
    original; 9-15), then lrclib.net (edition-consensus voting
@@ -145,10 +147,9 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    resample rounding artifact, tolerated; issue #6). An empty lyric list raises a
    clear RuntimeError pointing at a sidecar file instead of dying inside the
    aligner. MMS_FA knows only a-z and `'`: `_normalize_word_for_alignment`
-   spells digit runs out as sung ("31" -> "thirtyone", "1975" ->
-   "nineteenseventyfive", "1st" -> "first"), reads `&` as "and", and gives a
-   word with nothing left the model's `*` star token instead of raising
-   (issue #3: a lyric word "31" aborted the stage). Display text never changes.
+   spells digit runs out as sung ("31" -> "thirtyone"), reads `&` as "and",
+   and gives a word with nothing left the model's `*` star token instead of
+   raising (issue #3). Display text never changes.
 5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
    identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC) analyzes
    Demucs's `no_vocals.wav`; its 602-class vocabulary collapses to this
@@ -193,12 +194,10 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    (HISTORY 2026-09-09) -- never more than 2 rows, shrinking as needed to
    fit within a reserved upper region, and never growing past `Settings.
    chord_legend_size` (percent, owner-adjustable, default 100%). Each diagram's
-   own panel opacity is its own separate owner-tunable slider,
-   `Settings.chord_diagram_panel_alpha` (0-255, default 235/near-opaque) --
-   originally a fixed constant so it would stay legible against any
-   background, then made adjustable (2026-09-10 request) since the right
-   amount of transparency is a taste call the panel_alpha used elsewhere
-   doesn't control. Every video opens with a `Settings.countdown_beats`
+   own panel opacity is its own owner-tunable slider,
+   `Settings.chord_diagram_panel_alpha` (0-255, default 235/near-opaque;
+   made adjustable 2026-09-10, previously a fixed constant). Every video
+   opens with a `Settings.countdown_beats`
    lead-in (default 4, owner-adjustable in Output, 0 disables it) before the
    song starts, so a musician has a moment to get ready -- a real band's
    count-in is N *beats*, not N seconds, so `assemble_video()` computes
@@ -209,7 +208,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    its own start position, so there's no visual jump into the real content)
    with a small centered `render.draw_countdown()` panel counting down --
    same rounded-box/accent-color language as the chord bar's own NOW/NEXT
-   boxes (owner feedback: keep it modest, not "gaudy"), never more than
+   boxes, kept modest, never more than
    ~15% of the frame. `_first_available_image_key()` picks the real first
    moment's own image when its file exists, otherwise ANY real image
    already generated for the song, NEVER the flat `fallback_color` (some
@@ -223,20 +222,18 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    exact same instant, right as the countdown reaches zero. Long lyric lines
    wrap onto multiple rows at commas (preferred) or by word (fallback) instead of
    running off the frame edges or ever shrinking the font (`render.py`'s
-   `_split_line_into_rows`) -- real bug, a 127-character line overflowed both
-   edges before this. `draw_scene`'s current/next-line vertical spacing is
+   `_split_line_into_rows`). `draw_scene`'s current/next-line vertical spacing is
    computed from each shown line's actual (possibly multi-row) height
-   (`_rows_and_block_height`), not a fixed single-row gap -- a second real bug
-   found on a live redo: the wrap fix alone let a wrapped current line's lower
-   rows render on top of the next-line preview underneath it. During an instrumental
+   (`_rows_and_block_height`), not a fixed single-row gap, so a wrapped
+   current line's lower rows never render on top of the next-line preview
+   underneath it. During an instrumental
    gap (past a line's own `end_time`, before the next line's `start_time`, or
    outside any line at all) the background image follows the active chord
    instead of freezing on the last-sung line — `layout.py`'s `_in_a_line()`
    decides which applies, using `_plausible_sung_intervals()` rather than a
    line's raw `start_time`/`end_time` envelope: a single misaligned word can
-   otherwise claim an implausible duration (real bug found live, 2026-09-09 --
-   forced alignment gave one word 105 seconds while the rest of that line's
-   words were plausibly clustered together 8 seconds later) and make the next
+   otherwise claim an implausible duration (HISTORY 2026-09-09: one word got
+   105s while its line's other words clustered 8s later) and make the next
    ~2 minutes falsely read as "still singing," suppressing both the per-chord
    image-follow and Ken Burns pacing. `layout.build_image_timeline()` builds
    the whole song's image schedule once up front (one segment per sung line,
@@ -352,8 +349,8 @@ launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
 `focus_force`, plus a brief `-topmost` toggle — `lift`/`focus_force` alone
-are not reliably honored by every Linux window manager (Cinnamon
-included) — it must never be losable behind the main window)
+aren't reliably honored by every Linux window manager — it must never be
+losable behind the main window)
 with the release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-dependencies-if-changed/copies/writes the new
 VERSION) followed by a Relaunch Now button. No severity tiering, no
@@ -376,10 +373,7 @@ HISTORY 2026-09-10). The owner runs the app directly from this same
 git checkout (not a separate deployed copy), so code changes reach them
 immediately on every commit; releases exist so the Update Available banner
 and changelog stay meaningful, not because Apply Update is the only way
-changes reach this install. `v1.1.0` (2026-09-09) is the first release cut
-since the project rename — it had drifted to reference the pre-rename
-`run_lyricvideogen.sh` (file no longer exists), fixed to
-`run_playalongvideoproduction.sh`. `cut_release.sh`/`apply.py` guard
+changes reach this install. `cut_release.sh`/`apply.py` guard
 against a stale release reverting newer commits (HISTORY, 9-13).
 
 `Settings.render_kwargs()` centralizes resolution/color unpacking for
@@ -495,10 +489,19 @@ never called from the GUI thread). "Upload to YouTube" (below Redo) is the
 sole manual-upload UI: a `list_rendered_songs()` single-select list (any
 song, uploaded or not) + Upload -- confirms first if that song has a
 `youtube_state.json` -- plus a "Pending YouTube Uploads" checklist below,
-live from `list_pending_uploads()` (never-uploaded only), with "Select
-All" and an "Upload Selected" button; both share
+live from `list_pending_uploads()` (never-uploaded only;
+`list_flagged_songs()` backs a review list too, HISTORY 2026-09-18), with
+"Select All" and an "Upload Selected" button; both share
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
-`youtube_auto_upload` (a deliberate click always has). Redo's list, this
+`youtube_auto_upload` (a deliberate click always has). A "Flagged for
+Lyrics Review" panel (same lazy pattern) shows each flagged song's concern
+text with Redo (re-fetches lyrics fresh; a clean fetch clears the concern
+on its own) and Upload Anyway (`_start_retry_upload()`, a deliberate
+override) buttons; `_maybe_upload_to_youtube()` skips any flagged song
+outright. `_run_batch_worker` emits a `"batch_item_done"` queue message
+after each song so these three lists update live during a long Batch run
+instead of only once at the very end (real gap, HISTORY 2026-09-18).
+Redo's list, this
 one, and the Pending checklist are each `CTkRadioButton`/`CTkCheckBox`
 rows in a `CTkScrollableFrame` fixed to
 `SONG_LIST_HEIGHT` (~15 rows, scrolls for rest), in a section starting

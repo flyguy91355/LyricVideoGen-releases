@@ -24,6 +24,7 @@ from typing import Callable
 
 import requests
 
+from .lyric_accuracy import check_lyric_accuracy
 from .text_clean import artist_key, normalize
 from .vocal_onset import vocal_onset_rise
 
@@ -378,23 +379,83 @@ def _fetch_lrclib_hit(audio_path: Path, title: str, artist: str, duration: float
     return None
 
 
-def _fetch_syncedlyrics_hit(title: str, artist: str) -> Hit | None:
+def _fetch_syncedlyrics_hit(title: str, artist: str, providers: list[str] | None = None) -> Hit | None:
     try:
         import syncedlyrics  # type: ignore
     except ImportError:
         return None
     term = f"{artist} {title}".strip()
+    kwargs = {"providers": providers} if providers else {}
     try:
         try:
-            lrc = syncedlyrics.search(term, allow_plain_format=True)
+            lrc = syncedlyrics.search(term, allow_plain_format=True, **kwargs)
         except TypeError:
-            lrc = syncedlyrics.search(term)
+            lrc = syncedlyrics.search(term, **kwargs)
     except Exception as exc:
         log.warning("syncedlyrics failed: %s", exc)
         return None
     if not lrc:
         return None
     return lrc, bool(LRC_TAG.search(lrc)), 0.0
+
+
+# The real, distinct lyric sources this app can try, in priority order:
+# the owner's own sidecar file, lrclib.net's own edition-consensus search,
+# then syncedlyrics against each of its providers individually (confirmed
+# via syncedlyrics.search(..., providers=[name]) -- not one blended call,
+# so a provider that got the wrong song doesn't hide one that got it
+# right). See docs/superpowers/specs/2026-09-18-lyric-accuracy-check-design.md.
+_ACCURACY_CHECK_SOURCES = ["sidecar", "lrclib", "Musixmatch", "NetEase", "Megalobiz", "Genius"]
+
+
+def _hit_to_lines(hit: Hit, duration: float) -> list[str]:
+    text, synced, _ref_duration = hit
+    if synced and not text.strip():
+        return []  # provider flagged this track instrumental
+    if synced:
+        return [l.text for l in parse_lrc(text, duration) if l.text.strip()]
+    # Plain lyrics: the text IS the result -- no timing is derived from it
+    # here, so this must not go through plain_to_lines(), whose evenly-spread
+    # fake timing needs a positive duration and returns NOTHING for a file
+    # whose length couldn't be probed -- real lyrics were being thrown away
+    # in exactly that case (found by code review, 2026-09-14).
+    return [row.strip() for row in text.splitlines() if row.strip()]
+
+
+def fetch_lyric_lines_verified(
+    audio_path: Path, title: str, artist: str, duration: float, alt_titles: list[str] | None,
+    anthropic_client, model: str = "claude-sonnet-5",
+) -> tuple[list[str], str, str]:
+    """Like fetch_lyric_lines(), but tries every real source in
+    _ACCURACY_CHECK_SOURCES in order, running check_lyric_accuracy() after
+    each, and returns as soon as one passes -- rather than settling for
+    whichever source happens to answer first. Returns (lines, source,
+    concern); concern is "" only when some source's text passed the check
+    cleanly. If every source is exhausted without a clean pass, the FIRST
+    non-empty candidate found is kept (with its concern) rather than
+    blocking generation -- never fabricates lyrics, same as
+    fetch_lyric_lines()."""
+    best_lines: list[str] = []
+    best_source = ""
+    best_concern = "No lyrics found from any source."
+    for source in _ACCURACY_CHECK_SOURCES:
+        if source == "sidecar":
+            hit = _sidecar(audio_path)
+        elif source == "lrclib":
+            hit = _fetch_lrclib_hit(audio_path, title, artist, duration, alt_titles or [])
+        else:
+            hit = _fetch_syncedlyrics_hit(title, artist, providers=[source])
+        if hit is None:
+            continue
+        lines = _hit_to_lines(hit, duration)
+        if not lines:
+            continue
+        looks_accurate, concern = check_lyric_accuracy(anthropic_client, title, artist, lines, model=model)
+        if looks_accurate:
+            return lines, source, ""
+        if not best_lines:
+            best_lines, best_source, best_concern = lines, source, concern
+    return best_lines, best_source, best_concern
 
 
 def fetch_lyric_lines(audio_path: Path, title: str, artist: str, duration: float,
@@ -411,16 +472,5 @@ def fetch_lyric_lines(audio_path: Path, title: str, artist: str, duration: float
     if hit is None:
         log.warning("No lyrics found for '%s' - '%s'", artist, title)
         return []
-
-    text, synced, _ref_duration = hit
-    if synced and not text.strip():
-        log.info("Track flagged instrumental by lyrics provider")
-        return []
-    if synced:
-        return [l.text for l in parse_lrc(text, duration) if l.text.strip()]
-    # Plain lyrics: the text IS the result -- no timing is derived from it
-    # here, so this must not go through plain_to_lines(), whose evenly-spread
-    # fake timing needs a positive duration and returns NOTHING for a file
-    # whose length couldn't be probed (duration 0). Real lyrics were being
-    # thrown away in exactly that case (found by code review, 2026-09-14).
+    return _hit_to_lines(hit, duration)
     return [row.strip() for row in text.splitlines() if row.strip()]

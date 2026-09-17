@@ -3,10 +3,17 @@ from lyricvideo.fetch_lyrics import (
     artist_matches,
     choose_lyrics_candidate,
     fetch_lyric_lines,
+    fetch_lyric_lines_verified,
     parse_lrc,
     plain_to_lines,
     title_variants,
 )
+
+
+class _FakeAnthropicClient:
+    """Not actually called via the real API here -- tests monkeypatch
+    check_lyric_accuracy itself, so this just needs to exist as a
+    recognizable placeholder object passed through."""
 
 
 def test_parse_lrc_extracts_timed_lines():
@@ -150,3 +157,106 @@ def test_fetch_lyric_lines_plain_sidecar_txt_works_without_a_duration(tmp_path, 
     monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", fail_if_called)
 
     assert fetch_lyric_lines(audio_path, title="T", artist="A", duration=0.0) == ["Line one", "Line two"]
+
+
+def test_fetch_lyric_lines_verified_returns_the_first_source_that_passes(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    (tmp_path / "song.lrc").write_text("[00:00.00]Imagine there's no heaven\n", encoding="utf-8")
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.check_lyric_accuracy", lambda *a, **k: (True, ""))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("should not need lrclib/syncedlyrics when the sidecar already passed")
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", fail_if_called)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", fail_if_called)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "Imagine", "John Lennon", 10.0, [], _FakeAnthropicClient(),
+    )
+
+    assert lines == ["Imagine there's no heaven"]
+    assert source == "sidecar"
+    assert concern == ""
+
+
+def test_fetch_lyric_lines_verified_tries_the_next_source_when_the_first_fails_the_check(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_lrclib_hit",
+        lambda *a, **k: ("Ceci n'est pas une chanson", False, 0.0),
+    )
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit",
+        lambda title, artist, providers=None: ("Imagine there's no heaven", False, 0.0),
+    )
+
+    def fake_check(client, title, artist, lines, model="claude-sonnet-5"):
+        if "Ceci n'est pas une chanson" in lines:
+            return False, "This text is in French, not English."
+        return True, ""
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.check_lyric_accuracy", fake_check)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "Imagine", "John Lennon", 10.0, [], _FakeAnthropicClient(),
+    )
+
+    assert lines == ["Imagine there's no heaven"]
+    assert source == "Musixmatch"
+    assert concern == ""
+
+
+def test_fetch_lyric_lines_verified_tries_every_provider_individually(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.check_lyric_accuracy", lambda *a, **k: (False, "nope"))
+    calls = []
+
+    def fake_syncedlyrics(title, artist, providers=None):
+        calls.append(providers)
+        return ("some text", False, 0.0)
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", fake_syncedlyrics)
+
+    fetch_lyric_lines_verified(audio_path, "T", "A", 10.0, [], _FakeAnthropicClient())
+
+    assert calls == [["Musixmatch"], ["NetEase"], ["Megalobiz"], ["Genius"]]
+
+
+def test_fetch_lyric_lines_verified_keeps_the_first_candidate_when_nothing_passes(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("first attempt", False, 0.0))
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit",
+        lambda title, artist, providers=None: ("later attempt", False, 0.0),
+    )
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics.check_lyric_accuracy", lambda *a, **k: (False, "still looks wrong"),
+    )
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+    )
+
+    assert lines == ["first attempt"]
+    assert source == "lrclib"
+    assert concern == "still looks wrong"
+
+
+def test_fetch_lyric_lines_verified_returns_empty_when_nothing_found_anywhere(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", lambda *a, **k: None)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+    )
+
+    assert lines == []
+    assert source == ""
+    assert concern == "No lyrics found from any source."

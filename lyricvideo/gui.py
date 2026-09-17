@@ -34,6 +34,7 @@ from .pipeline import (
     STAGES,
     run_pipeline,
     slugify as _slugify,
+    list_flagged_songs,
     list_redoable_songs,
     list_pending_uploads,
     list_rendered_songs,
@@ -42,6 +43,7 @@ from .pipeline import (
     prepare_images_for_fresh_regeneration,
     song_video_path,
 )
+from .models import load_song
 from .settings import Settings
 from .settings_panel import SettingsPanel
 from .settings_preview import SettingsPreviewFrame
@@ -126,7 +128,10 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     exceeded failure (2026-09-17) additionally records a cooldown
     (Settings.youtube_quota_retry_hours) so every OTHER song doesn't also
     immediately retry into the same wall -- see _retry_pending_uploads_if_due,
-    which auto-resumes once that cooldown passes."""
+    which auto-resumes once that cooldown passes. A song flagged by
+    check_lyric_accuracy() (2026-09-18, Song.lyrics_accuracy_concern
+    non-empty) never auto-uploads either -- it still fully rendered, and
+    shows up in the "Flagged for Lyrics Review" panel instead."""
     if not settings.youtube_auto_upload:
         return
     credentials = youtube_auth.load_credentials()
@@ -135,6 +140,11 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     blocked_until = load_quota_blocked_until()
     if blocked_until is not None and datetime.now().astimezone() < blocked_until:
         return  # still cooling down from a prior quota-exceeded error
+    try:
+        if load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern:
+            return  # flagged -- see the "Flagged for Lyrics Review" panel
+    except Exception:
+        pass  # missing/corrupt file must never block an otherwise-normal upload
 
     try:
         youtube_client = build("youtube", "v3", credentials=credentials)
@@ -512,6 +522,7 @@ class LyricVideoGUI:
 
         self._build_youtube_panel(right)
         self._build_pending_comments_panel(right)
+        self._build_flagged_songs_panel(right)
 
     def _open_settings_window(self) -> None:
         if self._settings_window is not None:
@@ -1069,6 +1080,7 @@ class LyricVideoGUI:
                             progress_callback=lambda stage: self._queue.put(("stage", stage)),
                         )
                     _maybe_upload_to_youtube(item.work_dir, self.settings)
+                    self._queue.put(("batch_item_done", None))
                     results["succeeded"].append(item.title)
                 except Exception as e:
                     results["failed"].append((item.title, f"{type(e).__name__}: {e}"))
@@ -1119,6 +1131,7 @@ class LyricVideoGUI:
         self.generate_button.configure(state="normal")
         self.redo_button.configure(state="normal")
         self.batch_button.configure(state="normal")
+        self._refresh_retry_upload_options()
 
         summary = (
             f"Succeeded: {len(results['succeeded'])}\n"
@@ -1348,6 +1361,7 @@ class LyricVideoGUI:
         self.retry_upload_button.configure(state="normal")
         self.upload_selected_button.configure(state="normal")
         self._invalidate_pending_list()
+        self._invalidate_flagged_list()
 
     def _refresh_song_list(self, list_name: str) -> None:
         """Rebuilds a single list (by its dismissed_songs.py list_name) after
@@ -1603,6 +1617,67 @@ class LyricVideoGUI:
         remove_pending_comment(comment.video_id)
         self._invalidate_pending_comments()
 
+    def _build_flagged_songs_panel(self, parent) -> None:
+        content, self._invalidate_flagged_list = self._make_collapsible_section(
+            parent, "Flagged for Lyrics Review", on_first_expand=self._refresh_flagged_songs,
+        )
+        self.flagged_songs_frame = ctk.CTkScrollableFrame(content, height=SONG_LIST_HEIGHT)
+        self.flagged_songs_frame.pack(fill="x", padx=8, pady=(0, 8))
+
+    def _refresh_flagged_songs(self) -> None:
+        for child in self.flagged_songs_frame.winfo_children():
+            child.destroy()
+        slugs = list_flagged_songs(PROJECT_ROOT / "work")
+        for slug in slugs:
+            try:
+                self._render_one_flagged_song(slug)
+            except Exception as e:
+                print(
+                    f"WARNING: could not build a flagged-song row for {slug!r}: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+        if not slugs:
+            ctk.CTkLabel(self.flagged_songs_frame, text="(none)", text_color="gray60").pack(
+                anchor="w", padx=6, pady=6
+            )
+
+    def _render_one_flagged_song(self, slug: str) -> None:
+        concern = ""
+        try:
+            concern = load_song(PROJECT_ROOT / "work" / slug / "lyrics_timed.json").lyrics_accuracy_concern
+        except Exception:
+            pass
+        row = ctk.CTkFrame(self.flagged_songs_frame)
+        row.pack(fill="x", pady=4)
+        ctk.CTkLabel(row, text=slug, anchor="w", font=ctk.CTkFont(weight="bold")).pack(
+            fill="x", padx=6, pady=(6, 2)
+        )
+        ctk.CTkLabel(row, text=concern, anchor="w", wraplength=400, justify="left").pack(
+            fill="x", padx=6, pady=(0, 4)
+        )
+        buttons = ctk.CTkFrame(row, fg_color="transparent")
+        buttons.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Redo", width=80, command=lambda: self._on_redo_flagged(slug),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Upload Anyway", width=120, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_upload_anyway_flagged(slug),
+        ).pack(side="left")
+
+    def _on_redo_flagged(self, slug: str) -> None:
+        # Reuses the Redo dropdown + confirmation flow verbatim -- Redo
+        # re-fetches lyrics fresh through the same multi-source accuracy
+        # check, so a clean fetch this time clears the concern on its own.
+        self.redo_song_var.set(slug)
+        self._on_redo()
+
+    def _on_upload_anyway_flagged(self, slug: str) -> None:
+        # A deliberate owner override, same as any other manual upload --
+        # reuses the existing retry-upload path exactly, no separate
+        # upload mechanics needed.
+        self._start_retry_upload([slug])
+
     def _on_check_youtube_comments(self) -> None:
         threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()
 
@@ -1685,8 +1760,10 @@ class LyricVideoGUI:
         same 20-minute background tick that already refreshes comments and
         connect-status. Only acts when auto-upload is on (an owner who wants
         manual control over uploads shouldn't have this silently upload in
-        the background either), and never while a Generate/Redo/Batch is
-        already active."""
+        the background either), never while a Generate/Redo/Batch is
+        already active, and never for a song flagged for lyrics review
+        (2026-09-18) -- only a deliberate Upload Anyway click uploads one
+        of those."""
         if self._running or not self.settings.youtube_auto_upload:
             return
         if youtube_auth.load_credentials() is None:
@@ -1695,7 +1772,10 @@ class LyricVideoGUI:
         if blocked_until is not None and datetime.now().astimezone() < blocked_until:
             return
         dismissed = load_dismissed("pending")
-        pending = [s for s in list_pending_uploads(PROJECT_ROOT / "work") if s not in dismissed]
+        flagged = set(list_flagged_songs(PROJECT_ROOT / "work"))
+        pending = [
+            s for s in list_pending_uploads(PROJECT_ROOT / "work") if s not in dismissed and s not in flagged
+        ]
         if not pending:
             return
         _retry_pending_uploads(PROJECT_ROOT / "work", self.settings, pending)
@@ -1797,6 +1877,10 @@ class LyricVideoGUI:
                 self._batch_index, total, title = payload
                 self.status_var.set(f"File {self._batch_index}/{total}: {title}")
                 self.progress_bar.set(min(1.0, (self._batch_index - 1) / total))
+            elif kind == "batch_item_done":
+                # So Pending/Flagged/Upload lists reflect each song as it
+                # finishes, not only once the whole batch (e.g. 100 songs) ends.
+                self._refresh_retry_upload_options()
             elif kind == "batch_done":
                 self._on_batch_done(payload)
                 return

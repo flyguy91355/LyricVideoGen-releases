@@ -2,9 +2,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Song, Word, save_song
+from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Song, Word, load_song, save_song
 from lyricvideo.pipeline import (
     run_pipeline,
+    list_flagged_songs,
     list_redoable_songs,
     list_pending_uploads,
     list_rendered_songs,
@@ -31,7 +32,8 @@ def _patch_common(monkeypatch, tmp_path):
         )(),
     )
     monkeypatch.setattr(
-        "lyricvideo.pipeline.fetch_lyric_lines", lambda *a, **k: ["hello there", "my friend"]
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: (["hello there", "my friend"], "sidecar", ""),
     )
     monkeypatch.setattr("lyricvideo.pipeline.separate_vocals", lambda *a, **k: tmp_path / "vocals.wav")
     monkeypatch.setattr("lyricvideo.pipeline.torchaudio.load", lambda path: (torch.zeros(1, 16000 * 10), 16000))
@@ -93,6 +95,41 @@ def test_run_pipeline_only_needs_the_audio_file_no_pdf_or_chords_text_argument(t
     assert out_path.parent == work_dir
 
 
+def test_run_pipeline_carries_lyrics_source_and_concern_onto_the_song(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: (["hello there"], "Genius", "This looks like a different edition of the song."),
+    )
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    song = load_song(work_dir / "lyrics_timed.json")
+    assert song.lyrics_source == "Genius"
+    assert song.lyrics_accuracy_concern == "This looks like a different edition of the song."
+
+
+def test_run_pipeline_align_stage_tolerates_a_legacy_plain_list_lyric_lines_json(tmp_path, monkeypatch):
+    """lyric_lines.json written before fetch_lyric_lines_verified() existed
+    is a bare list of strings, not {"lines":..., "source":..., "concern":...}
+    -- a --stage align resume against one of these must not crash, and the
+    resulting Song just has no source/concern to report."""
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "song_info.json").write_text(
+        json.dumps({"title": "t", "artist": "a", "duration": 10.0, "alt_titles": []}), encoding="utf-8",
+    )
+    (work_dir / "lyric_lines.json").write_text(json.dumps(["hello there"]), encoding="utf-8")
+
+    run_pipeline(Path("audio.mp3"), work_dir, start_stage="align")
+
+    song = load_song(work_dir / "lyrics_timed.json")
+    assert song.lyrics_source == ""
+    assert song.lyrics_accuracy_concern == ""
+
+
 def test_run_pipeline_copies_the_source_audio_into_work_dir(tmp_path, monkeypatch):
     """So Redo has a reliable local copy to fall back on even after a batch
     run's original staging-folder file is gone -- see load_redo_inputs()."""
@@ -107,10 +144,10 @@ def test_run_pipeline_copies_the_source_audio_into_work_dir(tmp_path, monkeypatc
 
 
 def test_run_pipeline_fetches_lyrics_against_the_work_dir_copy_not_the_original(tmp_path, monkeypatch):
-    """Real bug, 2026-09-15: fetch_lyric_lines()'s sidecar .lrc/.txt lookup
-    checks next to whatever audio_path it's called with. run_pipeline()
+    """Real bug, 2026-09-15: fetch_lyric_lines_verified()'s sidecar .lrc/.txt
+    lookup checks next to whatever audio_path it's called with. run_pipeline()
     copies the source audio into work_dir (the test above) but kept calling
-    every later stage, including fetch_lyric_lines, with the ORIGINAL
+    every later stage, including the lyrics fetch, with the ORIGINAL
     external audio_path -- so a sidecar file the owner dropped next to the
     work_dir copy (following the error message's own filename hint) was
     never actually found; only a sidecar next to the original, possibly
@@ -119,8 +156,8 @@ def test_run_pipeline_fetches_lyrics_against_the_work_dir_copy_not_the_original(
     _patch_common(monkeypatch, tmp_path)
     seen_audio_paths = []
     monkeypatch.setattr(
-        "lyricvideo.pipeline.fetch_lyric_lines",
-        lambda audio_path, *a, **k: seen_audio_paths.append(audio_path) or ["hello there"],
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda audio_path, *a, **k: seen_audio_paths.append(audio_path) or (["hello there"], "sidecar", ""),
     )
     work_dir = tmp_path / "work"
     original_dir = tmp_path / "external" / "staging"
@@ -263,7 +300,9 @@ def test_run_pipeline_images_stage_generates_every_instrumental_caption_the_time
     _patch_common(monkeypatch, tmp_path)
     # Sung 0-2s; chords C 0-3 (midpoint 1.5 is inside the line, but 2-3 is a
     # real instrumental stretch) and G 3-10.
-    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines", lambda *a, **k: ["hello there"])
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified", lambda *a, **k: (["hello there"], "sidecar", ""),
+    )
     monkeypatch.setattr("lyricvideo.pipeline.align_words", lambda vocals_path, words: [(0.0, 1.0), (1.0, 2.0)])
     monkeypatch.setattr(
         "lyricvideo.pipeline.detect_chords",
@@ -511,6 +550,61 @@ def test_list_pending_uploads_returns_empty_list_when_work_dir_missing(tmp_path)
     assert list_pending_uploads(tmp_path / "does-not-exist") == []
 
 
+def test_list_flagged_songs_finds_a_rendered_song_with_a_concern(tmp_path):
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(
+        Song(title="Angie", audio_path="a.mp3", lyrics_accuracy_concern="looks like the wrong song"),
+        song_dir / "lyrics_timed.json",
+    )
+    (song_dir / "angie.mp4").write_bytes(b"video")
+
+    assert list_flagged_songs(work_root) == ["angie-rolling-stones"]
+
+
+def test_list_flagged_songs_excludes_a_song_with_no_concern(tmp_path):
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "angie.mp4").write_bytes(b"video")
+
+    assert list_flagged_songs(work_root) == []
+
+
+def test_list_flagged_songs_excludes_a_song_already_uploaded(tmp_path):
+    """A flagged song the owner already uploaded anyway (Upload Anyway)
+    drops off this list on its own -- no separate "dismiss" needed."""
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(
+        Song(title="Angie", audio_path="a.mp3", lyrics_accuracy_concern="looks wrong"),
+        song_dir / "lyrics_timed.json",
+    )
+    (song_dir / "angie.mp4").write_bytes(b"video")
+    (song_dir / "youtube_state.json").write_text("{}", encoding="utf-8")
+
+    assert list_flagged_songs(work_root) == []
+
+
+def test_list_flagged_songs_excludes_a_song_with_no_rendered_video_yet(tmp_path):
+    work_root = tmp_path / "work"
+    song_dir = work_root / "angie-rolling-stones"
+    song_dir.mkdir(parents=True)
+    save_song(
+        Song(title="Angie", audio_path="a.mp3", lyrics_accuracy_concern="looks wrong"),
+        song_dir / "lyrics_timed.json",
+    )
+
+    assert list_flagged_songs(work_root) == []
+
+
+def test_list_flagged_songs_returns_empty_list_when_work_dir_missing(tmp_path):
+    assert list_flagged_songs(tmp_path / "does-not-exist") == []
+
+
 def test_backup_song_outputs_copies_video_and_timed_json(tmp_path):
     work_dir = tmp_path / "angie-rolling-stones"
     work_dir.mkdir()
@@ -669,13 +763,17 @@ def test_run_pipeline_passes_ordered_unique_chords_to_assemble_video(tmp_path, m
 
 
 def test_run_pipeline_explains_a_song_with_no_lyric_text_instead_of_dying_in_the_aligner(tmp_path, monkeypatch):
-    """fetch_lyrics returns [] when nothing was found (or the track is
-    flagged instrumental); the align stage then aborted inside the aligner
-    with "no words to align", which says nothing about what to do next."""
+    """fetch_lyric_lines_verified returns [] when nothing was found anywhere
+    (or the track is flagged instrumental); the align stage then aborted
+    inside the aligner with "no words to align", which says nothing about
+    what to do next."""
     import pytest
 
     _patch_common(monkeypatch, tmp_path)
-    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: ([], "", "No lyrics found from any source."),
+    )
 
     with pytest.raises(RuntimeError, match=r"No lyrics were found for 'Test Song'.*audio\.lrc"):
         run_pipeline(Path("audio.mp3"), tmp_path / "work")

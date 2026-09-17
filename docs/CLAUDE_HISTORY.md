@@ -2448,3 +2448,89 @@ shared `is_quota_exceeded_error()` too, dropping its own separate inline
 place it could drift out of sync.
 
 Full suite: 663 passed.
+
+## 2026-09-18 — Lyric accuracy check + a "Flagged for Lyrics Review" queue, ahead of a 100-song batch run
+
+Owner asked directly, with a 100-song Batch run about to start: "Can you
+analyze each song for accuracy before uploading to YouTube... reject any
+questionable and set aside for my review... if what you have is not
+accurate, search for the accurate lyrics... Better yet guarantee lyric
+accuracy, if not search for accurate lyrics, possible?" Answered honestly
+that an absolute guarantee isn't realistic (no ground truth to check
+against, only a plausibility read), but a real automated check plus a
+bounded multi-source retry is. Owner confirmed: "Build both now... And
+maybe, auto redo the song until the lyrics are correc but yes build
+both... Max number of times, then send to me for review." Design doc:
+`docs/superpowers/specs/2026-09-18-lyric-accuracy-check-design.md`.
+
+New `lyric_accuracy.py`: `check_lyric_accuracy(anthropic_client, title,
+artist, lyric_lines, model)` sends the fetched lines to Claude and parses
+a labeled `LOOKS_ACCURATE:`/`CONCERN:` reply -- same
+extract-text/parse-labeled-fields helper pattern used throughout this
+codebase's other Claude-call modules, duplicated locally rather than
+shared (matches this codebase's existing per-module-independence
+convention).
+
+`fetch_lyrics.py` gained `fetch_lyric_lines_verified()`: tries, in order,
+every one of 6 real distinct sources -- the sidecar file, lrclib, then
+each of the four `syncedlyrics` providers individually (`Musixmatch`,
+`NetEase`, `Megalobiz`, `Genius`, passed one at a time via its own
+`providers=[name]` kwarg rather than letting `syncedlyrics` pick) --
+stopping at the first source whose lyrics pass
+`check_lyric_accuracy()`. This IS the "max number of times" the owner
+asked for: bounded by the fixed size of the source list (6), not a
+separate configurable retry counter, matching the `_MAX_GENERATION_ATTEMPTS`
+precedent for image generation (a fixed constant, not an owner-tunable
+Settings field). If none of the 6 pass, the first candidate found is kept
+(better than nothing) and its concern text is recorded rather than
+raising or blocking the pipeline. The old single-shot `fetch_lyric_lines`
+is unchanged, still used wherever an accuracy check isn't wanted.
+
+`Song` gained `lyrics_source`/`lyrics_accuracy_concern` fields (blank =
+unchecked/passed); `pipeline.py`'s fetch_lyrics stage now writes a small
+dict (`{"lines", "source", "concern"}`) instead of a bare list to
+`lyrics_timed.json`'s precursor file, and the align stage reads either
+shape so a `lyrics_timed.json` written before this change still loads.
+New `pipeline.list_flagged_songs()` mirrors `list_pending_uploads()`
+(same directory walk, same "not yet uploaded" exclusion) but selects on
+a non-empty `lyrics_accuracy_concern` instead.
+
+`gui.py`: `_maybe_upload_to_youtube()` gained an up-front check --
+`load_song(...).lyrics_accuracy_concern` non-empty skips the upload
+entirely (any exception reading the file is swallowed, since a
+missing/corrupt file must never block an otherwise-normal upload) --
+and `_retry_pending_uploads_if_due()` excludes flagged songs from its
+automatic retry the same way it already excludes dismissed ones. A new
+"Flagged for Lyrics Review" panel (same lazy on-first-expand
+`CTkScrollableFrame` pattern as every other song list in this app) shows
+each flagged song's own concern text with two buttons: Redo (sets the
+Redo dropdown to that song and calls the existing `_on_redo()` -- a
+fresh redo re-fetches lyrics through the same verified path, so a clean
+result this time clears the concern on its own, no separate "clear
+flag" mechanism needed) and Upload Anyway (`_start_retry_upload([slug])`
+-- a deliberate owner override, reusing the existing manual-upload path
+verbatim).
+
+Real gap found while wiring this in: `_run_batch_worker` never told the
+GUI thread to refresh the Pending/Flagged/Upload lists after each song --
+`_on_batch_done` only ran once, at the very end of the whole batch. With
+a 100-song batch about to run and flagging meant to surface "after every
+song finished" (the owner's own words), a song flagged mid-run wouldn't
+have shown up in the panel until the entire batch finished. Fixed by
+having `_run_batch_worker` put a `("batch_item_done", None)` message on
+the queue right after each song's own upload attempt; `_poll_queue`'s
+dispatch calls `_refresh_retry_upload_options()` on it, same as it
+already does after a single Generate/Redo. `_on_batch_done` also calls it
+once more as a safety net.
+
+A real test-writing lesson while building this: the first version of
+`test_maybe_upload_to_youtube_skips_a_song_flagged_for_lyrics_review`
+used a `_must_not_run`-style mock that raises `AssertionError` if called
+-- but `_maybe_upload_to_youtube`'s own outer `except Exception` silently
+swallowed that assertion, so the test passed even before the real guard
+was implemented (for the wrong reason, twice). Fixed by switching to a
+plain `calls = []` list and asserting `calls == []` after the call,
+which is robust regardless of what the code under test catches
+internally.
+
+Full suite: 687 passed.

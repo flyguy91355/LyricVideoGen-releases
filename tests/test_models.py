@@ -34,6 +34,8 @@ def test_save_and_load_song_round_trip(tmp_path):
         instrumental_stem_path="no_vocals.wav",
         chord_track=ChordTrack(events=[ChordEvent(start=0.0, end=2.5, label="Em7")], key="E minor", bpm=90.0),
         image_cache={"abc123": "images/abc123.png"},
+        lyrics_source="lrclib",
+        lyrics_accuracy_concern="",
     )
     path = tmp_path / "song.json"
 
@@ -41,6 +43,19 @@ def test_save_and_load_song_round_trip(tmp_path):
     restored = load_song(path)
 
     assert restored == song
+
+
+def test_load_song_defaults_lyrics_accuracy_fields_for_a_legacy_file(tmp_path):
+    """A lyrics_timed.json saved before the lyric-accuracy-check feature
+    existed has neither key -- Song(**data)-style reconstruction must not
+    raise, or every pre-existing song would break on the next Redo."""
+    path = tmp_path / "song.json"
+    path.write_text(json.dumps({"title": "Old Song", "audio_path": "audio.mp3", "lines": []}), encoding="utf-8")
+
+    song = load_song(path)
+
+    assert song.lyrics_source == ""
+    assert song.lyrics_accuracy_concern == ""
 
 
 def test_save_and_load_song_with_no_chord_track_defaults_empty(tmp_path):

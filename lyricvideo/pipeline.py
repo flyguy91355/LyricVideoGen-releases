@@ -17,7 +17,7 @@ from .align import align_words
 from .assemble import assemble_video
 from .combine import combine_alignment
 from .detect_chords import detect_chords
-from .fetch_lyrics import fetch_lyric_lines
+from .fetch_lyrics import fetch_lyric_lines_verified
 from .identify import extract_metadata
 from .imagery import get_or_generate_image, substitute_fallback_images, summarize_song_gist
 from .layout import instrumental_image_captions
@@ -135,6 +135,34 @@ def list_pending_uploads(work_root: Path) -> list[str]:
         and not (entry / STATE_FILENAME).exists()
         and song_video_path(entry) is not None
     )
+
+
+def list_flagged_songs(work_root: Path) -> list[str]:
+    """Names of work_root's immediate subdirectories whose lyrics were
+    never confirmed accurate by check_lyric_accuracy() across every source
+    tried (Song.lyrics_accuracy_concern non-empty) and that haven't been
+    uploaded yet -- backs the GUI's "Flagged for Lyrics Review" list. Same
+    not-yet-uploaded convention as list_pending_uploads() above, so a song
+    naturally drops off this list once the owner uploads it anyway (via
+    the review panel's own Upload Anyway) without needing a separate
+    "dismiss" action -- and once a later Redo's fresh fetch clears the
+    concern, it drops off too."""
+    if not work_root.exists():
+        return []
+    flagged = []
+    for entry in sorted(work_root.iterdir(), key=lambda e: e.name):
+        if not entry.is_dir() or (entry / STATE_FILENAME).exists() or song_video_path(entry) is None:
+            continue
+        timed_path = entry / "lyrics_timed.json"
+        if not timed_path.exists():
+            continue
+        try:
+            song = load_song(timed_path)
+        except Exception:
+            continue
+        if song.lyrics_accuracy_concern:
+            flagged.append(entry.name)
+    return flagged
 
 
 def load_redo_inputs(song_dir: Path) -> tuple[Path, str]:
@@ -313,15 +341,27 @@ def run_pipeline(
     if start_idx <= STAGES.index("fetch_lyrics"):
         report("fetch_lyrics")
         info_data = json.loads(info_path.read_text(encoding="utf-8"))
-        lines_text = fetch_lyric_lines(
+        lyrics_anthropic_client = anthropic.Anthropic()
+        lines_text, lyrics_source, lyrics_concern = fetch_lyric_lines_verified(
             audio_path, info_data["title"], info_data["artist"], info_data["duration"],
-            info_data.get("alt_titles"),
+            info_data.get("alt_titles"), lyrics_anthropic_client,
         )
-        lyrics_path.write_text(json.dumps(lines_text), encoding="utf-8")
+        lyrics_path.write_text(
+            json.dumps({"lines": lines_text, "source": lyrics_source, "concern": lyrics_concern}),
+            encoding="utf-8",
+        )
 
     if start_idx <= STAGES.index("align"):
         report("align")
-        lines_text = json.loads(lyrics_path.read_text(encoding="utf-8"))
+        lyrics_data = json.loads(lyrics_path.read_text(encoding="utf-8"))
+        if isinstance(lyrics_data, list):
+            # Legacy format from before fetch_lyric_lines_verified() existed:
+            # lyric_lines.json was a bare list of line strings, no source/concern.
+            lines_text, lyrics_source, lyrics_concern = lyrics_data, "", ""
+        else:
+            lines_text = lyrics_data.get("lines", [])
+            lyrics_source = lyrics_data.get("source", "")
+            lyrics_concern = lyrics_data.get("concern", "")
         parsed_lines = [LyricLine(words=[Word(word=w) for w in text.split()]) for text in lines_text]
         if not any(line.words for line in parsed_lines):
             # Checked here (not in fetch_lyrics) so a --stage align resume
@@ -346,6 +386,8 @@ def run_pipeline(
             vocal_stem_path=str(vocals_path),
             instrumental_stem_path=str(instrumental_stem_path),
             lines=timed_lines,
+            lyrics_source=lyrics_source,
+            lyrics_accuracy_concern=lyrics_concern,
         )
         save_song(song, timed_path)
     else:
