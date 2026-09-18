@@ -245,7 +245,7 @@ def test_maybe_upload_to_youtube_skips_when_todays_upload_cap_is_reached(tmp_pat
         "lyricvideo.gui.schedule_upload",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload once today's cap is reached")),
     )
-    settings = Settings(youtube_auto_upload=True, youtube_uploads_per_day=3)
+    settings = Settings(youtube_auto_upload=True, youtube_max_uploads_per_day=3)
 
     _maybe_upload_to_youtube(tmp_path, settings)  # must not raise
 
@@ -260,7 +260,7 @@ def test_maybe_upload_to_youtube_proceeds_when_todays_upload_cap_still_has_room(
         "lyricvideo.gui.schedule_upload",
         lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
     )
-    settings = Settings(youtube_auto_upload=True, youtube_uploads_per_day=3)
+    settings = Settings(youtube_auto_upload=True, youtube_max_uploads_per_day=3)
 
     _maybe_upload_to_youtube(tmp_path, settings)
 
@@ -482,7 +482,7 @@ def test_retry_pending_uploads_defers_songs_once_todays_upload_cap_is_reached(tm
         "lyricvideo.gui.schedule_upload",
         lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
     )
-    settings = Settings(youtube_uploads_per_day=1)
+    settings = Settings(youtube_max_uploads_per_day=1)
 
     results = _retry_pending_uploads(tmp_path, settings)
 
@@ -501,7 +501,7 @@ def test_retry_pending_uploads_defers_everything_when_todays_upload_cap_is_alrea
         "lyricvideo.gui.schedule_upload",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload once today's cap is reached")),
     )
-    settings = Settings(youtube_uploads_per_day=3)
+    settings = Settings(youtube_max_uploads_per_day=3)
 
     results = _retry_pending_uploads(tmp_path, settings)
 

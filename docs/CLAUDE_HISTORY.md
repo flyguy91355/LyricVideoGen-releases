@@ -2687,3 +2687,79 @@ pre-existing manual-action test keeps behaving exactly as before this
 gate was added.
 
 Full suite: 720 passed.
+
+## 2026-09-18 — Playlist propagation race: a freshly-created playlist 404'd on the very next call
+
+Owner saw a live error while testing: `HttpError 404 playlistNotFound`
+on a `playlistItems` call, and correctly guessed the cause unprompted:
+"i bet its a playlist that hasnt been created yet." Confirmed against
+`youtube_playlists.py`: `get_or_create_playlist()` calls
+`create_playlist()` (`playlists().insert()`), and `organize_video()`
+immediately calls `add_video_to_playlist()` (`playlistItems().insert()`)
+on that brand-new id in the very next line -- a known Google API
+eventual-consistency lag, where a resource just created can still 404
+for a moment before it's fully queryable elsewhere. Most likely to hit
+on the first video for a brand-new artist/genre playlist, or a
+channel's first-ever organized upload -- exactly when a playlist is
+guaranteed to have JUST been created rather than reused from cache.
+
+Fix: new `_add_video_to_playlist_with_retry()` wraps the three
+`add_video_to_playlist()` call sites in `organize_video()` (All,
+per-artist, Genre), retrying up to 3 times with a 2-second delay
+specifically for a 404, using the same `HttpError`/`status_code`
+detection style as `is_quota_exceeded_error`. Anything else --
+including a persistent 404 that never resolves, or an unrelated error
+like a quota-exceeded 429 -- still raises immediately, since waiting
+would never fix a genuine failure and a 429 needs to reach gui.py's
+quota-halt logic (2026-09-18, above) without delay.
+
+Tests: three new cases in `test_youtube_playlists.py` (transient 404
+resolves by the 3rd attempt; a persistent 404 still raises after
+exhausting retries; a 429 propagates immediately with zero sleep
+calls), monkeypatching `time.sleep` so none of them actually wait.
+
+Full suite: 723 passed.
+
+## 2026-09-18 — Daily upload cap split into its own field, undoing a reuse of youtube_uploads_per_day
+
+Earlier the same day, the new daily upload cap (previous entry above)
+was wired onto the EXISTING `Settings.youtube_uploads_per_day` field,
+reasoning that it already meant "uploads per day" and already had a
+Settings-panel slider. That slider's `on_value_change` callback
+(`_regenerate_upload_times`, from 2026-09-17) auto-overwrites
+`youtube_upload_times` with N evenly-spaced defaults every time it
+moves -- fine when the slider only meant "how many time slots you
+want," but now that the same slider ALSO meant "the raw upload
+ceiling," moving it to protect quota (e.g. up to 7) silently destroyed
+an intentionally different publish-schedule slot count (e.g. 5),
+exactly contradicting the owner's own explicit "keep it independent"
+instruction from the original design conversation.
+
+Owner caught this live while testing: "the schedule is gone for how
+the uploads are scheduled.. say i want 7 uploads a day, but only want 5
+scheduled for public a day. i dont have that" -- then, after a first
+attempted fix (decoupling the slider from `_regenerate_upload_times`
+entirely) changed the existing scheduling UI's behavior: "worked good
+before.. all i want added was the upload cap per day, everything else
+the same.. i dont know why you fucked with that part."
+
+Correct fix: leave `youtube_uploads_per_day` and its slider (still
+wired to `_regenerate_upload_times`) completely untouched, exactly as
+they were before this whole feature started. Add a brand new, fully
+independent `Settings.youtube_max_uploads_per_day` (default 5, own
+slider "Daily upload cap", no `on_value_change`) as the real ceiling
+instead. `gui.py`'s `_uploads_remaining_today()` now reads this new
+field; `_maybe_upload_to_youtube`/`_retry_pending_uploads` are otherwise
+unchanged from the earlier entry's design. Renamed throughout
+`youtube_upload_count_state.py`'s docstring, `youtube_schedule.py`'s
+module docstring, and every test that constructed
+`Settings(youtube_uploads_per_day=N)` for a cap scenario (now
+`youtube_max_uploads_per_day=N`).
+
+Lesson: reusing an existing field because it "already has the right
+name" isn't free when that field already drives other behavior --
+should have asked whether a new field was warranted before wiring the
+new cap onto it, rather than discovering the conflict live in the
+owner's own testing session.
+
+Full suite: 723 passed.

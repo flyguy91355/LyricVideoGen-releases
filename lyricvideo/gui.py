@@ -118,15 +118,16 @@ def _mark_engagement_comment_posted(video_id: str) -> None:
 
 def _uploads_remaining_today(settings: Settings) -> int:
     """How many more raw upload_video() calls this app may still make today
-    under Settings.youtube_uploads_per_day -- see
-    youtube_upload_count_state.py for why this is a real enforced ceiling
-    (2026-09-18) and not just the schedule-time-slot-count generator it
-    used to only be. Independent of publish-time scheduling on purpose
-    (owner decision, 2026-09-18): this caps raw upload *calls* to protect
-    quota, while youtube_upload_times separately paces when uploaded videos
-    go public -- a big backlog of already-uploaded, still-scheduled videos
-    is fine and not something this caps."""
-    return max(0, settings.youtube_uploads_per_day - load_uploads_today())
+    under Settings.youtube_max_uploads_per_day -- see
+    youtube_upload_count_state.py for the real enforced ceiling this
+    tracks (2026-09-18), a SEPARATE field from youtube_uploads_per_day
+    (which only sizes the Settings panel's publish-time-slot generator,
+    unchanged). Independent of publish-time scheduling on purpose (owner
+    decision, 2026-09-18): this caps raw upload *calls* to protect quota,
+    while youtube_upload_times separately paces when uploaded videos go
+    public -- a big backlog of already-uploaded, still-scheduled videos is
+    fine and not something this caps."""
+    return max(0, settings.youtube_max_uploads_per_day - load_uploads_today())
 
 
 def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
@@ -1440,7 +1441,7 @@ class LyricVideoGUI:
         if results.get("deferred"):
             lines.append(
                 f"{len(results['deferred'])} left pending -- today's upload limit "
-                f"({self.settings.youtube_uploads_per_day}/day) is reached; they'll upload "
+                f"({self.settings.youtube_max_uploads_per_day}/day) is reached; they'll upload "
                 "automatically over the next few days."
             )
         if results["failed"]:

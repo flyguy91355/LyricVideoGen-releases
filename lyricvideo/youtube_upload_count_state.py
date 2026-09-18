@@ -1,17 +1,18 @@
 """Pure persistence for how many times THIS APP has successfully called
-upload_video() on the current local calendar day -- lets
-Settings.youtube_uploads_per_day act as a real ceiling on raw upload
+upload_video() on the current local calendar day -- backs
+Settings.youtube_max_uploads_per_day, a real ceiling on raw upload
 volume (each upload costs ~1600 of YouTube's default 10,000-unit daily
-quota, so even 6-7 in a row can exhaust it) rather than only sizing the
-publish-time-slot generator in youtube_schedule.py. A local counter is
-safe here, unlike the 2026-09-13 publish-slot counter this must not be
-confused with: that one broke because it tried to PREDICT a schedule
-that could also be mutated out-of-band (a manual publish, a Studio
-edit); this one only records a fact this app alone ever produces --
-its own successful upload calls -- so nothing outside the app can make
-it drift. Rolls over automatically at the local calendar-day boundary,
-no explicit reset needed. See gui.py's _maybe_upload_to_youtube /
-_retry_pending_uploads."""
+quota, so even 6-7 in a row can exhaust it), deliberately a SEPARATE
+field from youtube_uploads_per_day (which only sizes the Settings
+panel's publish-time-slot generator in youtube_schedule.py, unrelated).
+A local counter is safe here, unlike the 2026-09-13 publish-slot counter
+this must not be confused with: that one broke because it tried to
+PREDICT a schedule that could also be mutated out-of-band (a manual
+publish, a Studio edit); this one only records a fact this app alone
+ever produces -- its own successful upload calls -- so nothing outside
+the app can make it drift. Rolls over automatically at the local
+calendar-day boundary, no explicit reset needed. See gui.py's
+_maybe_upload_to_youtube / _retry_pending_uploads."""
 
 from __future__ import annotations
 

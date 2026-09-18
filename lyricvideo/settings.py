@@ -100,15 +100,17 @@ class Settings:
     youtube_made_for_kids: bool = False      # COPPA declaration, required on every upload
     youtube_uploads_per_day: int = 1         # drives the Settings panel's auto-generated default
                                               # times (see youtube_schedule.evenly_spaced_upload_times)
-                                              # AND (2026-09-18) is a real enforced ceiling on raw
-                                              # upload_video() calls per calendar day -- see gui.py's
-                                              # _uploads_remaining_today / youtube_upload_count_state.py.
-                                              # Deliberately independent of youtube_upload_times/publish
-                                              # scheduling below -- a backlog of already-uploaded,
-                                              # still-scheduled videos is fine and uncapped by design.
     youtube_upload_times: str = "15:00"      # comma-separated 24h HH:MM local times, one per daily
                                               # upload slot -- its own length IS the uploads-per-day
                                               # count actually used at schedule time
+    youtube_max_uploads_per_day: int = 5     # (2026-09-18) a real enforced ceiling on raw
+                                              # upload_video() calls per calendar day, to protect against
+                                              # exhausting YouTube's daily quota -- see gui.py's
+                                              # _uploads_remaining_today / youtube_upload_count_state.py.
+                                              # Deliberately a SEPARATE field from youtube_uploads_per_day/
+                                              # youtube_upload_times above, which control publish
+                                              # scheduling only and are untouched by this cap -- a backlog
+                                              # of already-uploaded, still-scheduled videos is fine.
     youtube_quota_retry_hours: int = 24      # once an upload hits YouTube's daily quota, how long to
                                               # wait before automatically retrying pending uploads
 

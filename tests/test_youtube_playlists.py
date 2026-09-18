@@ -215,3 +215,74 @@ def test_organize_video_returns_early_when_never_uploaded(tmp_path, monkeypatch)
 
     from lyricvideo.youtube_playlists import organize_video
     organize_video(client, _FakeAnthropicClient(), work_dir)  # must not raise
+
+
+def _make_http_error(status: int):
+    from googleapiclient.errors import HttpError
+    from types import SimpleNamespace
+
+    resp = SimpleNamespace(status=status, reason="")
+    return HttpError(resp, b'{"error": {"message": "boom"}}')
+
+
+def test_add_video_to_playlist_with_retry_succeeds_after_a_transient_playlist_not_found(monkeypatch):
+    """Real incident, 2026-09-18: a playlist get_or_create_playlist() just
+    created can briefly 404 as playlistNotFound on the very next
+    playlistItems() call -- a known Google API propagation lag, not a
+    genuine problem."""
+    from lyricvideo.youtube_playlists import _add_video_to_playlist_with_retry
+
+    calls = []
+
+    def flaky(youtube_client, playlist_id, video_id):
+        calls.append(True)
+        if len(calls) < 3:
+            raise _make_http_error(404)
+
+    monkeypatch.setattr("lyricvideo.youtube_playlists.add_video_to_playlist", flaky)
+    slept = []
+    monkeypatch.setattr("lyricvideo.youtube_playlists.time.sleep", lambda s: slept.append(s))
+
+    _add_video_to_playlist_with_retry("client", "PL1", "vid123")  # must not raise
+
+    assert len(calls) == 3
+    assert len(slept) == 2  # slept between attempts, not after the final success
+
+
+def test_add_video_to_playlist_with_retry_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.youtube_playlists.add_video_to_playlist",
+        lambda *a, **k: (_ for _ in ()).throw(_make_http_error(404)),
+    )
+    monkeypatch.setattr("lyricvideo.youtube_playlists.time.sleep", lambda s: None)
+
+    from lyricvideo.youtube_playlists import _add_video_to_playlist_with_retry
+    try:
+        _add_video_to_playlist_with_retry("client", "PL1", "vid123")
+        assert False, "expected an HttpError"
+    except Exception as e:
+        assert e.status_code == 404
+
+
+def test_add_video_to_playlist_with_retry_reraises_an_unrelated_error_immediately(monkeypatch):
+    """A quota-exceeded 429 (or anything else that isn't a 404) would never
+    resolve by waiting -- it must propagate straight through so gui.py's
+    quota-halt logic still sees it right away, not after a pointless delay."""
+    calls = []
+    monkeypatch.setattr(
+        "lyricvideo.youtube_playlists.add_video_to_playlist",
+        lambda *a, **k: calls.append(True) or (_ for _ in ()).throw(_make_http_error(429)),
+    )
+    monkeypatch.setattr(
+        "lyricvideo.youtube_playlists.time.sleep",
+        lambda s: (_ for _ in ()).throw(AssertionError("should not sleep for a non-404 error")),
+    )
+
+    from lyricvideo.youtube_playlists import _add_video_to_playlist_with_retry
+    try:
+        _add_video_to_playlist_with_retry("client", "PL1", "vid123")
+        assert False, "expected an HttpError"
+    except Exception as e:
+        assert e.status_code == 429
+
+    assert len(calls) == 1  # only tried once -- no retry for a non-404

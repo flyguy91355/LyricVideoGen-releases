@@ -453,13 +453,14 @@ consent (using a `client_secret_*.json` downloaded from Google Cloud
 Console) and saves a refresh token to
 `~/.playalongvideoproduction/youtube_token.json`; `load_credentials()`
 returns `None` for "not connected" (never raises) and auto-refreshes an
-expired token; `get_channel_title()` confirms which channel is connected. `Settings`
+expired token; `get_channel_title()` confirms the connected channel. `Settings`
 gained seven YouTube fields (`youtube_auto_upload`,
 `youtube_client_secrets_path`, `youtube_privacy` default `"public"`,
 `youtube_category_id` default `"27"` ("Education" -- HISTORY 2026-09-10),
 `youtube_made_for_kids` default `False`, `youtube_upload_times` default
-`"15:00"`, `youtube_uploads_per_day` default `1` (a Settings-panel
-default-time-generator only, HISTORY 2026-09-17). `SettingsPanel` gained a
+`"15:00"`, `youtube_uploads_per_day` default `1`,
+`youtube_max_uploads_per_day` default `5` (upload cap).
+`SettingsPanel` gained a
 "YouTube" section (secrets picker, auto-upload checkbox, privacy/category
 dropdowns, made-for-kids checkbox, an upload-times text box, an
 "Uploads per day" slider) --
@@ -556,7 +557,8 @@ calls and `post_top_level_comment` (`commentThreads().insert`, unlike
 genre list. `youtube_playlists.py`'s `organize_video()` adds a video to an
 All playlist, one per listed artist (exact string, no normalization), and
 a Genre playlist via `get_or_create_playlist()` (self-heals a deleted
-playlist); idempotent. `gui.py` calls it after every `schedule_upload()`
+playlist, retries a fresh one's 404 lag); idempotent. `gui.py` calls it
+after every `schedule_upload()`
 -- failing soft. A "Pending Engagement Comments" panel (Redo/Upload's
 lazy-build pattern) has Approve (posts, marks
 `engagement_comment_posted`) and Dismiss.
@@ -564,7 +566,7 @@ lazy-build pattern) has Approve (posts, marks
 loads `.env` itself, and stops cleanly on a quota error rather than
 failing every remaining song (HISTORY 2026-09-17).
 
-This whole feature is complete and tested (HISTORY 2026-09-18).
+This feature is complete and tested (HISTORY 2026-09-18).
 What's NOT yet verified: the
 interactive OAuth `connect()` flow and live comment fetch/reply, both of which
 need the owner's own real Google Cloud `client_secret_*.json` and a real

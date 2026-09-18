@@ -9,6 +9,7 @@ docs/superpowers/specs/2026-09-17-youtube-channel-organization-design.md."""
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from .models import load_song
@@ -17,6 +18,9 @@ from .youtube_comment_state import PendingComment, add_pending_comment, load_pen
 from .youtube_metadata import classify_genre, draft_engagement_comment
 from .youtube_playlist_state import add_genre_if_new, load_genres, load_playlist_ids, save_playlist_id
 from .youtube_state import load_youtube_state
+
+_PLAYLIST_PROPAGATION_RETRIES = 3
+_PLAYLIST_PROPAGATION_DELAY_SECONDS = 2.0
 
 ALL_PLAYLIST_KEY = "all"
 ALL_PLAYLIST_TITLE = "Play Along Videos - All"
@@ -34,6 +38,28 @@ def get_or_create_playlist(youtube_client, key: str, title: str, description: st
     playlist_id = create_playlist(youtube_client, title, description)
     save_playlist_id(key, playlist_id)
     return playlist_id
+
+
+def _add_video_to_playlist_with_retry(youtube_client, playlist_id: str, video_id: str) -> None:
+    """A playlist get_or_create_playlist() just created via playlists().insert()
+    can still 404 as playlistNotFound on the very next playlistItems() call --
+    real incident, 2026-09-18: a known Google API propagation lag right after
+    creating a resource, hit in practice on the first video for a brand new
+    artist/genre playlist (or a channel's very first-ever organized upload).
+    Retries a few times with a short delay for exactly this error; anything
+    else -- including a genuinely deleted/nonexistent playlist that never
+    starts responding, or an unrelated failure like a quota-exceeded 429 --
+    still raises immediately, since it would never resolve by waiting."""
+    from googleapiclient.errors import HttpError
+
+    for attempt in range(_PLAYLIST_PROPAGATION_RETRIES):
+        try:
+            add_video_to_playlist(youtube_client, playlist_id, video_id)
+            return
+        except HttpError as e:
+            if e.status_code != 404 or attempt == _PLAYLIST_PROPAGATION_RETRIES - 1:
+                raise
+            time.sleep(_PLAYLIST_PROPAGATION_DELAY_SECONDS)
 
 
 def _split_artists(artist_field: str) -> list[str]:
@@ -68,21 +94,21 @@ def organize_video(youtube_client, anthropic_client, work_dir: Path) -> None:
     all_playlist_id = get_or_create_playlist(
         youtube_client, ALL_PLAYLIST_KEY, ALL_PLAYLIST_TITLE, ALL_PLAYLIST_DESCRIPTION,
     )
-    add_video_to_playlist(youtube_client, all_playlist_id, state.video_id)
+    _add_video_to_playlist_with_retry(youtube_client, all_playlist_id, state.video_id)
 
     for artist in _split_artists(artist_field):
         artist_playlist_id = get_or_create_playlist(
             youtube_client, f"artist:{artist}", f"{artist} - Play Along Videos",
             f"Every play-along lyrics & chords video on this channel by {artist}.",
         )
-        add_video_to_playlist(youtube_client, artist_playlist_id, state.video_id)
+        _add_video_to_playlist_with_retry(youtube_client, artist_playlist_id, state.video_id)
 
     if genre:
         genre_playlist_id = get_or_create_playlist(
             youtube_client, f"genre:{genre}", f"{genre} - Play Along Videos",
             f"Every {genre} play-along lyrics & chords video on this channel.",
         )
-        add_video_to_playlist(youtube_client, genre_playlist_id, state.video_id)
+        _add_video_to_playlist_with_retry(youtube_client, genre_playlist_id, state.video_id)
 
     if not state.engagement_comment_posted:
         already_pending = any(c.video_id == state.video_id for c in load_pending_comments())

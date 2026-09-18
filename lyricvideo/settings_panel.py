@@ -33,7 +33,7 @@ def _parse_clamped_float(text: str, lo: float, hi: float) -> float:
 _INT_FIELDS = {
     "fps", "crf", "countdown_beats", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
     "chord_legend_size", "chord_diagram_panel_alpha", "youtube_uploads_per_day",
-    "youtube_quota_retry_hours", "support_overlay_size",
+    "youtube_max_uploads_per_day", "youtube_quota_retry_hours", "support_overlay_size",
 }
 
 _YOUTUBE_CATEGORY_IDS = {"Howto & Style": "26", "Education": "27", "Music": "10"}
@@ -408,6 +408,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
             "youtube_uploads_per_day", "Uploads per day", 1, 10, 9, lambda v: f"{int(v)}/day",
             on_value_change=self._regenerate_upload_times,
         )
+        self._slider("youtube_max_uploads_per_day", "Daily upload cap", 1, 10, 9, lambda v: f"{int(v)}/day")
         self._slider("youtube_quota_retry_hours", "Retry wait after quota exceeded", 1, 48, 47,
                      lambda v: f"{int(v)}h")
 
