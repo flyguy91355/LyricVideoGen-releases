@@ -45,17 +45,18 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or
   regenerated (backing up each one first, like Redo) for the whole batch; a
-  file that errors is logged and skipped, never aborting the rest. The chosen
+  file that errors is logged and skipped, never aborting the rest.
+  `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
+  after every song, success or failure -- RSS climbs across a long Batch
+  run without it, even with no real leak (HISTORY 2026-09-18). The chosen
   folder's path is never `.strip()`'d (a real folder name can carry whitespace),
-  and `resolve_existing_folder()` in `lyricvideo/batch.py` recovers a folder
-  whose trailing space the native picker itself dropped (real 2026-09-10 bug;
-  HISTORY). The batch folder field also remembers the last
-  folder used (`load_last_batch_folder`/`save_last_batch_folder` in
-  `lyricvideo/batch.py`, a tiny separate JSON file at
-  `~/.playalongvideoproduction/batch_state.json` -- deliberately not a
-  `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
-  `Settings` from its own widgets and would silently reset any field with no
-  panel widget behind it) -- prefilled on launch and used as the Browse
+  and `resolve_existing_folder()` recovers a folder whose trailing space the
+  native picker itself dropped (HISTORY 2026-09-10). The batch folder field
+  also remembers the last folder used (`load_last_batch_folder`/
+  `save_last_batch_folder` in `lyricvideo/batch.py`, a separate JSON file --
+  not a `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
+  `Settings` and would silently reset any field with no widget behind it) --
+  prefilled on launch and used as the Browse
   dialog's `initialdir`. Built with
   CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
@@ -455,9 +456,7 @@ returns `None` for "not connected" (never raises) and auto-refreshes an
 expired token; `get_channel_title()` confirms which channel is connected. `Settings`
 gained seven YouTube fields (`youtube_auto_upload`,
 `youtube_client_secrets_path`, `youtube_privacy` default `"public"`,
-`youtube_category_id` default `"27"` ("Education," so the "How-to"
-subcategory -- Data-API-unreachable, Studio-only -- is at least pickable
-by hand; HISTORY 2026-09-10),
+`youtube_category_id` default `"27"` ("Education" -- HISTORY 2026-09-10),
 `youtube_made_for_kids` default `False`, `youtube_upload_times` default
 `"15:00"`, `youtube_uploads_per_day` default `1` (a Settings-panel
 default-time-generator only, HISTORY 2026-09-17). `SettingsPanel` gained a

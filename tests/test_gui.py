@@ -1,5 +1,6 @@
 import queue
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -506,6 +507,7 @@ def test_split_log_text_empty_chunk_is_a_noop():
 
 from types import SimpleNamespace  # noqa: E402
 
+from lyricvideo.batch import BatchItem  # noqa: E402
 from lyricvideo.gui import LyricVideoGUI  # noqa: E402
 from lyricvideo.youtube_comment_state import PendingComment, PendingReply  # noqa: E402
 
@@ -1107,6 +1109,34 @@ def test_poll_queue_refreshes_retry_upload_options_on_each_batch_item_done():
     LyricVideoGUI._poll_queue(stub)
 
     assert refreshed == [True]
+
+
+def test_run_batch_worker_releases_memory_after_every_item_success_or_failure(monkeypatch):
+    """Real incident, 2026-09-18: earlyoom killed the app on song #24 of an
+    overnight 100-song Batch run after memory crept up across dozens of
+    songs in this one long-lived process. release_memory() must run after
+    EVERY item -- including one that raises -- not just the ones that
+    succeed, since a failed song can still have allocated real memory
+    before failing."""
+    released = []
+    monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: released.append(True))
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+
+    def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
+        if title == "Bad Song":
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("lyricvideo.gui.run_pipeline", fake_run_pipeline)
+
+    items = [
+        BatchItem(audio_path=Path("a.mp3"), title="Good Song", work_dir=Path("work/good"), already_done=False),
+        BatchItem(audio_path=Path("b.mp3"), title="Bad Song", work_dir=Path("work/bad"), already_done=False),
+    ]
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
+
+    LyricVideoGUI._run_batch_worker(stub, items)
+
+    assert released == [True, True]
 
 
 def test_on_batch_done_refreshes_retry_upload_options(monkeypatch):

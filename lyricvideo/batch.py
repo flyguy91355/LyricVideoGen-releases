@@ -5,8 +5,11 @@ docs/superpowers/specs/2026-09-10-batch-folder-processing-design.md."""
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,3 +105,21 @@ def resolve_batch_items(files: list[Path], work_root: Path) -> list[BatchItem]:
             already_done=final_video.exists(),
         ))
     return items
+
+
+def release_memory() -> None:
+    """Called after every song in a long Batch run. CPython's own refcounting
+    frees most per-song objects immediately, but gc.collect() is still needed
+    for reference cycles (torch tensors/models commonly form them), and even
+    after that, glibc's malloc doesn't hand freed arenas back to the OS on its
+    own -- so a long-lived process's RSS climbs across dozens of songs even
+    though nothing is actually leaking live references. Real incident,
+    2026-09-18: earlyoom killed the app on song #24 of an overnight 100-song
+    run after available memory crept from 46% down to 2% over several hours,
+    then a normal-length song's own align-stage usage tipped it over."""
+    gc.collect()
+    if sys.platform.startswith("linux"):
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except OSError:
+            pass

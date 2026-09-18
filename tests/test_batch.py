@@ -6,6 +6,7 @@ from lyricvideo.batch import (
     BatchItem,
     find_audio_files,
     load_last_batch_folder,
+    release_memory,
     resolve_batch_items,
     resolve_existing_folder,
     save_last_batch_folder,
@@ -191,3 +192,52 @@ def test_resolve_batch_items_preserves_input_order(tmp_path, monkeypatch):
     items = resolve_batch_items([audio_a, audio_b], work_root)
 
     assert [i.audio_path for i in items] == [audio_a, audio_b]
+
+
+def test_release_memory_collects_garbage_and_trims_the_heap_on_linux(monkeypatch):
+    calls = []
+    monkeypatch.setattr("lyricvideo.batch.sys.platform", "linux")
+    monkeypatch.setattr("lyricvideo.batch.gc.collect", lambda: calls.append("gc.collect"))
+
+    class _FakeLibc:
+        def malloc_trim(self, pad):
+            calls.append(("malloc_trim", pad))
+
+    monkeypatch.setattr(
+        "lyricvideo.batch.ctypes.CDLL", lambda name: calls.append(("CDLL", name)) or _FakeLibc(),
+    )
+
+    release_memory()
+
+    assert calls == ["gc.collect", ("CDLL", "libc.so.6"), ("malloc_trim", 0)]
+
+
+def test_release_memory_skips_malloc_trim_on_non_linux(monkeypatch):
+    calls = []
+    monkeypatch.setattr("lyricvideo.batch.sys.platform", "win32")
+    monkeypatch.setattr("lyricvideo.batch.gc.collect", lambda: calls.append("gc.collect"))
+
+    def _must_not_run(name):
+        raise AssertionError("must not run on non-Linux")
+
+    monkeypatch.setattr("lyricvideo.batch.ctypes.CDLL", _must_not_run)
+
+    release_memory()
+
+    assert calls == ["gc.collect"]
+
+
+def test_release_memory_swallows_a_missing_libc(monkeypatch):
+    """A minimal/musl-based Linux (rare, but not this app's own dev/prod
+    environment) might not expose libc.so.6 the same way -- this is a
+    best-effort memory-hygiene step, never something that should crash a
+    batch run over."""
+    monkeypatch.setattr("lyricvideo.batch.sys.platform", "linux")
+    monkeypatch.setattr("lyricvideo.batch.gc.collect", lambda: None)
+
+    def _raise(name):
+        raise OSError("no such library")
+
+    monkeypatch.setattr("lyricvideo.batch.ctypes.CDLL", _raise)
+
+    release_memory()  # must not raise

@@ -2534,3 +2534,66 @@ which is robust regardless of what the code under test catches
 internally.
 
 Full suite: 687 passed.
+
+## 2026-09-18 — earlyoom killed the app mid-batch overnight; fixed the underlying memory growth
+
+Owner: "the program crashed during the night sometime, can you find out
+why?" Investigation (systematic-debugging skill, not a guess): `dmesg`
+showed no kernel OOM kill or segfault, and the system never rebooted
+(`uptime` showed no gap) -- ruled out a hardware/kernel-level event.
+`journalctl -u earlyoom --since yesterday` had the real answer:
+`earlyoom` sent SIGTERM to the app's `python` process at 00:08:17, VmRSS
+~10001 MiB, with system memory down to 2.46% available. Cross-referenced
+against `work/`'s own file timestamps to identify which song: #24 of an
+overnight 100-song Batch run, "Money" by Pink Floyd -- Demucs had just
+finished separating stems, lyrics had just been fetched, and the crash
+landed ~28 seconds later, right as the align stage's MMS_FA model
+would have been loading.
+
+The obvious first guess -- the already-known "align OOMs on 20+ minute
+tracks" limitation ([[project_long_track_memory_limit]], no chunking
+yet) -- didn't fit: "Money" is a completely ordinary 6:34 (394s), not a
+long track. The real pattern was in earlyoom's own periodic memory-
+percentage log lines: available memory declined steadily across the
+*whole* overnight run (46% free at 11 PM -> 35% free at midnight ->
+crash 7 minutes later), not a single spike tied to one song. Checked the
+codebase for any per-song cleanup between Batch iterations -- there was
+none: no `gc.collect()`, no explicit `del`, nothing, anywhere in
+`pipeline.py`/`batch.py`/`gui.py`'s Batch loop. Every song in a Batch
+run shares the same long-lived Python process (a background thread, not
+a subprocess), so CPython's own reference counting frees most per-song
+objects immediately, but (a) reference cycles -- which torch
+tensors/models commonly form -- need an explicit `gc.collect()` to catch,
+and (b) even fully-dead memory that Python has released back to its own
+allocator doesn't necessarily return to the OS: glibc's malloc keeps
+freed arenas around for reuse rather than handing them back via
+`sbrk`/`munmap`. Over dozens of songs, RSS climbs even though nothing is
+a genuine reference leak -- until an entirely ordinary song's own normal
+peak usage (align, already the heaviest per-song stage) tips an
+already-elevated baseline past what's left.
+
+Fix: new `lyricvideo/batch.py:release_memory()` -- `gc.collect()`
+unconditionally, then (Linux only, guarded by `sys.platform`) loads
+`libc.so.6` via `ctypes` and calls `malloc_trim(0)` to force glibc to
+actually hand freed arenas back to the OS. Wrapped in a bare `except
+OSError: pass` since this is a best-effort hygiene step on a rare
+libc variant, never something that should be allowed to crash a batch
+over. Wired into `gui.py`'s `_run_batch_worker` in a `finally` block
+around each song's own try/except -- runs after EVERY song, success or
+failure alike, since a song that fails partway through (e.g. Demucs
+succeeds, align then raises) can still have allocated real memory before
+failing. Deliberately scoped to Batch only (not Generate/Redo, which
+don't run dozens of songs back-to-back in one process) per the owner's
+own framing of the ask ("the underlying memory growth" in a long Batch
+run).
+
+Tests: `release_memory()` itself tested by monkeypatching `gc.collect`
+and `ctypes.CDLL` (a fake libc object records the `malloc_trim(0)`
+call) -- one test per platform branch, plus one confirming a missing/
+unusual libc is swallowed rather than raised. `_run_batch_worker`
+wiring tested directly against `LyricVideoGUI` with a stub `self`
+(`_gui_stub()`) and a fake `run_pipeline` that raises for one item of
+two -- asserts `release_memory` fires for both the succeeding and the
+failing item.
+
+Full suite: 691 passed.

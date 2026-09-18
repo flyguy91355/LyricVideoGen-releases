@@ -24,6 +24,7 @@ from .venv import venv_python
 from .batch import (
     find_audio_files,
     load_last_batch_folder,
+    release_memory,
     resolve_batch_items,
     resolve_existing_folder,
     save_last_batch_folder,
@@ -1085,6 +1086,13 @@ class LyricVideoGUI:
                 except Exception as e:
                     results["failed"].append((item.title, f"{type(e).__name__}: {e}"))
                     print(f"Batch item {item.title!r} failed: {type(e).__name__}: {e}")
+                finally:
+                    # Real incident, 2026-09-18: earlyoom killed the app mid-
+                    # batch (song #24 of 100) after memory crept up across
+                    # dozens of songs in this one long-lived process. Runs
+                    # after every song, success or failure, so the baseline
+                    # never climbs from one song into the next.
+                    release_memory()
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
         self._queue.put(("batch_done", results))
