@@ -84,8 +84,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   the draggable slider (parsed/clamped by `_parse_clamped_float`, tolerant of a
   stray "%"/"s" suffix) -- driven off a trace on the slider's own Tk variable rather
   than `CTkSlider`'s `command` callback, since that callback only fires on a live
-  drag, never a programmatic `.set()` (real bug found via an actual screenshot,
-  2026-09-11: the box showed "0"/"off" instead of the real loaded value on open). An
+  drag, never a programmatic `.set()` (real bug, found via an actual screenshot;
+  HISTORY 2026-09-11). An
   unsaved field's row label is bold+orange (was plain orange text), still governed
   by the same `_dirty_fields()`/itemized-confirm-before-Save mechanism as before.
   `render.py`/`detect_chords.py`/`assemble_video()` all take plain keyword arguments
@@ -212,9 +212,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    boxes, kept modest, never more than
    ~15% of the frame. `_first_available_image_key()` picks the real first
    moment's own image when its file exists, otherwise ANY real image
-   already generated for the song, NEVER the flat `fallback_color` (some
-   songs' first-moment image key had no cached file, so the countdown fell
-   through to a plain color; HISTORY 2026-09-10).
+   already generated for the song, NEVER the flat `fallback_color`
+   (HISTORY 2026-09-10).
    `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
    (countdown-extended) timeline; real content uses `song_t = T -
    countdown_duration` throughout. Audio is delayed to match
@@ -233,9 +232,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    instead of freezing on the last-sung line — `layout.py`'s `_in_a_line()`
    decides which applies, using `_plausible_sung_intervals()` rather than a
    line's raw `start_time`/`end_time` envelope: a single misaligned word can
-   otherwise claim an implausible duration (HISTORY 2026-09-09: one word got
-   105s while its line's other words clustered 8s later) and make the next
-   ~2 minutes falsely read as "still singing," suppressing both the per-chord
+   otherwise claim an implausible duration (HISTORY 2026-09-09) and make the next
+   several minutes falsely read as "still singing," suppressing both the per-chord
    image-follow and Ken Burns pacing. `layout.build_image_timeline()` builds
    the whole song's image schedule once up front (one segment per sung line,
    unchanged; one per instrumental chord otherwise) and merges consecutive
@@ -270,8 +268,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `build_scene()`'s `scroll_progress` (how far the current line's own
    on-screen scroll animation has advanced) uses `_plausible_line_end()` --
    the same outlier-capped end as `_plausible_sung_intervals()` -- instead of
-   the line's raw `end_time` (HISTORY 2026-09-10, "Memoria": one word got a
-   6.86s duration). Word-highlight timing (`word_sung`/`word_active`) keys
+   the line's raw `end_time` (HISTORY 2026-09-10). Word-highlight timing (`word_sung`/`word_active`) keys
    only on a word's own start time, never a duration, and is unaffected.
    `build_scene()`'s CURRENT-LINE TEXT is also gated on `_in_a_line()`
    (HISTORY 2026-09-10): once past a line's own plausible end, "current"
@@ -342,16 +339,14 @@ and allow-listed archive extraction/copy
 (`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
 `CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
 `work/`, `.venv/`). `self.top_frame` (the `before=` anchor `_poll_update_queue`
-packs the banner above) must be a `.pack()`-managed child of `self.root` --
-it is `body`; anchoring on the grid-managed `left` raised `TclError: window
-isn't packed`, silently, so the banner never showed (real 2026-09-09 bug;
-HISTORY). `gui.py` checks once on
+packs the banner above) must be a `.pack()`-managed child of `self.root`
+(it is `body`) -- anchoring on the grid-managed `left` raised `TclError:
+window isn't packed` silently (HISTORY 2026-09-09). `gui.py` checks once on
 launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
-`focus_force`, plus a brief `-topmost` toggle — `lift`/`focus_force` alone
-aren't reliably honored by every Linux window manager — it must never be
-losable behind the main window)
+`focus_force`, plus a brief `-topmost` toggle -- `lift`/`focus_force` alone
+aren't reliably honored by every Linux window manager)
 with the release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-dependencies-if-changed/copies/writes the new
 VERSION) followed by a Relaunch Now button. No severity tiering, no
@@ -453,13 +448,12 @@ consent (using a `client_secret_*.json` downloaded from Google Cloud
 Console) and saves a refresh token to
 `~/.playalongvideoproduction/youtube_token.json`; `load_credentials()`
 returns `None` for "not connected" (never raises) and auto-refreshes an
-expired token; `get_channel_title()` confirms the connected channel. `Settings`
-gained seven YouTube fields (`youtube_auto_upload`,
-`youtube_client_secrets_path`, `youtube_privacy` default `"public"`,
+expired token; `get_channel_title()` confirms the connected channel. `Settings` holds the
+YouTube config fields (auto-upload toggle, client secrets path, privacy,
 `youtube_category_id` default `"27"` ("Education" -- HISTORY 2026-09-10),
-`youtube_made_for_kids` default `False`, `youtube_upload_times` default
-`"15:00"`, `youtube_uploads_per_day` default `1`,
-`youtube_max_uploads_per_day` default `5` (upload cap).
+made-for-kids, upload times/uploads-per-day, the separate enforced
+`youtube_max_uploads_per_day` cap, and quota-retry hours -- see
+`settings.py`'s YouTube block for the full field list and current defaults).
 `SettingsPanel` gained a
 "YouTube" section (secrets picker, auto-upload checkbox, privacy/category
 dropdowns, made-for-kids checkbox, an upload-times text box, an
@@ -566,12 +560,13 @@ lazy-build pattern) has Approve (posts, marks
 loads `.env` itself, and stops cleanly on a quota error rather than
 failing every remaining song (HISTORY 2026-09-17).
 
-This feature is complete and tested (HISTORY 2026-09-18).
-What's NOT yet verified: the
-interactive OAuth `connect()` flow and live comment fetch/reply, both of which
-need the owner's own real Google Cloud `client_secret_*.json` and a real
-connected channel to exercise end-to-end. `load_credentials()` returns `None`
-("not connected") for a stored token that's expired with no refresh token.
+This feature is complete and tested; the interactive OAuth `connect()` flow
+and live comment/engagement-comment posting have since been exercised
+end-to-end against the real connected channel (HISTORY 2026-09-18).
+`load_credentials()` returns `None` ("not connected") for a stored token
+that's expired with no refresh token. Approving a pending engagement comment
+checks `is_video_public()` first, same as the comment-reading path (HISTORY
+2026-09-18).
 
 ## Tests
 

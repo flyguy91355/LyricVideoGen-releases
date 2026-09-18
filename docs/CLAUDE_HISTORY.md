@@ -2762,4 +2762,75 @@ should have asked whether a new field was warranted before wiring the
 new cap onto it, rather than discovering the conflict live in the
 owner's own testing session.
 
+## 2026-09-18 — Approving an engagement comment failed with a raw 403 on a still-scheduled video
+
+Owner clicked Approve on a drafted "Born to Run" engagement comment (the
+Channel Organization feature's own queue) and got a modal HttpError dump:
+`commentThreads.insert` returning 403, reason `forbidden`, "The comment
+thread could not be created due to insufficient permissions."
+
+Diagnosis ruled out the usual scope/token suspects with real checks rather
+than guesses: the stored OAuth token's `scopes` field matched
+`youtube.force-ssl` exactly (the only scope the app ever requests), wasn't
+expired, and the very same credentials already worked for uploads and
+`commentThreads.list`. Querying the actual video via the app's own
+connected client (`videos().list(part="status", ...)`) showed the real
+cause: `status.privacyStatus: "private"` with `publishAt:
+"2026-09-19T15:00:00Z"` -- the video was still a day away from actually
+going public. `is_video_public()` (`youtube.py`) already exists and is
+already used to skip comment *reads* on a still-scheduled video, with a
+docstring explicitly warning that such a video "never accepts comment
+reads" -- YouTube applies the identical restriction to comment *writes*,
+but `_on_approve_comment` (`gui.py`) never called that guard before
+posting.
+
+Fix: `_on_approve_comment`'s worker now calls `is_video_public()` first and
+shows a plain "still scheduled/private, try again after it publishes" info
+dialog instead of attempting the post -- mirroring the guard the
+comment-reading path already had. `tests/test_gui.py` gained a case
+asserting Approve does not call `post_top_level_comment` when the video
+isn't public yet, and the existing happy-path/failure-path approve-comment
+tests were updated to mock `is_video_public` returning `True` (a direct,
+un-mocked call against the fake test client would otherwise raise).
+
+Lesson: `is_video_public()`'s own docstring already said the restriction
+applies to comment reads; the same file's `post_top_level_comment` should
+have been guarded the same way from the start rather than only being
+caught live once a real scheduled upload reached the queue.
+
+## 2026-09-18 — CLAUDE.md staleness audit (queued 2026-09-15, escalated 2026-09-18)
+
+Doug asked for a real pruning pass over `CLAUDE.md` on 2026-09-15 during an
+unrelated bug fix; it kept getting deferred because in-session pressure was
+always just "shave a few bytes off the paragraph I'm already editing" rather
+than a real look at the rest of the file. By 2026-09-18 the file was sitting
+at 39966/40000 bytes before any edit that day, and every commit needed a
+byte-fight just to land a one-line pointer.
+
+Forced by hitting the wall again on an unrelated engagement-comment bug fix
+(previous entry above), the audit finally happened. Found and fixed:
+- The YouTube-fields enumeration under "Update Available Feature" said
+  `Settings` "gained seven YouTube fields" and listed eight of them by
+  name -- `settings.py` actually has nine now (`youtube_quota_retry_hours`,
+  added 2026-09-17 for quota-cooldown retry, was never added to the list).
+  Replaced the exhaustive enumeration with a pointer at `settings.py`'s own
+  YouTube block, so this can't go stale again the same way.
+- The Channel Organization section's closing paragraph claimed the
+  interactive OAuth `connect()` flow and live comment/engagement-comment
+  posting were "NOT yet verified" -- false as of this same session, which
+  exercised both against the real connected channel (see the entry above).
+- A handful of parenthetical `(HISTORY date: full incident narrative)` asides
+  scattered through the render-stage description were trimmed to plain
+  `(HISTORY date)` pointers -- the narrative already lives in this file's own
+  dated entries; repeating it in CLAUDE.md was the "narrative snuck into
+  CLAUDE.md instead of the history file" pattern the queued audit was meant
+  to catch.
+
+Net effect: CLAUDE.md freed real headroom instead of staying pinned at the
+ceiling. Didn't attempt a full line-by-line rewrite of the (very long,
+genuinely load-bearing) pipeline-stage mechanism descriptions -- those are
+current and accurate, just dense; a deeper pass is still worth doing in a
+future session with more time, per the byte trend re-approaching the
+ceiling.
+
 Full suite: 723 passed.

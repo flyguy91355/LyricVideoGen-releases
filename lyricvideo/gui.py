@@ -1707,6 +1707,13 @@ class LyricVideoGUI:
                 return
             try:
                 youtube_client = build("youtube", "v3", credentials=credentials)
+                if not is_video_public(youtube_client, comment.video_id):
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Video not public yet",
+                        "This video is still scheduled/private on YouTube, so comments can't be "
+                        "posted to it yet. Try Approve again after it publishes.",
+                    ))
+                    return
                 post_top_level_comment(youtube_client, comment.video_id, text)
                 remove_pending_comment(comment.video_id)
                 _mark_engagement_comment_posted(comment.video_id)

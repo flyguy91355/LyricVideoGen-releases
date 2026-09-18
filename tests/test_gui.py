@@ -794,6 +794,7 @@ def test_approve_comment_posts_marks_posted_and_removes_from_queue(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
     monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.is_video_public", lambda *a, **k: True)
     posted = []
     monkeypatch.setattr(
         "lyricvideo.gui.post_top_level_comment",
@@ -817,10 +818,33 @@ def test_approve_comment_posts_marks_posted_and_removes_from_queue(monkeypatch):
     assert invalidated == [True]
 
 
+def test_approve_comment_skips_posting_while_the_video_is_still_private(monkeypatch):
+    """A just-scheduled video is private until its own publishAt -- YouTube
+    refuses commentThreads.insert on it the same way it refuses reads
+    (is_video_public's own docstring), so Approve must check first instead
+    of surfacing a raw 403 HttpError (real 2026-09-18 bug)."""
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.is_video_public", lambda *a, **k: False)
+    monkeypatch.setattr("lyricvideo.gui.post_top_level_comment", _must_not_run)
+    monkeypatch.setattr("lyricvideo.gui.remove_pending_comment", _must_not_run)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda title, msg: shown.append((title, msg)))
+
+    comment = PendingComment(video_id="vid123", song_title="My Song", draft_text="Which instrument?")
+    text_box = SimpleNamespace(get=lambda start, end: "Which instrument are you playing?\n")
+    LyricVideoGUI._on_approve_comment(_gui_stub(), comment, text_box)
+
+    assert shown == [("Video not public yet", shown[0][1])]
+    assert "still scheduled/private" in shown[0][1]
+
+
 def test_approve_comment_failure_shows_the_error_dialog_and_keeps_the_draft(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
     monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.is_video_public", lambda *a, **k: True)
 
     def failing_post(client, video_id, text):
         raise RuntimeError("commentsDisabled")
