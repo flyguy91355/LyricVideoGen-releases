@@ -100,6 +100,12 @@ class Settings:
     youtube_made_for_kids: bool = False      # COPPA declaration, required on every upload
     youtube_uploads_per_day: int = 1         # drives the Settings panel's auto-generated default
                                               # times (see youtube_schedule.evenly_spaced_upload_times)
+                                              # AND (2026-09-18) is a real enforced ceiling on raw
+                                              # upload_video() calls per calendar day -- see gui.py's
+                                              # _uploads_remaining_today / youtube_upload_count_state.py.
+                                              # Deliberately independent of youtube_upload_times/publish
+                                              # scheduling below -- a backlog of already-uploaded,
+                                              # still-scheduled videos is fine and uncapped by design.
     youtube_upload_times: str = "15:00"      # comma-separated 24h HH:MM local times, one per daily
                                               # upload slot -- its own length IS the uploads-per-day
                                               # count actually used at schedule time

@@ -564,7 +564,8 @@ lazy-build pattern) has Approve (posts, marks
 loads `.env` itself, and stops cleanly on a quota error rather than
 failing every remaining song (HISTORY 2026-09-17).
 
-This whole feature is complete and tested. What's NOT yet verified: the
+This whole feature is complete and tested (HISTORY 2026-09-18).
+What's NOT yet verified: the
 interactive OAuth `connect()` flow and live comment fetch/reply, both of which
 need the owner's own real Google Cloud `client_secret_*.json` and a real
 connected channel to exercise end-to-end. `load_credentials()` returns `None`

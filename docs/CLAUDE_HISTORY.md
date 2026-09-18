@@ -2597,3 +2597,93 @@ two -- asserts `release_memory` fires for both the succeeding and the
 failing item.
 
 Full suite: 691 passed.
+
+## 2026-09-18 — Quota-exceeded halts every YouTube call, plus a real daily upload cap
+
+Owner concern, raised directly: "im a little worried the massive
+'exceeded quota' from youtube might see it as an attack, so when the
+quota has been exceeded, everything, including comment checks, all
+that needs to be stopped until the program sees the exceeded quota has
+been lifted." The existing 2026-09-17 automatic-quota-cooldown-retry
+cooldown (see that dated entry above) only covered the two upload
+paths -- `_check_youtube_comments_worker`
+(comment scanning), `_youtube_status_text` (the connect-status
+refresh, via `get_channel_title`), and `organize_video()` (playlist/
+engagement-comment calls) all kept firing on the unchanged 20-minute
+tick even during a quota outage, each capable of producing its own
+fresh 429 across every song/video in `work/`.
+
+Design discussion (brainstorming skill, bounded path) settled two
+separate questions. First: should the halt also block deliberate
+manual actions (Connect, Upload, Check Now, Approve)? Owner's answer:
+"block everything with a popup window showing quota exceeded..
+continue anyways?" -- landing on a hybrid, not a blanket block:
+automatic triggers (the periodic tick) go fully silent during a
+cooldown, while a manual click gets `_confirm_quota_override_if_blocked()`,
+an `askyesno` naming the retry time, and only proceeds on an explicit
+Yes. `_on_connect_youtube` itself was deliberately left out of this
+gate -- `youtube_auth.connect()` is pure OAuth (`InstalledAppFlow`),
+never a Data API call, so there's nothing there to protect; the status
+refresh that follows a successful connect already self-gates.
+
+Second: `_youtube_status_text()` (called at launch, post-connect, and
+every periodic tick) used to always call `get_channel_title()`. Rather
+than special-case every caller, the cooldown check moved inside the
+function itself, before the real call -- one change covers all three
+call sites for free and keeps the status label informative ("YouTube:
+quota exceeded, retrying after <time>") instead of going stale.
+`_check_youtube_comments_worker`'s existing per-video isolation
+(2026-09-10, one video's `commentsDisabled` must never block the rest)
+got one more branch: a 429 specifically is NOT like other per-video
+failures -- every remaining video would fail identically right now, so
+it `break`s the whole scan and engages the same global cooldown,
+rather than logging the identical warning once per remaining video.
+
+Mid-conversation, the owner pivoted to a second, related but
+independent ask: "i think i want a limit on how many songs i upload a
+day, so i dont run out of quota... in the settings, number of uploads
+per day" -- then clarified this meant the PROGRAM's automated upload
+volume, not a count of manual clicks, after noticing "right now if all
+are selected, it tryes to [upload] them all." Investigation found
+`Settings.youtube_uploads_per_day` already existed but, per its own
+code comment, "drives nothing at schedule time" -- it only seeded
+`evenly_spaced_upload_times()`'s defaults for the Settings panel.
+Each `videos.insert` call costs ~1600 of YouTube's 10,000-unit default
+daily quota, so an unthrottled "Select All" on a large Pending Uploads
+list could exhaust an entire day's quota in one run.
+
+New `youtube_upload_count_state.py` gives `youtube_uploads_per_day` a
+second, real job: a local `{date, count}` counter
+(`~/.playalongvideoproduction/youtube_upload_count.json`) of this
+app's own successful `upload_video()` calls, rolling over at the local
+day boundary. Explicitly verified this doesn't repeat the 2026-09-13
+publish-slot-counter mistake (documented earlier in this file, under
+the multiple-times-a-day-scheduling and channel-organization entries):
+that counter broke because it tried to *predict* a schedule the
+channel itself could also mutate (a manual
+publish, a Studio edit); this one only records a fact -- how many
+times this app itself called upload -- that nothing outside the app
+can invalidate. `_uploads_remaining_today()` gates both
+`_maybe_upload_to_youtube` and the loop inside `_retry_pending_uploads`;
+once exhausted, remaining slugs land in a new `results["deferred"]`
+list rather than all being attempted.
+
+Asked directly whether the cap should also throttle YouTube's
+"Scheduled" backlog (uploading more per day than there are
+`youtube_upload_times` slots spreads publish dates further into the
+future every day) -- owner: "no i dont want a cap on scheduled
+backlog. unless youtube has one" and "keep it independent. not hard to
+match uploads and what goes public." The upload cap and publish-time
+pacing stay fully separate features on purpose: raising one doesn't
+require raising the other.
+
+Existing tests asserting an exact `{"succeeded": ..., "failed": ...}`
+dict from `_retry_pending_uploads` needed a `"deferred": []` key added
+throughout; a new autouse fixture (`_no_upload_cap_by_default`, mirroring
+the existing `_no_quota_block_by_default`) isolates every gui test from
+the real `youtube_upload_count.json` on disk, and `_gui_stub()` grew a
+default `_confirm_quota_override_if_blocked=lambda: True` so every
+pre-existing manual-action test keeps behaving exactly as before this
+gate was added.
+
+Full suite: 720 passed.

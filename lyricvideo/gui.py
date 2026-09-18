@@ -78,6 +78,7 @@ from .youtube_playlists import organize_video
 from .youtube_quota_state import load_quota_blocked_until, save_quota_blocked_until
 from .youtube_schedule import schedule_upload
 from .youtube_state import load_youtube_state, save_youtube_state
+from .youtube_upload_count_state import load_uploads_today, record_upload
 
 _CR_LF_RE = re.compile(r"[\r\n]")
 
@@ -115,6 +116,19 @@ def _mark_engagement_comment_posted(video_id: str) -> None:
             return
 
 
+def _uploads_remaining_today(settings: Settings) -> int:
+    """How many more raw upload_video() calls this app may still make today
+    under Settings.youtube_uploads_per_day -- see
+    youtube_upload_count_state.py for why this is a real enforced ceiling
+    (2026-09-18) and not just the schedule-time-slot-count generator it
+    used to only be. Independent of publish-time scheduling on purpose
+    (owner decision, 2026-09-18): this caps raw upload *calls* to protect
+    quota, while youtube_upload_times separately paces when uploaded videos
+    go public -- a big backlog of already-uploaded, still-scheduled videos
+    is fine and not something this caps."""
+    return max(0, settings.youtube_uploads_per_day - load_uploads_today())
+
+
 def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     """Uploads work_dir's finished video to YouTube if auto-upload is on,
     YouTube is connected, and this song has never been (verifiably) uploaded
@@ -129,8 +143,11 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     exceeded failure (2026-09-17) additionally records a cooldown
     (Settings.youtube_quota_retry_hours) so every OTHER song doesn't also
     immediately retry into the same wall -- see _retry_pending_uploads_if_due,
-    which auto-resumes once that cooldown passes. A song flagged by
-    check_lyric_accuracy() (2026-09-18, Song.lyrics_accuracy_concern
+    which auto-resumes once that cooldown passes. Also skips outright once
+    today's own upload cap is already used up (2026-09-18,
+    _uploads_remaining_today) -- the song stays pending and uploads
+    automatically on a later day, same as a quota-exceeded skip. A song
+    flagged by check_lyric_accuracy() (2026-09-18, Song.lyrics_accuracy_concern
     non-empty) never auto-uploads either -- it still fully rendered, and
     shows up in the "Flagged for Lyrics Review" panel instead."""
     if not settings.youtube_auto_upload:
@@ -141,6 +158,8 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     blocked_until = load_quota_blocked_until()
     if blocked_until is not None and datetime.now().astimezone() < blocked_until:
         return  # still cooling down from a prior quota-exceeded error
+    if _uploads_remaining_today(settings) <= 0:
+        return  # today's upload cap reached -- picked up automatically on a later day
     try:
         if load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern:
             return  # flagged -- see the "Flagged for Lyrics Review" panel
@@ -158,14 +177,24 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
                 return  # can't verify right now -- fail closed, don't risk a duplicate
         anthropic_client = anthropic.Anthropic()
         schedule_upload(youtube_client, anthropic_client, work_dir, settings)
+        record_upload()
         print(f"Uploaded to YouTube: {work_dir.name}")
         try:
             organize_video(youtube_client, anthropic_client, work_dir)
         except Exception as e:
-            print(
-                f"WARNING: could not organize {work_dir.name} into playlists/comment: "
-                f"{type(e).__name__}: {e}", file=sys.stderr,
-            )
+            if is_quota_exceeded_error(e):
+                save_quota_blocked_until(
+                    datetime.now().astimezone() + timedelta(hours=settings.youtube_quota_retry_hours)
+                )
+                print(
+                    f"WARNING: YouTube quota exceeded organizing {work_dir.name}; will retry "
+                    f"automatically in {settings.youtube_quota_retry_hours}h.", file=sys.stderr,
+                )
+            else:
+                print(
+                    f"WARNING: could not organize {work_dir.name} into playlists/comment: "
+                    f"{type(e).__name__}: {e}", file=sys.stderr,
+                )
     except Exception as e:
         if is_quota_exceeded_error(e):
             save_quota_blocked_until(
@@ -180,7 +209,7 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
 
 
 def _retry_pending_uploads(
-    work_root: Path, settings: Settings, slugs: list[str] | None = None,
+    work_root: Path, settings: Settings, slugs: list[str] | None = None, force: bool = False,
 ) -> dict:
     """Uploads every song named in `slugs` (default: every list_pending_uploads()
     result) via the same schedule_upload() code path as auto-upload and the
@@ -190,12 +219,21 @@ def _retry_pending_uploads(
     failure (2026-09-17), which stops the loop immediately (every remaining
     song would fail identically right now) and records a cooldown
     (Settings.youtube_quota_retry_hours) instead of grinding through the rest
-    reporting the same root cause fifty times over."""
+    reporting the same root cause fifty times over. Also stops (without
+    marking anything "failed") once today's own upload cap is reached
+    (2026-09-18, _uploads_remaining_today) -- untried songs land in
+    results["deferred"] and simply stay pending for a later day; this is how
+    "Select All" + Upload Selected on a big pending list is safe to click
+    without blowing through a day's quota in one run. `force=True` (manual
+    retry-upload triggers only, after the owner explicitly confirms past a
+    quota-cooldown warning -- see gui.py's _confirm_quota_override_if_blocked)
+    skips the upfront cooldown check below; it never bypasses the per-song
+    daily upload cap, which has no override by owner request (2026-09-18)."""
     credentials = youtube_auth.load_credentials()
     if credentials is None:
         raise RuntimeError("Not connected to YouTube.")
     blocked_until = load_quota_blocked_until()
-    if blocked_until is not None and datetime.now().astimezone() < blocked_until:
+    if not force and blocked_until is not None and datetime.now().astimezone() < blocked_until:
         raise RuntimeError(
             f"YouTube's daily quota is exceeded; will retry automatically after "
             f"{blocked_until.astimezone():%Y-%m-%d %H:%M}."
@@ -206,20 +244,30 @@ def _retry_pending_uploads(
     if slugs is None:
         slugs = list_pending_uploads(work_root)
 
-    results: dict = {"succeeded": [], "failed": []}
+    results: dict = {"succeeded": [], "failed": [], "deferred": []}
     for slug in slugs:
+        if _uploads_remaining_today(settings) <= 0:
+            results["deferred"].append(slug)
+            continue
         try:
             schedule_upload(youtube_client, anthropic_client, work_root / slug, settings)
-            try:
-                organize_video(youtube_client, anthropic_client, work_root / slug)
-            except Exception as e:
-                print(
-                    f"WARNING: could not organize {slug} into playlists/comment: {type(e).__name__}: {e}",
-                    file=sys.stderr,
-                )
-            results["succeeded"].append(slug)
+            record_upload()
         except Exception as e:
             results["failed"].append((slug, f"{type(e).__name__}: {e}"))
+            if is_quota_exceeded_error(e):
+                save_quota_blocked_until(
+                    datetime.now().astimezone() + timedelta(hours=settings.youtube_quota_retry_hours)
+                )
+                break
+            continue
+        results["succeeded"].append(slug)
+        try:
+            organize_video(youtube_client, anthropic_client, work_root / slug)
+        except Exception as e:
+            print(
+                f"WARNING: could not organize {slug} into playlists/comment: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
             if is_quota_exceeded_error(e):
                 save_quota_blocked_until(
                     datetime.now().astimezone() + timedelta(hours=settings.youtube_quota_retry_hours)
@@ -1262,18 +1310,50 @@ class LyricVideoGUI:
 
     def _youtube_status_text(self) -> str:
         """The connect-status label's text, computed with real network calls
-        -- only ever call this from a background thread."""
+        -- only ever call this from a background thread. Checks the quota
+        cooldown BEFORE calling get_channel_title() (2026-09-18): a real
+        API call here every 20 minutes (plus at launch and after every
+        Connect) is exactly the kind of steady drumbeat of failing requests
+        that could make YouTube read the app as abusive once quota's
+        exceeded, so this makes zero real calls while blocked, at every
+        caller, for free -- no per-caller gating needed."""
         credentials = youtube_auth.load_credentials()
         if credentials is None:
             return "YouTube: not connected"
+        blocked_until = load_quota_blocked_until()
+        if blocked_until is not None and datetime.now().astimezone() < blocked_until:
+            return f"YouTube: quota exceeded, retrying after {blocked_until.astimezone():%Y-%m-%d %H:%M}"
         try:
             return f"YouTube: connected as {youtube_auth.get_channel_title(credentials)}"
-        except Exception:
+        except Exception as e:
+            if is_quota_exceeded_error(e):
+                blocked_until = datetime.now().astimezone() + timedelta(hours=self.settings.youtube_quota_retry_hours)
+                save_quota_blocked_until(blocked_until)
+                return f"YouTube: quota exceeded, retrying after {blocked_until:%Y-%m-%d %H:%M}"
             return "YouTube: connected (channel name unavailable)"
 
     def _refresh_youtube_status_worker(self) -> None:
         text = self._youtube_status_text()
         self.root.after(0, lambda: self.youtube_status_var.set(text))
+
+    def _confirm_quota_override_if_blocked(self) -> bool:
+        """Gate for every MANUAL YouTube action (upload buttons, Check Now,
+        Approve reply/comment) -- returns True immediately when no quota
+        cooldown is active. While one is active, asks first instead of
+        silently either blocking or firing off the call: automatic triggers
+        (the 20-minute tick) stay fully silent during a cooldown, but a
+        deliberate click is the owner's own call to make (owner decision,
+        2026-09-18). Must only be called from the main thread -- askyesno
+        blocks it, which is fine here since a button click is already a
+        synchronous, main-thread event."""
+        blocked_until = load_quota_blocked_until()
+        if blocked_until is None or datetime.now().astimezone() >= blocked_until:
+            return True
+        return messagebox.askyesno(
+            "YouTube quota exceeded",
+            "YouTube's API quota was exceeded; this is scheduled to retry "
+            f"automatically after {blocked_until.astimezone():%Y-%m-%d %H:%M}. Continue anyway?",
+        )
 
     def _on_connect_youtube(self) -> None:
         secrets_path = self.settings.youtube_client_secrets_path
@@ -1333,12 +1413,18 @@ class LyricVideoGUI:
         self._start_retry_upload(slugs)
 
     def _start_retry_upload(self, slugs: list[str] | None) -> None:
+        # A deliberate manual click always gets to try past a quota
+        # cooldown if the owner confirms (2026-09-18) -- force=True is a
+        # no-op when there's no cooldown active, so this is safe to pass
+        # unconditionally once the confirm gate below has been cleared.
+        if not self._confirm_quota_override_if_blocked():
+            return
         self.retry_upload_button.configure(state="disabled")
         self.upload_selected_button.configure(state="disabled")
 
         def worker():
             try:
-                results = _retry_pending_uploads(PROJECT_ROOT / "work", self.settings, slugs)
+                results = _retry_pending_uploads(PROJECT_ROOT / "work", self.settings, slugs, force=True)
             except Exception as e:
                 message = f"{type(e).__name__}: {e}"  # see _on_connect_youtube: never read `e` inside the lambda
                 self.root.after(0, lambda: messagebox.showerror("Upload failed", message))
@@ -1351,6 +1437,12 @@ class LyricVideoGUI:
     def _on_retry_upload_done(self, results: dict) -> None:
         self._refresh_retry_upload_options()
         lines = [f"Uploaded {len(results['succeeded'])} song(s)."]
+        if results.get("deferred"):
+            lines.append(
+                f"{len(results['deferred'])} left pending -- today's upload limit "
+                f"({self.settings.youtube_uploads_per_day}/day) is reached; they'll upload "
+                "automatically over the next few days."
+            )
         if results["failed"]:
             lines.append(f"{len(results['failed'])} failed:")
             lines.extend(f"  {slug}: {reason}" for slug, reason in results["failed"])
@@ -1533,6 +1625,8 @@ class LyricVideoGUI:
         ).pack(side="left")
 
     def _on_approve_reply(self, reply: PendingReply, text_box) -> None:
+        if not self._confirm_quota_override_if_blocked():
+            return
         text = text_box.get("1.0", "end").strip()
 
         def worker():
@@ -1545,6 +1639,10 @@ class LyricVideoGUI:
                 remove_pending_reply(reply.comment_id)
                 self.root.after(0, self._render_pending_replies)
             except Exception as e:
+                if is_quota_exceeded_error(e):
+                    save_quota_blocked_until(
+                        datetime.now().astimezone() + timedelta(hours=self.settings.youtube_quota_retry_hours)
+                    )
                 message = f"{type(e).__name__}: {e}"  # see _on_connect_youtube: never read `e` inside the lambda
                 self.root.after(0, lambda: messagebox.showerror("Could not post reply", message))
 
@@ -1598,6 +1696,8 @@ class LyricVideoGUI:
         ).pack(side="left")
 
     def _on_approve_comment(self, comment: PendingComment, text_box) -> None:
+        if not self._confirm_quota_override_if_blocked():
+            return
         text = text_box.get("1.0", "end").strip()
 
         def worker():
@@ -1615,6 +1715,10 @@ class LyricVideoGUI:
                     "Posted. Remember to pin it from YouTube Studio -- the API has no way to do that part.",
                 ))
             except Exception as e:
+                if is_quota_exceeded_error(e):
+                    save_quota_blocked_until(
+                        datetime.now().astimezone() + timedelta(hours=self.settings.youtube_quota_retry_hours)
+                    )
                 # See _on_connect_youtube: never read `e` inside the lambda.
                 message = f"{type(e).__name__}: {e}"
                 self.root.after(0, lambda: messagebox.showerror("Could not post comment", message))
@@ -1687,6 +1791,8 @@ class LyricVideoGUI:
         self._start_retry_upload([slug])
 
     def _on_check_youtube_comments(self) -> None:
+        if not self._confirm_quota_override_if_blocked():
+            return
         threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()
 
     def _check_youtube_comments_worker(self) -> None:
@@ -1721,7 +1827,22 @@ class LyricVideoGUI:
                     # HttpError 403 here, uncaught -- one bad video was silently
                     # aborting the check for every OTHER video too, forever,
                     # since the same failure recurs every 20-minute tick. One
-                    # video's failure must never block checking the rest.
+                    # video's failure must never block checking the rest --
+                    # EXCEPT a quota-exceeded failure (2026-09-18), which stops
+                    # checking every remaining video this run (they'd all fail
+                    # identically right now) and engages the same global
+                    # cooldown that halts uploads, so nothing keeps hammering
+                    # the API once quota's actually gone.
+                    if is_quota_exceeded_error(e):
+                        save_quota_blocked_until(
+                            datetime.now().astimezone() + timedelta(hours=self.settings.youtube_quota_retry_hours)
+                        )
+                        print(
+                            f"WARNING: YouTube quota exceeded checking comments for {work_dir.name}; "
+                            f"will retry automatically in {self.settings.youtube_quota_retry_hours}h.",
+                            file=sys.stderr,
+                        )
+                        break
                     print(
                         f"WARNING: could not check comments for {work_dir.name} "
                         f"({state.video_id}): {type(e).__name__}: {e}",
@@ -1752,9 +1873,19 @@ class LyricVideoGUI:
         current even across a long-running session -- otherwise a token that
         expires mid-session (Google's own 7-day limit on an unverified/
         Testing-mode app, which this one always is for personal use) would
-        only be noticed at next app launch."""
+        only be noticed at next app launch. _youtube_status_text() itself
+        makes zero real API calls while a quota cooldown is active, so it's
+        always safe to call here regardless. The comment scan and
+        auto-retry-upload below are NOT safe during a cooldown -- both make
+        real calls, potentially across many videos/songs every 20 minutes --
+        so both are skipped outright while blocked (2026-09-18), rather than
+        each independently re-discovering the same quota error. They resume
+        on their own the first tick after the cooldown passes."""
         status_text = self._youtube_status_text()
         self.root.after(0, lambda: self.youtube_status_var.set(status_text))
+        blocked_until = load_quota_blocked_until()
+        if blocked_until is not None and datetime.now().astimezone() < blocked_until:
+            return
         # Returns immediately on its own when there are no credentials.
         self._check_youtube_comments_worker()
         try:

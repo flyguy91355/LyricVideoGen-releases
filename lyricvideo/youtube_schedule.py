@@ -19,8 +19,12 @@ single preferred hour" model with owner-configurable multiple-times-a-day
 scheduling (`Settings.youtube_upload_times`, a comma-separated list of
 real HH:MM local times -- its own length IS the uploads-per-day count,
 no separate number to keep in sync). `Settings.youtube_uploads_per_day`
-drives nothing at schedule time; it only feeds the Settings panel's
-auto-generated default times (evenly_spaced_upload_times below)."""
+drives nothing IN HERE; it only feeds the Settings panel's auto-generated
+default times (evenly_spaced_upload_times below). Since 2026-09-18 it's
+ALSO a real cap on raw upload calls per day, enforced entirely by the
+gui.py callers before they ever reach schedule_upload() -- deliberately
+independent of the publish-time pacing this module does, so raising the
+upload cap doesn't need youtube_upload_times to also grow to match."""
 
 from __future__ import annotations
 
