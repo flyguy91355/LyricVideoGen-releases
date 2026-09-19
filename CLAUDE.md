@@ -456,12 +456,12 @@ returns `None` for "not connected" (never raises) and auto-refreshes an
 expired token; `get_channel_title()` confirms the connected channel. `Settings` holds the
 YouTube config fields (auto-upload toggle, client secrets path, privacy,
 `youtube_category_id` default `"27"` ("Education" -- HISTORY 2026-09-10),
-made-for-kids, upload times/uploads-per-day, the separate enforced
+made-for-kids, publish times/uploads-per-day, the separate enforced
 `youtube_max_uploads_per_day` cap, and quota-retry hours -- see
 `settings.py`'s YouTube block for the full field list and current defaults).
 `SettingsPanel` gained a
 "YouTube" section (secrets picker, auto-upload checkbox, privacy/category
-dropdowns, made-for-kids checkbox, an upload-times text box, an
+dropdowns, made-for-kids checkbox, a publish-times text box, an
 "Uploads per day" slider) --
 the Category dropdown shows friendly labels ("Howto & Style"/"Education"/
 "Music") while `Settings.youtube_category_id` stores the real numeric

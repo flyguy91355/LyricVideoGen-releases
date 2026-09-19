@@ -403,7 +403,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._option("youtube_privacy", "Privacy", ["public", "unlisted", "private"])
         self._option("youtube_category_id", "Category", list(_YOUTUBE_CATEGORY_IDS.keys()))
         self._check("youtube_made_for_kids", "Made for kids")
-        self._text("youtube_upload_times", "Upload times (comma-separated HH:MM)")
+        self._text("youtube_upload_times", "Scheduled publish times (HH:MM,...)")
         self._slider(
             "youtube_uploads_per_day", "Uploads per day", 1, 10, 9, lambda v: f"{int(v)}/day",
             on_value_change=self._regenerate_upload_times,
