@@ -2834,3 +2834,49 @@ future session with more time, per the byte trend re-approaching the
 ceiling.
 
 Full suite: 723 passed.
+
+## 2026-09-18 — A failed image generation could write a plain color to disk before the fix-up pass ever ran
+
+Owner spotted a log line during the 100-song batch: `WARNING: falling back
+to a plain-color background for line 183d42ece37968be ... substitute_
+fallback_images() will replace this ... unless every single one of them
+failed`, for a "Life in the Fast Lane" lyric ("They had one thing in
+common, they were good in bed") -- almost certainly rejected by Replicate's
+content-safety filter, which fails identically on every retry (not a
+transient hiccup `_MAX_GENERATION_ATTEMPTS` retries would ever get past).
+
+Traced it: the image DID get fixed by `substitute_fallback_images()` before
+that song's render (confirmed by reading the actual final PNG off disk --
+not a flat color), so this specific case never reached the finished video.
+But when asked "what kind of logic is that" -- write a flat color to disk
+at all when the song already has other real, usable images sitting right
+there -- the honest answer was: `get_or_generate_image()` only sees images
+generated strictly before it in `pipeline.py`'s per-line loop, so at the
+moment of failure it can't yet know the true chronologically-nearest
+neighbor (which might be a later line, not yet generated); the two-phase
+design deferred to a full post-pass specifically to get a better match.
+
+Owner's response: correctness of the *eventual* placement doesn't matter if
+a plain color can reach a render at all -- "of course not, it ruins the
+video... just use the previous one." Fair: an immediate, slightly-less-
+optimal substitution that guarantees no flat color is ever written beats a
+theoretically-better one that depends on a second pass always completing.
+
+Fix: `get_or_generate_image()` (`imagery.py`) gained a `previous_image`
+parameter -- on total failure, if a previous real image exists, its bytes
+are copied in immediately and a "reusing the previous image" warning is
+logged; the plain-color path is now reachable only for a song's very first
+image (nothing real exists yet to reuse). `pipeline.py`'s images stage
+threads a `last_real_image` variable through both the sung-line loop and
+the instrumental-caption loop, updating it via `is_fallback_image()`
+after each call and passing it as `previous_image` to the next one.
+`substitute_fallback_images()` is untouched and still runs afterward --
+it can still improve on an immediate same-image reuse with a
+chronologically closer neighbor once the whole song's images are known,
+but a flat color reaching a render is no longer possible in the common
+case (any failure after at least one real image already exists).
+
+Two new tests in `test_imagery.py` cover both branches (reuses a real
+`previous_image` when given one; still falls back to plain color when the
+given `previous_image` doesn't exist, i.e. no predecessor yet). Full
+suite: 726 passed.

@@ -151,6 +151,7 @@ def get_or_generate_image(
     cache_dir: Path,
     fallback_color: tuple[int, int, int] = (30, 30, 40),
     extra_cache_dirs: list[Path] | None = None,
+    previous_image: Path | None = None,
 ) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = line_hash(line_text)
@@ -181,9 +182,27 @@ def get_or_generate_image(
                 file=sys.stderr,
             )
 
+    if previous_image is not None and previous_image.exists():
+        # Reuse the last successfully-generated real image immediately rather
+        # than ever writing a flat color to disk -- a generation failure is
+        # never rare enough (content-filter rejections in particular repeat
+        # identically on every retry) to risk a plain-color frame reaching a
+        # finished video if this call happens to be the one substitute_fallback_
+        # images() never gets to run for. substitute_fallback_images() can
+        # still improve on this later by picking a chronologically closer
+        # neighbor once the whole song's images are known.
+        print(
+            f"WARNING: reusing the previous image for line {key} after "
+            f"{_MAX_GENERATION_ATTEMPTS} failed attempts (last error: {last_error})",
+            file=sys.stderr,
+        )
+        cached_path.write_bytes(previous_image.read_bytes())
+        return cached_path
+
     print(
         f"WARNING: falling back to a plain-color background for line {key} "
         f"after {_MAX_GENERATION_ATTEMPTS} failed attempts (last error: {last_error}) -- "
+        "no earlier real image exists yet in this song to reuse instead. "
         "substitute_fallback_images() will replace this with a real neighboring "
         "image once the whole song's images have been generated, unless every "
         "single one of them failed",

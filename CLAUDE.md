@@ -170,10 +170,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    (Replicate), cached by content hash so a repeated chorus or chord reuses one
    image. Also reuses any `images_backup_*/` archive in the work dir.
    `get_or_generate_image` retries a failed generation `_MAX_GENERATION_ATTEMPTS`
-   (3) times before writing a plain-color placeholder; `substitute_fallback_images`
-   then replaces any placeholder with the nearest real image in the song's own
-   sequence (`is_fallback_image`: a single perfectly solid color), unless every
-   image failed. `assemble_video()`'s `get_image` applies the same rule per
+   (3) times, then reuses the song's own most-recent real image
+   (`pipeline.py`'s `last_real_image`) instead of a plain color whenever a
+   real predecessor exists -- only a song's very first image still falls
+   back to plain color (HISTORY 2026-09-18). `substitute_fallback_images`
+   still replaces any remaining placeholder with the nearest real image in
+   the song's own sequence (`is_fallback_image`: a single perfectly solid
+   color), unless every image failed. `assemble_video()`'s `get_image`
+   applies the same rule per
    frame: a key with no file behind it renders the nearest real image, never a
    flat color. A missing `REPLICATE_API_TOKEN` raises a clear RuntimeError here.
 7. **render** — `assemble.py`/`layout.py`/`render.py`: composites scrolling lyrics

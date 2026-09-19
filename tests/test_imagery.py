@@ -135,6 +135,60 @@ def test_get_or_generate_image_retries_three_times_before_falling_back(tmp_path,
     assert "attempt 3/3" in captured.err
 
 
+def test_get_or_generate_image_reuses_the_previous_real_image_instead_of_a_plain_color(tmp_path, capsys):
+    """A content-filter rejection repeats identically on every retry, so
+    waiting on substitute_fallback_images()'s later pass to fix a flat-color
+    placeholder risked a plain-color frame reaching the finished video if
+    anything ever prevented that pass from running (real owner-reported
+    concern, 2026-09-18). When a real previous image is available, reuse it
+    immediately instead of ever writing a flat color to disk."""
+    class _FailingMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("boom")
+
+    class _FailingAnthropicClient:
+        def __init__(self):
+            self.messages = _FailingMessages()
+
+    previous_image = tmp_path / "previous.png"
+    previous_image.write_bytes(b"real-previous-image-bytes")
+
+    path = get_or_generate_image(
+        _FailingAnthropicClient(), "fake-token", "full lyrics", "a broken line", tmp_path,
+        previous_image=previous_image,
+    )
+
+    assert path.read_bytes() == b"real-previous-image-bytes"
+    captured = capsys.readouterr()
+    assert "reusing the previous image" in captured.err
+    assert "falling back to a plain-color background" not in captured.err
+
+
+def test_get_or_generate_image_falls_back_to_plain_color_when_no_previous_image_exists(tmp_path, capsys):
+    """The very first image in a song has no previous real image to reuse --
+    only then is the flat-color placeholder still the right last resort."""
+    class _FailingMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("boom")
+
+    class _FailingAnthropicClient:
+        def __init__(self):
+            self.messages = _FailingMessages()
+
+    missing_previous = tmp_path / "does-not-exist.png"
+
+    path = get_or_generate_image(
+        _FailingAnthropicClient(), "fake-token", "full lyrics", "a broken line", tmp_path,
+        previous_image=missing_previous,
+    )
+
+    from PIL import Image
+    img = Image.open(path)
+    assert img.size == (1920, 1080)
+    captured = capsys.readouterr()
+    assert "falling back to a plain-color background" in captured.err
+
+
 def test_is_fallback_image_detects_the_solid_color_placeholder(tmp_path):
     from PIL import Image
 

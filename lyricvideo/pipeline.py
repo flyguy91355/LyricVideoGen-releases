@@ -19,7 +19,7 @@ from .combine import combine_alignment
 from .detect_chords import detect_chords
 from .fetch_lyrics import fetch_lyric_lines_verified
 from .identify import extract_metadata
-from .imagery import get_or_generate_image, substitute_fallback_images, summarize_song_gist
+from .imagery import get_or_generate_image, is_fallback_image, substitute_fallback_images, summarize_song_gist
 from .layout import instrumental_image_captions
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals
@@ -414,11 +414,24 @@ def run_pipeline(
         # before spending on a new one (unchanged convention).
         backup_dirs = sorted(work_dir.glob("images_backup_*"))
         image_paths = []
+        # last_real_image lets a failed generation immediately reuse the most
+        # recent REAL image instead of ever writing a flat color to disk --
+        # a content-filter rejection in particular repeats identically on
+        # every retry, so waiting on substitute_fallback_images()'s later
+        # pass to fix it up risked a plain-color frame reaching the finished
+        # video if anything ever prevented that pass from running (owner
+        # incident, 2026-09-18). substitute_fallback_images() still runs
+        # afterward and can improve on this with a chronologically closer
+        # neighbor once the whole song's images are known.
+        last_real_image: Path | None = None
         for line in song.lines:
-            image_paths.append(get_or_generate_image(
+            path = get_or_generate_image(
                 anthropic_client, replicate_token, song_gist, line.text, images_dir,
-                extra_cache_dirs=backup_dirs,
-            ))
+                extra_cache_dirs=backup_dirs, previous_image=last_real_image,
+            )
+            image_paths.append(path)
+            if not is_fallback_image(path):
+                last_real_image = path
         # Instrumental-gap images (2026-09-09 owner request): one per distinct
         # caption the render's own image timeline can look up, so the
         # background follows the chord instead of freezing on the last-sung
@@ -428,10 +441,13 @@ def run_pipeline(
         # midpoint-based rule here skipped chords that only overlapped a gap's
         # edge, leaving the render to show a flat placeholder for them.
         for caption in instrumental_image_captions(song.lines, song.chord_track, song_end_time(song)):
-            image_paths.append(get_or_generate_image(
+            path = get_or_generate_image(
                 anthropic_client, replicate_token, song_gist, caption, images_dir,
-                extra_cache_dirs=backup_dirs,
-            ))
+                extra_cache_dirs=backup_dirs, previous_image=last_real_image,
+            )
+            image_paths.append(path)
+            if not is_fallback_image(path):
+                last_real_image = path
         # A flat placeholder color would visibly break the finished video even
         # though a generation failure never crashes the pipeline -- substitute
         # a real neighboring image in for any fallback, as an absolute last
