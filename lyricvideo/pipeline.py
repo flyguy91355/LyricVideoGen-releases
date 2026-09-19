@@ -22,6 +22,7 @@ from .fetch_lyrics import fetch_lyric_lines_verified
 from .identify import extract_metadata
 from .imagery import get_or_generate_image, is_fallback_image, substitute_fallback_images, summarize_song_gist
 from .layout import instrumental_image_captions
+from .lyric_arbiter import arbitrate
 from .lyric_audio_match import score_lyrics_against_transcript
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
@@ -260,6 +261,20 @@ def _build_reconcile(work_dir: Path, anthropic_client):
     return reconcile
 
 
+def _build_arbiter(work_dir: Path, anthropic_client):
+    """The AI judge handed to the lyrics fetch: shows Claude the lyrics and the saved transcript and
+    gets a verdict per unmatched stretch (lyrics wrong vs recognizer failed)."""
+    def judge(lines, match):
+        segments = load_transcript_segments(work_dir)
+        if not segments:
+            return None
+        print("No lyrics source matched the audio exactly; asking Claude to judge whether the lyrics or the "
+              "speech recognition is at fault...")
+        return arbitrate(anthropic_client, lines, match, segments)
+
+    return judge
+
+
 def run_pipeline(
     audio_path: Path,
     work_dir: Path,
@@ -383,9 +398,11 @@ def run_pipeline(
         lyrics_anthropic_client = anthropic.Anthropic()
         audio_check = _build_audio_check(vocals_path, work_dir)
         reconcile = _build_reconcile(work_dir, lyrics_anthropic_client) if audio_check is not None else None
+        arbiter = _build_arbiter(work_dir, lyrics_anthropic_client) if audio_check is not None else None
         lines_text, lyrics_source, lyrics_concern = fetch_lyric_lines_verified(
             audio_path, info_data["title"], info_data["artist"], info_data["duration"],
             info_data.get("alt_titles"), lyrics_anthropic_client, audio_check=audio_check, reconcile=reconcile,
+            arbiter=arbiter,
         )
         if audio_check is not None:
             if lyrics_concern:
@@ -393,6 +410,11 @@ def run_pipeline(
                     f"WARNING: the lyrics could not be confirmed against the audio "
                     f"({lyrics_source or 'no source'}): {lyrics_concern} This song is held in "
                     "Flagged for Lyrics Review instead of auto-uploading.", file=sys.stderr,
+                )
+            elif lyrics_source.endswith("+ai-confirmed"):
+                print(
+                    f"Lyrics accepted after AI review (source: {lyrics_source.split('+')[0]}): the stretches the "
+                    "audio check could not match were judged speech-recognition errors, not lyric errors."
                 )
             else:
                 print(f"Lyrics verified against the audio (source: {lyrics_source}).")

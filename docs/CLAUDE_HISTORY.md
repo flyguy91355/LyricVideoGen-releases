@@ -3057,3 +3057,37 @@ reasoning and returned no text; the request now uses `max_tokens=16000` and `out
 Consequence to remember: a genuinely accurate lyric file cannot be generated from Whisper's output on loud/produced
 recordings; the reliable fixes are a better lyrics source or a sidecar `.lrc`/`.txt` the owner supplies (which the
 audio check then verifies).
+
+## 2026-09-19 (evening) — AI judge, upload hold, and the replace-on-YouTube report
+
+Owner asks, in order: (1) "AI should be able to take the whisper file plus the lyrics file and figure out the
+proper lyrics"; (2) stop uploads until the videos are analyzed; (3) check the older songs too, including which
+need replacing on YouTube.
+
+**AI as JUDGE, not copyist (`lyric_arbiter.py`).** Copying Whisper's words into the lyrics measurably made them
+worse (see the entry above). Judging works: Claude is shown the numbered lyric file + transcript + the unmatched
+stretches (and the text of any sung-but-unexplained words) and returns a verdict per stretch --
+`recognizer_error` (lyrics coherent, transcript garbled/looping/a phonetic mishearing), `lyrics_wrong`
+(transcript clearly holds different coherent lyrics) or `unsure` -- plus whether a sung section is missing. It writes
+no lyrics. `confirmed` only if EVERY stretch is a recognizer error and no section is missing; forgotten/unsure/
+unparseable stays held. Measured on real data: songs whose lyrics I believe right but Whisper can't hear -> 3 of 4
+confirmed (the 4th, Beat It, was held over a possibly-missing section); 8 of 8 deliberately corrupted songs (another
+song's lines, or a verse removed) were NOT confirmed, with the wrong range pinpointed. `fetch_lyric_lines_verified(
+arbiter=...)` accepts a confirmed source as `<source>+ai-confirmed` (concern ""), and adds the judge's reasons to
+the held note otherwise; `pipeline._build_arbiter` wires it (only when Whisper ran). Sonnet 5 request: max_tokens
+16000, `output_config={"effort": "medium"}` (thinking is on by default and ate a 2000-token budget).
+
+**Upload hold (`verify_lyrics.UNCHECKED_HOLD`, `--hold-pending`).** A non-empty concern already keeps a song out of
+both auto-upload paths and the running app re-reads it from disk each time, so writing a hold marker onto every
+waiting, unchecked song stops uploads NOW with no restart (39 songs held; 4 already-verified stayed free). The
+analysis processes held songs first and releases each one that verifies (concern cleared) or replaces the hold with
+the real reason. New songs need the app restarted to run the in-pipeline check.
+
+**Older songs (`verify_lyrics`).** Uploaded songs that fail are now flagged too (`flagged-uploaded`; they are not on
+the pending review list, which is for songs not yet uploaded). `--recheck-flagged` re-judges flags the audio check
+alone wrote (recognized by describe_mismatch's phrases; a concern from the older Claude text check is never touched).
+
+**`replace_report.py` (read-only).** Lists uploaded songs still carrying a concern, grouped: still scheduled (not yet
+public, easiest to swap) / already public (most viewed first) / no longer on YouTube, with links. Respects the quota
+cooldown (no YouTube calls while it is active). It never deletes, edits or uploads: replacing a video needs correct
+lyrics first, which the check cannot reliably produce, and deleting is the owner's per-song call.

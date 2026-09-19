@@ -132,14 +132,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `.lrc`/`.txt` beside `work_dir`'s audio copy, 9-15; lrclib.net edition-consensus
    voting, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes,
    into `lyric_lines.json`/`Song`. Passing = matching what faster-whisper HEARS in the
-   vocal stem (medium, cached `transcript.json`, VAD off): >=70% in-order word
-   coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing
-   vocals ignored). None passing keeps the best match flagged: no auto-upload, listed
-   in "Flagged for Lyrics Review". Claude's proposed fix (`lyric_reconcile.py`) is only
-   SAVED as `lyrics_suggested.txt`, never applied: it "improved" matches with Whisper's
-   mishearings. `python -m lyricvideo.verify_lyrics [--flag]` re-checks finished songs.
-   Whisper unavailable -> old Claude text check. LRC timestamps discarded. Plain text
-   splits directly (9-14).
+   vocal stem (medium, VAD off): >=70% in-order word coverage, no run of >3 unmatched lines
+   or >12 sung words the lyrics lack (backing vocals ignored). None passing keeps the best
+   match flagged: no auto-upload, listed in "Flagged for Lyrics Review". Claude then
+   JUDGES unmatched stretches (`lyric_arbiter.py`: all recognizer failures -> accepted);
+   its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. `python -m
+   lyricvideo.verify_lyrics -h` re-checks finished songs; `replace_report` lists uploaded.
+   Whisper unavailable -> old Claude text check. LRC timestamps discarded.
 4. **align** — forced word-level alignment (`align.py`) against the isolated
    vocal stem, timing `fetch_lyrics`'s text; `combine.py` merges the timing onto
    the lines (a last word ending microseconds past the stem's duration is a

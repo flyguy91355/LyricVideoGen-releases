@@ -440,3 +440,83 @@ def test_a_repair_that_returns_nothing_or_crashes_keeps_the_original_flagged(tmp
         )
         assert (lines, source) == (half_right, "lrclib")
         assert "match what is sung" in concern
+
+
+# --- AI judge (2026-09-19): decide whether an unmatched stretch is the lyrics' fault or the recognizer's ---
+
+def _confirming_arbiter():
+    from lyricvideo.lyric_arbiter import Arbitration
+
+    return lambda lines, match: Arbitration(confirmed=True)
+
+
+def test_a_source_the_ai_judges_to_be_a_recognizer_failure_is_accepted_and_marked_as_such(tmp_path, monkeypatch):
+    """Real finding: on songs whose lyrics are right but Whisper can't hear (loud rock), the judge said
+    'recognizer error' 3 of 4 times; on 8 deliberately corrupted songs it never confirmed."""
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _one_half_right_source(monkeypatch)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+        audio_check=_audio_check_for(_SUNG), arbiter=_confirming_arbiter(),
+    )
+
+    assert lines == half_right
+    assert source == "lrclib+ai-confirmed"
+    assert concern == ""                         # accepted: no longer held for review
+
+
+def test_a_judgement_that_finds_the_lyrics_wrong_adds_its_reasons_to_the_held_note(tmp_path, monkeypatch):
+    from lyricvideo.lyric_arbiter import Arbitration, RangeVerdict
+
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _one_half_right_source(monkeypatch)
+    verdict = Arbitration(False, [RangeVerdict(3, 4, "lyrics_wrong", "the audio has a different verse here")])
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+        audio_check=_audio_check_for(_SUNG), arbiter=lambda lines, match: verdict,
+    )
+
+    assert (lines, source) == (half_right, "lrclib")
+    assert "match what is sung" in concern
+    assert "different verse here" in concern and "lines 3-4" in concern
+
+
+def test_an_unusable_or_crashing_judge_leaves_the_song_held(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _one_half_right_source(monkeypatch)
+
+    def crash(lines, match):
+        raise RuntimeError("API down")
+
+    for arbiter in (lambda lines, match: None, crash):
+        lines, source, concern = fetch_lyric_lines_verified(
+            audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+            audio_check=_audio_check_for(_SUNG), arbiter=arbiter,
+        )
+        assert (lines, source) == (half_right, "lrclib")
+        assert "match what is sung" in concern
+
+
+def test_the_judge_is_not_consulted_when_a_source_already_matches(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(_SUNG), False, 0.0))
+
+    def must_not_run(*a, **k):
+        raise AssertionError("nothing to judge")
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+        audio_check=_audio_check_for(_SUNG), arbiter=must_not_run,
+    )
+
+    assert (lines, source, concern) == (_SUNG, "lrclib", "")

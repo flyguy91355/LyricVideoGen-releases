@@ -64,6 +64,7 @@ class AudioMatch:
     line_supported: list[bool] = field(default_factory=list)   # one flag per lyric line
     worst_run: int = 0                 # longest run of consecutive unsupported lines
     worst_heard_gap: int = 0           # longest run of sung content words no lyric line explains
+    gap_text: str = ""                 # the words of that longest unexplained run (for a reviewer)
     unsupported_ranges: list[tuple[int, int]] = field(default_factory=list)  # 1-based, inclusive
 
 
@@ -124,13 +125,15 @@ def _collapse_loops(tokens: list[str], max_ngram: int = 8) -> list[str]:
     return out
 
 
-def _worst_unexplained_run(heard: list[str], lyric_words: list[str]) -> int:
+def _worst_unexplained_run(heard: list[str], lyric_words: list[str]) -> tuple[int, list[str]]:
+    """(length, words) of the longest run of consecutive heard words no lyric word explains."""
     explained = _matched_lyric_positions(heard, lyric_words) if heard and lyric_words else set()
-    run = worst = 0
+    run = worst = worst_end = 0
     for i in range(len(heard)):
         run = 0 if i in explained else run + 1
-        worst = max(worst, run)
-    return worst
+        if run > worst:
+            worst, worst_end = run, i + 1
+    return worst, heard[worst_end - worst:worst_end]
 
 
 def _repeat_owners(line_tokens: list[list[str]]) -> list[int]:
@@ -242,14 +245,16 @@ def score_lyrics_against_transcript(lyric_lines: list[str], heard_text: str) -> 
     # not be heard, but when they are (or when Whisper transcribes both copies of a repeat)
     # they still explain what was sung.
     every_lyric_word = [w for line in lyric_lines for w in _content(_tokens(line))]
+    # Loops are trimmed ONLY here: a hallucinated loop must not count as a missing verse,
+    # but a real repeated line must still be there to support the lyric lines.
+    gap, gap_words = _worst_unexplained_run(_collapse_loops(heard), every_lyric_word)
     return AudioMatch(
         coverage=len(matched) / len(flat) if flat else 0.0,
         heard_words=len(heard_all),
         line_supported=line_supported,
         worst_run=worst_run,
-        # Loops are trimmed ONLY here: a hallucinated loop must not count as a missing verse,
-        # but a real repeated line must still be there to support the lyric lines.
-        worst_heard_gap=_worst_unexplained_run(_collapse_loops(heard), every_lyric_word),
+        worst_heard_gap=gap,
+        gap_text=" ".join(gap_words),
         unsupported_ranges=ranges,
     )
 

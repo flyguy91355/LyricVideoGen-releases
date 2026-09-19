@@ -26,6 +26,7 @@ import requests
 
 from .lyric_accuracy import check_lyric_accuracy
 from .lyric_audio_match import AudioMatch, audio_match_passes, describe_mismatch
+from .lyric_arbiter import Arbitration, describe_arbitration
 from .lyric_reconcile import SUGGESTION_FILENAME
 from .text_clean import artist_key, normalize
 from .vocal_onset import vocal_onset_rise
@@ -429,6 +430,7 @@ def fetch_lyric_lines_verified(
     anthropic_client, model: str = "claude-sonnet-5",
     audio_check: Callable[[list[str]], AudioMatch] | None = None,
     reconcile: Callable[[list[str], AudioMatch], tuple[list[str], list[str]] | None] | None = None,
+    arbiter: Callable[[list[str], AudioMatch], Arbitration | None] | None = None,
 ) -> tuple[list[str], str, str]:
     """Like fetch_lyric_lines(), but tries every real source in
     _ACCURACY_CHECK_SOURCES in order, checking each, and returns as soon as
@@ -441,7 +443,12 @@ def fetch_lyric_lines_verified(
     text check, which never hears the audio and passed a different edition or a
     mixed-up verse/chorus, is not used at all. If no source matches, the one
     with the BEST audio match is kept and flagged (its concern names the lines
-    that don't match). With `reconcile` too, a repair is proposed for that best candidate
+    that don't match). With `arbiter` (lyric_arbiter.py), Claude then JUDGES that candidate's unmatched
+    stretches -- lyrics wrong, or the speech recognizer merely failed? -- and if every stretch is a
+    recognizer failure the candidate is accepted (source suffixed "+ai-confirmed", concern ""); otherwise
+    its reasons are added to the held note. Judging works where copying did not: 8 of 8 deliberately
+    corrupted songs were never confirmed, and 3 of 4 right-lyrics/hard-to-hear songs were.
+    With `reconcile` too, a repair is proposed for that best candidate
     (lyric_reconcile.py) and, if it would match the audio better, is mentioned in the
     concern as a possible fix -- but NEVER applied: on real songs the "improvement" was
     Whisper's own mishearings replacing correct lyrics (text built from the recognizer's
@@ -481,6 +488,18 @@ def fetch_lyric_lines_verified(
             return lines, source, ""
         if not best_lines:
             best_lines, best_source, best_concern = lines, source, concern
+    if audio_check is not None and arbiter is not None and best_lines and best_match is not None:
+        try:
+            judgement = arbiter(best_lines, best_match)
+        except Exception as e:  # a failed judgement must never stop the song; it just stays held
+            log.warning("Lyric judgement failed: %s: %s", type(e).__name__, e)
+            judgement = None
+        if judgement is not None:
+            if judgement.confirmed:
+                return best_lines, f"{best_source}+ai-confirmed", ""
+            review = describe_arbitration(judgement)
+            if review:
+                best_concern += " " + review
     if audio_check is not None and reconcile is not None and best_lines and best_match is not None:
         try:
             repair = reconcile(best_lines, best_match)

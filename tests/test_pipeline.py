@@ -912,3 +912,56 @@ def test_run_pipeline_offers_no_repair_step_when_the_audio_could_not_be_checked(
     run_pipeline(Path("audio.mp3"), tmp_path / "work")
 
     assert seen["reconcile"] is None
+
+
+def test_run_pipeline_gives_the_lyrics_fetch_an_ai_judge_that_reads_the_saved_transcript(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    segments = [{"start": 1.0, "end": 3.0, "text": "hello there my friend"}]
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_segments", lambda work_dir: segments)
+    calls = {}
+
+    def fake_arbitrate(client, lines, match, segs):
+        calls.update(client=client, lines=lines, segments=segs)
+        return "the-judgement"
+
+    monkeypatch.setattr("lyricvideo.pipeline.arbitrate", fake_arbitrate)
+    seen = {}
+
+    def fake_fetch(*args, **kwargs):
+        seen["arbiter"] = kwargs.get("arbiter")
+        return ["hello there"], "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fake_fetch)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert seen["arbiter"](["some line"], object()) == "the-judgement"
+    assert calls["lines"] == ["some line"] and calls["segments"] == segments
+
+
+def test_run_pipeline_offers_no_ai_judge_when_the_audio_could_not_be_checked(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    seen = {}
+
+    def fake_fetch(*args, **kwargs):
+        seen["arbiter"] = kwargs.get("arbiter", "missing")
+        return ["hello there"], "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fake_fetch)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert seen["arbiter"] is None
+
+
+def test_run_pipeline_says_when_ai_review_accepted_lyrics_the_recognizer_could_not_confirm(tmp_path, monkeypatch, capsys):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified", lambda *a, **k: (["hello there"], "lrclib+ai-confirmed", ""),
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    out = capsys.readouterr().out
+    assert "AI review" in out and "speech-recognition" in out and "lrclib" in out

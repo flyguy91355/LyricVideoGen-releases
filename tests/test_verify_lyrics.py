@@ -82,12 +82,24 @@ def test_an_existing_concern_is_never_overwritten(tmp_path):
     assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == "Looks like a different edition."
 
 
-def test_an_uploaded_song_is_reported_but_never_flagged(tmp_path):
-    """An uploaded video can't be recalled and flagged songs only matter while pending."""
+def test_an_uploaded_song_that_fails_is_flagged_too_and_reported_as_uploaded(tmp_path):
+    """Owner (2026-09-19): check the older songs too, including ones already on YouTube -- they may
+    need replacing there. The flag is recorded on the song; being uploaded keeps it OFF the
+    pending 'Flagged for Lyrics Review' list (that list is for songs not yet uploaded)."""
     work_dir = make_song_dir(tmp_path, "uploaded", WRONG)
     save_youtube_state(work_dir, YoutubeState(video_id="abc", uploaded_at="2026-09-01T00:00:00", title="t"))
 
     verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=True)
+
+    assert verdict.status == "flagged-uploaded"
+    assert "match what is sung" in load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+
+
+def test_an_uploaded_song_is_only_reported_in_report_mode(tmp_path):
+    work_dir = make_song_dir(tmp_path, "uploaded", WRONG)
+    save_youtube_state(work_dir, YoutubeState(video_id="abc", uploaded_at="2026-09-01T00:00:00", title="t"))
+
+    verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=False)
 
     assert verdict.status == "mismatch-uploaded"
     assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == ""
@@ -136,3 +148,214 @@ def test_folders_without_a_finished_song_are_ignored(tmp_path):
 
     assert [v.slug for v in verdicts] == ["real"]
     json.dumps([v.__dict__ for v in verdicts])  # verdicts must be JSON-serialisable for the report file
+
+
+def test_a_flag_run_redoes_songs_an_earlier_run_only_reported(tmp_path, monkeypatch):
+    """An earlier run (or an earlier version) may have left uploaded/mismatched songs merely reported.
+    Resuming with --flag must process those again so they actually get flagged."""
+    from lyricvideo import verify_lyrics
+
+    report = tmp_path / "report.jsonl"
+    report.write_text("\n".join(json.dumps({"slug": s, "status": st}) for s, st in [
+        ("done-ok", "verified"), ("was-only-reported", "mismatch-uploaded"), ("earlier-crash", "error"),
+        ("already-held", "flagged"),
+    ]) + "\n")
+    seen = {}
+    monkeypatch.setattr(verify_lyrics, "verify_all", lambda *a, **k: seen.update(skip=k["skip"]) or [])
+
+    verify_lyrics.main(["--work-root", str(tmp_path), "--report", str(report), "--flag", "--no-ai"])
+    assert seen["skip"] == {"done-ok", "already-held"}
+
+    verify_lyrics.main(["--work-root", str(tmp_path), "--report", str(report), "--no-ai"])  # report-only: reported ones are done
+    assert seen["skip"] == {"done-ok", "already-held", "was-only-reported"}
+
+
+# --- upload hold (owner, 2026-09-19: "stop the uploads until the videos are analyzed") ------
+
+def add_video(work_dir):
+    from lyricvideo.pipeline import slugify
+
+    (work_dir / f"{slugify(work_dir.name)}.mp4").write_bytes(b"video")
+
+
+def test_hold_pending_holds_only_unchecked_songs_that_are_waiting_to_upload(tmp_path):
+    from lyricvideo.verify_lyrics import UNCHECKED_HOLD, hold_unchecked
+
+    waiting = make_song_dir(tmp_path, "waiting", SUNG); add_video(waiting)
+    checked_ok = make_song_dir(tmp_path, "checked-ok", SUNG); add_video(checked_ok)
+    already_flagged = make_song_dir(tmp_path, "already-flagged", SUNG, concern="Wrong edition."); add_video(already_flagged)
+    uploaded = make_song_dir(tmp_path, "uploaded", SUNG); add_video(uploaded)
+    save_youtube_state(uploaded, YoutubeState(video_id="abc", uploaded_at="2026-09-01T00:00:00", title="t"))
+    make_song_dir(tmp_path, "not-rendered", SUNG)                     # no video yet
+
+    held = hold_unchecked(tmp_path, already_verified={"checked-ok"})
+
+    assert held == ["waiting"]
+    assert load_song(waiting / "lyrics_timed.json").lyrics_accuracy_concern == UNCHECKED_HOLD
+    assert load_song(checked_ok / "lyrics_timed.json").lyrics_accuracy_concern == ""
+    assert load_song(already_flagged / "lyrics_timed.json").lyrics_accuracy_concern == "Wrong edition."
+    assert load_song(uploaded / "lyrics_timed.json").lyrics_accuracy_concern == ""
+
+
+def test_a_held_song_that_checks_out_is_released_when_flagging(tmp_path):
+    from lyricvideo.verify_lyrics import UNCHECKED_HOLD
+
+    work_dir = make_song_dir(tmp_path, "held", SUNG, concern=UNCHECKED_HOLD)
+
+    verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=True)
+
+    assert verdict.status == "verified"
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == ""   # uploads may resume
+
+
+def test_a_held_song_that_fails_gets_the_real_reason_instead_of_the_hold(tmp_path):
+    from lyricvideo.verify_lyrics import UNCHECKED_HOLD
+
+    work_dir = make_song_dir(tmp_path, "held", WRONG, concern=UNCHECKED_HOLD)
+
+    verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=True)
+
+    assert verdict.status == "flagged"
+    assert "match what is sung" in load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+
+
+def test_report_mode_leaves_a_hold_exactly_as_it_is(tmp_path):
+    from lyricvideo.verify_lyrics import UNCHECKED_HOLD
+
+    work_dir = make_song_dir(tmp_path, "held", SUNG, concern=UNCHECKED_HOLD)
+
+    verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=False)
+
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == UNCHECKED_HOLD
+
+
+def test_a_held_song_that_cannot_be_checked_stays_held(tmp_path):
+    from lyricvideo.verify_lyrics import UNCHECKED_HOLD
+
+    work_dir = make_song_dir(tmp_path, "held", SUNG, concern=UNCHECKED_HOLD, with_stem=False)
+
+    verdict = verify_song(work_dir, transcribe=hears("x"), flag=True)
+
+    assert verdict.status == "no-stem"
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == UNCHECKED_HOLD
+
+
+def test_held_songs_are_checked_first_because_they_are_blocking_uploads(tmp_path):
+    from lyricvideo.verify_lyrics import UNCHECKED_HOLD
+
+    make_song_dir(tmp_path, "a-free", SUNG)
+    make_song_dir(tmp_path, "b-held", SUNG, concern=UNCHECKED_HOLD)
+    make_song_dir(tmp_path, "c-held", SUNG, concern=UNCHECKED_HOLD)
+
+    verdicts = verify_all(tmp_path, transcribe=hears(" ".join(SUNG)))
+
+    assert [v.slug for v in verdicts] == ["b-held", "c-held", "a-free"]
+
+
+# --- AI judge for the older songs (2026-09-19) -------------------------------------------------
+
+def judge_confirms(lines, match, segments):
+    from lyricvideo.lyric_arbiter import Arbitration
+
+    return Arbitration(confirmed=True)
+
+
+def judge_finds_wrong(lines, match, segments):
+    from lyricvideo.lyric_arbiter import Arbitration, RangeVerdict
+
+    return Arbitration(False, [RangeVerdict(1, 3, "lyrics_wrong", "the audio has a different verse here")])
+
+
+WHISPER_ONLY_FLAG = "Only 40% of these lyrics match what is sung; lines 1-6 don't match the audio."
+
+
+def test_a_song_the_ai_judges_a_recognizer_failure_is_accepted_and_its_hold_released(tmp_path):
+    from lyricvideo.verify_lyrics import UNCHECKED_HOLD
+
+    work_dir = make_song_dir(tmp_path, "held", WRONG, concern=UNCHECKED_HOLD)
+
+    verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=True, arbiter=judge_confirms, load_segments=lambda d: [])
+
+    assert verdict.status == "verified-ai"
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == ""
+
+
+def test_when_the_ai_finds_the_lyrics_wrong_its_reasons_are_recorded_with_the_flag(tmp_path):
+    work_dir = make_song_dir(tmp_path, "bad", WRONG)
+
+    verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=True, arbiter=judge_finds_wrong, load_segments=lambda d: [])
+
+    assert verdict.status == "flagged"
+    concern = load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+    assert "match what is sung" in concern and "different verse here" in concern
+
+
+def test_recheck_clears_an_earlier_whisper_only_flag_when_the_ai_confirms_the_lyrics(tmp_path):
+    work_dir = make_song_dir(tmp_path, "flagged-earlier", WRONG, concern=WHISPER_ONLY_FLAG)
+
+    without = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=True, arbiter=judge_confirms, load_segments=lambda d: [])
+    assert without.status == "already-flagged"                       # no --recheck-flagged: left alone
+
+    verdict = verify_song(
+        work_dir, transcribe=hears(" ".join(SUNG)), flag=True, arbiter=judge_confirms,
+        load_segments=lambda d: [], recheck=True,
+    )
+
+    assert verdict.status == "verified-ai"
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == ""
+
+
+def test_recheck_never_touches_a_concern_the_audio_check_did_not_write(tmp_path):
+    work_dir = make_song_dir(tmp_path, "other-concern", WRONG, concern="Looks like a different edition of the song.")
+
+    verdict = verify_song(
+        work_dir, transcribe=hears(" ".join(SUNG)), flag=True, arbiter=judge_confirms,
+        load_segments=lambda d: [], recheck=True,
+    )
+
+    assert verdict.status == "already-flagged"
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == "Looks like a different edition of the song."
+
+
+def test_report_mode_with_the_judge_writes_nothing(tmp_path):
+    work_dir = make_song_dir(tmp_path, "bad", WRONG)
+    before = (work_dir / "lyrics_timed.json").read_text()
+
+    verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=False, arbiter=judge_confirms, load_segments=lambda d: [])
+
+    assert verdict.status == "verified-ai"
+    assert (work_dir / "lyrics_timed.json").read_text() == before
+
+
+def test_a_judge_that_fails_leaves_the_song_flagged_on_the_audio_check_alone(tmp_path):
+    work_dir = make_song_dir(tmp_path, "bad", WRONG)
+
+    def broken(lines, match, segments):
+        raise RuntimeError("API down")
+
+    verdict = verify_song(work_dir, transcribe=hears(" ".join(SUNG)), flag=True, arbiter=broken, load_segments=lambda d: [])
+
+    assert verdict.status == "flagged"
+    assert "match what is sung" in load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+
+
+def test_main_runs_the_ai_judge_unless_told_not_to_and_rechecks_flagged_songs_on_request(tmp_path, monkeypatch):
+    from lyricvideo import verify_lyrics
+
+    report = tmp_path / "r.jsonl"
+    report.write_text("\n".join(json.dumps({"slug": s, "status": st}) for s, st in [
+        ("ok", "verified"), ("was-flagged", "flagged"), ("uploaded-flagged", "flagged-uploaded"),
+    ]) + "\n")
+    seen = {}
+    monkeypatch.setattr(verify_lyrics, "_make_arbiter", lambda: "the-arbiter")
+    monkeypatch.setattr(verify_lyrics, "verify_all", lambda *a, **k: seen.update(k) or [])
+
+    verify_lyrics.main(["--work-root", str(tmp_path), "--report", str(report), "--flag"])
+    assert seen["arbiter"] == "the-arbiter" and seen["recheck"] is False
+    assert seen["skip"] == {"ok", "was-flagged", "uploaded-flagged"}
+
+    verify_lyrics.main(["--work-root", str(tmp_path), "--report", str(report), "--flag", "--no-ai"])
+    assert seen["arbiter"] is None
+
+    verify_lyrics.main(["--work-root", str(tmp_path), "--report", str(report), "--flag", "--recheck-flagged"])
+    assert seen["recheck"] is True and seen["skip"] == {"ok"}       # flagged ones are judged again

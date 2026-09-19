@@ -270,3 +270,19 @@ def test_parenthesized_backing_lines_that_are_heard_count_as_supported():
     assert match.line_supported[5:8] == [True, True, True]  # the heard backing lines
     assert match.line_supported[4] is False and match.line_supported[8] is False  # unheard leads stay flagged
     assert match.worst_run == 1
+
+
+def test_the_words_of_the_longest_unexplained_stretch_are_reported():
+    """So a reviewer (or the AI arbiter) can see WHAT was sung that the lyric file lacks."""
+    lyric = V1 + CHORUS + CHORUS + BRIDGE + CHORUS  # verse two is sung but missing
+
+    match = score_lyrics_against_transcript(lyric, whisper_like(SUNG_ORDER))
+
+    assert match.worst_heard_gap >= 12
+    assert "winter" in match.gap_text and "market" in match.gap_text
+
+
+def test_a_song_with_nothing_unexplained_has_no_gap_text():
+    match = score_lyrics_against_transcript(SUNG_ORDER, whisper_like(SUNG_ORDER))
+
+    assert match.gap_text == "" or len(match.gap_text.split()) <= 3
