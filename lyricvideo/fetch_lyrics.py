@@ -423,6 +423,9 @@ _CREDIT_LINE_RE = re.compile(
 )
 
 
+_MISSING_SPACE_RE = re.compile(r"([,!?;])(?=[A-Za-z])")
+
+
 def _clean_timed_rows(rows: list[tuple[str, float]]) -> tuple[list[str], list[float]]:
     """Drops provider credit lines and normalises full-width punctuation ("（" -> "(", "，" -> ",") --
     NetEase's Night Moves showed '作曲 : Bob Seger' as the first lyric for the whole intro, and a stray
@@ -434,6 +437,7 @@ def _clean_timed_rows(rows: list[tuple[str, float]]) -> tuple[list[str], list[fl
         if _CREDIT_LINE_RE.match(row):
             continue
         row = unicodedata.normalize("NFKC", row).strip()
+        row = _MISSING_SPACE_RE.sub(r"\1 ", row)      # "Oh,when" -> "Oh, when" (NetEase); "1,000" is left alone
         if row.endswith("(") and row.count("(") > row.count(")"):
             row = row[:-1].rstrip()
         if row:

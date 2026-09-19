@@ -3167,3 +3167,18 @@ YouTube, e.g. the damaged Ironic); Edit Lyrics saves `lyrics_owner.txt` (`owner_
 (no online source, AI or audio check overrides it; Whisper words are still fetched for anchoring; timing is still checked).
 Limits: sync can only be verified when Whisper/lrclib give enough anchors (>= 4 lines and 25%); songs whose lyrics come from a
 source without timestamps, on loud recordings Whisper cannot hear, are left on the whole-song alignment.
+
+## 2026-09-19 (night, later) — Redo record, live status page, comma spacing
+
+- `redo_log.py` (`~/.playalongvideoproduction/redone_songs.json`): every redo is recorded -- started by `backup_song_outputs()`
+  (so the GUI's Redo, a Batch regenerate and scripts all log it), finished by `run_pipeline()` with the song's concern.
+  Records whether the song was already on YouTube; `youtube_replacements_pending()` lists finished redos of uploaded songs whose
+  new version has not yet replaced the old one (`mark_replaced_on_youtube`). A redone song that is NOT on YouTube needs nothing:
+  the redo replaced its local file in place (old one in `redo_backup_<time>/`) and the normal upload flow picks it up.
+  `tests/conftest.py` redirects `LOG_FILE` so tests never touch the real record.
+- NetEase writes some lines without a space after a comma ("Oh,when the working day is done"); `_MISSING_SPACE_RE` restores it
+  ("1,000" is untouched).
+- Redo of Girls Just Want to Have Fun (timing check: whole-song alignment agreed 3% -> anchored 89%; 90% agree with Whisper's own
+  word times, 69/76 within 2 s of NetEase's timestamps, none >5 s off). The lyric source changed to NetEase (76 lines; the old
+  lrclib text lacked the repeated ending choruses), so the redo generated 47 new images -- a redo only reuses images whose lyric
+  text is unchanged.

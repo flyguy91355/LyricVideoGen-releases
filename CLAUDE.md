@@ -292,9 +292,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
 pre-MP3-only-merge pipeline (a `"chord"` key on word dicts, `"instrumental_chords"`
 instead of `"chord_track"`) — it reads only `Word`'s own current fields rather than
 splatting the whole legacy dict, and a missing `"chord_track"` key degrades to an
-empty `ChordTrack` rather than raising. Legacy chord/word data is silently dropped,
-never migrated — correct, since Redo resumes before lyrics/chords are regenerated
-anyway. Re-runs a previously completed song through the current code, picking up
+empty `ChordTrack` rather than raising. Legacy chord/word data is silently dropped
+(Redo regenerates it). Re-runs a previously completed song through the current code, picking up
 fixes made since the original run without re-running Demucs. A redo resumes at
 `"fetch_lyrics"` (there is no `parsed_tab.json` to reuse post-merge — lyrics are
 re-fetched and chords re-detected fresh on every redo, both cheap relative to
@@ -310,7 +309,7 @@ app's existing cost-conscious convention) forces fresh images via
 `images_prior_<timestamp>/`, deliberately NOT `images_backup_*` (that name is
 auto-searched for reuse by the images stage, which would silently defeat "generate
 new"). `backup_song_outputs()` always copies the current video + `lyrics_timed.json`
-into `work_dir/redo_backup_<timestamp>/` before a redo touches anything.
+into `work_dir/redo_backup_<timestamp>/` before a redo touches anything. It also logs the redo (`redo_log.py`: redone songs already on YouTube still need replacing there).
 
 ## Notable pinned dependency
 

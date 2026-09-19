@@ -1255,3 +1255,50 @@ def test_list_flagged_songs_can_include_songs_already_uploaded(tmp_path):
 
     assert list_flagged_songs(work_root) == ["pending-song"]
     assert list_flagged_songs(work_root, include_uploaded=True) == ["pending-song", "uploaded-song"]
+
+
+# --- the permanent record of redone songs -----------------------------------------------------------
+
+def test_backing_up_a_song_for_a_redo_starts_a_redo_record(tmp_path):
+    from lyricvideo.redo_log import redone_songs
+
+    work_dir = tmp_path / "work" / "angie"
+    work_dir.mkdir(parents=True)
+    (work_dir / "angie.mp4").write_bytes(b"video")
+    (work_dir / "youtube_state.json").write_text(json.dumps({"video_id": "abc", "uploaded_at": "2026-09-01T00:00:00", "title": "t"}))
+
+    backup = backup_song_outputs(work_dir, "angie")
+
+    records = redone_songs()
+    assert len(records) == 1 and records[0]["slug"] == "angie" and records[0]["status"] == "started"
+    assert records[0]["on_youtube"] is True and records[0]["video_id"] == "abc"
+    assert records[0]["backup_dir"] == str(backup)
+
+
+def test_a_redo_that_finishes_completes_its_record_with_the_songs_concern(tmp_path, monkeypatch):
+    from lyricvideo.redo_log import redone_songs
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: (["hello there"], "lrclib", "Only 60% of these lyrics match what is sung."),
+    )
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "work.mp4").write_bytes(b"video")
+    backup_song_outputs(work_dir, "work")                       # what every redo path does first
+
+    run_pipeline(Path("audio.mp3"), work_dir, start_stage="fetch_lyrics")
+
+    record = redone_songs()[0]
+    assert record["status"] == "done" and record["set_aside"] is True and "60%" in record["concern"]
+
+
+def test_a_first_run_of_a_new_song_leaves_no_redo_record(tmp_path, monkeypatch):
+    from lyricvideo.redo_log import redone_songs
+
+    _patch_common(monkeypatch, tmp_path)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert redone_songs() == []

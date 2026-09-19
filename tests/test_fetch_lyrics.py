@@ -561,7 +561,7 @@ def test_full_width_punctuation_is_normalised_and_a_stray_trailing_bracket_is_dr
 
     assert _hit_to_lines((text, False, 0.0), 300.0) == [
         "And points all her own sitting way up high", "(Hey dudes!)",
-        "Workin' on mysteries, without any clues", "Hello,world",
+        "Workin' on mysteries, without any clues", "Hello, world",
     ]
 
 
@@ -667,3 +667,15 @@ def test_line_times_follow_the_best_candidate_when_none_match_and_the_judge_acce
 
     assert source == "lrclib+ai-confirmed"
     assert out["line_times"] == [10.0, 16.0, 22.0, 28.0]
+
+
+def test_a_missing_space_after_a_comma_or_bang_is_restored():
+    """Real ('Girls Just Want to Have Fun' from NetEase): "Oh,when the working day is done", "Oh,girls," ."""
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    text = "Oh,when the working day is done\nOh,girls,\nWow!Really?Yes\nIt costs 1,000 dollars, ok\nHello, world\n"
+
+    assert _hit_to_lines((text, False, 0.0), 300.0) == [
+        "Oh, when the working day is done", "Oh, girls,", "Wow! Really? Yes",
+        "It costs 1,000 dollars, ok", "Hello, world",
+    ]

@@ -27,6 +27,7 @@ from .lyric_arbiter import arbitrate
 from .lyric_audio_match import score_lyrics_against_transcript
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .owner_lyrics import owner_lyrics_lines
+from .redo_log import note_redo_finished, note_redo_started
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals, stems_look_complete
 from .sync import decide_alignment, sync_agreement
@@ -210,6 +211,10 @@ def backup_song_outputs(work_dir: Path, slug: str, now: datetime | None = None) 
         shutil.copy2(video_path, backup_dir / video_path.name)
     if timed_path.exists():
         shutil.copy2(timed_path, backup_dir / timed_path.name)
+    try:  # the permanent record of redone songs (redo_log.py); a logging problem must never break a redo
+        note_redo_started(work_dir, backup_dir)
+    except Exception as e:
+        print(f"WARNING: could not record this redo: {type(e).__name__}: {e}", file=sys.stderr)
     return backup_dir
 
 
@@ -614,6 +619,10 @@ def run_pipeline(
             **assemble_kwargs,
         )
 
+    try:  # completes the redo record started by backup_song_outputs (a no-op for a brand-new song)
+        note_redo_finished(work_dir, concern=song.lyrics_accuracy_concern)
+    except Exception as e:
+        print(f"WARNING: could not record this redo: {type(e).__name__}: {e}", file=sys.stderr)
     report("done")
     return final_path
 
