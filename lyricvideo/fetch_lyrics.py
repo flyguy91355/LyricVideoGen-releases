@@ -423,34 +423,50 @@ _CREDIT_LINE_RE = re.compile(
 )
 
 
-def _clean_lyric_lines(rows: list[str]) -> list[str]:
+def _clean_timed_rows(rows: list[tuple[str, float]]) -> tuple[list[str], list[float]]:
     """Drops provider credit lines and normalises full-width punctuation ("（" -> "(", "，" -> ",") --
     NetEase's Night Moves showed '作曲 : Bob Seger' as the first lyric for the whole intro, and a stray
-    full-width bracket at a line's end rendered as an empty box. A trailing unclosed "(" is dropped."""
-    cleaned: list[str] = []
-    for row in rows:
+    full-width bracket at a line's end rendered as an empty box. A trailing unclosed "(" is dropped. Each
+    row's time (0.0 when there is none) stays attached to the line it belongs to."""
+    lines: list[str] = []
+    times: list[float] = []
+    for row, when in rows:
         if _CREDIT_LINE_RE.match(row):
             continue
         row = unicodedata.normalize("NFKC", row).strip()
         if row.endswith("(") and row.count("(") > row.count(")"):
             row = row[:-1].rstrip()
         if row:
-            cleaned.append(row)
-    return cleaned
+            lines.append(row)
+            times.append(when)
+    return lines, times
 
 
-def _hit_to_lines(hit: Hit, duration: float) -> list[str]:
+def _clean_lyric_lines(rows: list[str]) -> list[str]:
+    return _clean_timed_rows([(row, 0.0) for row in rows])[0]
+
+
+def _hit_to_lines_and_times(hit: Hit, duration: float) -> tuple[list[str], list[float] | None]:
+    """The lyric lines and, for a SYNCED source (lrclib, NetEase...), each line's timestamp from that source --
+    a human-made second opinion on where the line sits, used by anchors.combine_anchors (the timestamps never
+    become the video's timing; the aligner still does that)."""
     text, synced, _ref_duration = hit
     if synced and not text.strip():
-        return []  # provider flagged this track instrumental
+        return [], None  # provider flagged this track instrumental
     if synced:
-        return _clean_lyric_lines([l.text for l in parse_lrc(text, duration) if l.text.strip()])
+        parsed = [l for l in parse_lrc(text, duration) if l.text.strip()]
+        lines, times = _clean_timed_rows([(l.text, float(l.start)) for l in parsed])
+        return lines, times
     # Plain lyrics: the text IS the result -- no timing is derived from it
     # here, so this must not go through plain_to_lines(), whose evenly-spread
     # fake timing needs a positive duration and returns NOTHING for a file
     # whose length couldn't be probed -- real lyrics were being thrown away
     # in exactly that case (found by code review, 2026-09-14).
-    return _clean_lyric_lines([row.strip() for row in text.splitlines() if row.strip()])
+    return _clean_lyric_lines([row.strip() for row in text.splitlines() if row.strip()]), None
+
+
+def _hit_to_lines(hit: Hit, duration: float) -> list[str]:
+    return _hit_to_lines_and_times(hit, duration)[0]
 
 
 def fetch_lyric_lines_verified(
@@ -459,6 +475,7 @@ def fetch_lyric_lines_verified(
     audio_check: Callable[[list[str]], AudioMatch] | None = None,
     reconcile: Callable[[list[str], AudioMatch], tuple[list[str], list[str]] | None] | None = None,
     arbiter: Callable[[list[str], AudioMatch], Arbitration | None] | None = None,
+    times_out: dict | None = None,
 ) -> tuple[list[str], str, str]:
     """Like fetch_lyric_lines(), but tries every real source in
     _ACCURACY_CHECK_SOURCES in order, checking each, and returns as soon as
@@ -484,8 +501,17 @@ def fetch_lyric_lines_verified(
     Without `audio_check` (e.g. Whisper unavailable) the
     original behavior applies: check_lyric_accuracy() per source, and if none
     pass the FIRST non-empty candidate is kept with its concern. Either way
-    generation is never blocked and lyrics are never fabricated."""
+    generation is never blocked and lyrics are never fabricated.
+
+    `times_out` (a dict) receives "line_times": the chosen source's own timestamp for each returned line when
+    it was a synced source, else None -- a second opinion for the aligner (anchors.combine_anchors)."""
+    def finish(lines, source, concern, times):
+        if times_out is not None:
+            times_out["line_times"] = times if times and len(times) == len(lines) else None
+        return lines, source, concern
+
     best_lines: list[str] = []
+    best_times: list[float] | None = None
     best_source = ""
     best_concern = "No lyrics found from any source."
     best_badness = float("inf")
@@ -499,24 +525,24 @@ def fetch_lyric_lines_verified(
             hit = _fetch_syncedlyrics_hit(title, artist, providers=[source])
         if hit is None:
             continue
-        lines = _hit_to_lines(hit, duration)
+        lines, times = _hit_to_lines_and_times(hit, duration)
         if not lines:
             continue
         if audio_check is not None:
             match = audio_check(lines)
             if audio_match_passes(match):
-                return lines, source, ""
+                return finish(lines, source, "", times)
             badness = audio_match_badness(match)
             if badness < best_badness:  # strict: on a tie the earlier source stays
-                best_lines, best_source = lines, source
+                best_lines, best_source, best_times = lines, source, times
                 best_concern, best_badness = describe_mismatch(match), badness
                 best_match = match
             continue
         looks_accurate, concern = check_lyric_accuracy(anthropic_client, title, artist, lines, model=model)
         if looks_accurate:
-            return lines, source, ""
+            return finish(lines, source, "", times)
         if not best_lines:
-            best_lines, best_source, best_concern = lines, source, concern
+            best_lines, best_source, best_concern, best_times = lines, source, concern, times
     if audio_check is not None and arbiter is not None and best_lines and best_match is not None:
         try:
             judgement = arbiter(best_lines, best_match)
@@ -525,7 +551,7 @@ def fetch_lyric_lines_verified(
             judgement = None
         if judgement is not None:
             if judgement.confirmed:
-                return best_lines, f"{best_source}+ai-confirmed", ""
+                return finish(best_lines, f"{best_source}+ai-confirmed", "", best_times)
             review = describe_arbitration(judgement)
             if review:
                 best_concern += " " + review
@@ -544,7 +570,7 @@ def fetch_lyric_lines_verified(
                     "song's folder for you to review; it was NOT applied, because a fix built from what "
                     "the recognizer heard can be wrong."
                 )
-    return best_lines, best_source, best_concern
+    return finish(best_lines, best_source, best_concern, best_times)
 
 
 def _repair_is_better(new: AudioMatch, old: AudioMatch) -> bool:

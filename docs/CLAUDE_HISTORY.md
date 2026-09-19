@@ -3115,3 +3115,55 @@ call and frames from the video are in `~/night-moves-run-log/`). The video came 
 Re-run of Night Moves with the fixes: lrclib chosen, judge confirms every unmatched stretch as a recognizer error,
 accepted (`lrclib+ai-confirmed`), no credit lines. Other observations (not bugs): Replicate returned transient 503s while
 polling (handled) and one NSFW false positive on an innocent prompt (retried).
+
+## 2026-09-19 (late) — "Ironic": a damaged audio file made a broken video that was uploaded
+
+Picking the next song to redo (worst timing) found `ironic`: aligned line times 0.1 s..43 s for a 230 s song, vocal
+and instrumental stems only 43 s. Re-running Demucs gave 43 s again: the source `10 Ironic.m4a` is a PARTIAL file
+(4.2 MB for 3:49 of ALAC; ffmpeg: "partial file", "Packet corrupt") that the app accepted because its tags claim 3:49.
+Consequences: the aligner squeezed all 42 lines into the first 43 s, chords covered only 43 s, and the rendered video's
+audio is real music for ~40 s then a constant loud signal (identical RMS in every 10 s window) for ~3 minutes -- and that
+video (`Lcft28xNVIs`) was uploaded 2026-09-16. Scan of all 141 songs: Ironic is the only one with short stems.
+
+Fix: `separate.stems_look_complete()` (both stems readable and within max(3 s, 3%) of the song's length, else incomplete);
+`separate_vocals(expected_seconds=...)` raises `SeparationError` naming a damaged audio file as the likely cause;
+`run_pipeline` passes the song's duration and also re-runs Demucs when saved stems exist but are truncated. Ironic cannot
+be redone until the owner supplies a good copy of the audio.
+
+Also found while ranking songs by agreement between our aligned line times and Whisper's own timestamps: several songs are
+badly early (Girls Just Want to Have Fun: 9% of matched lines within 3 s, median gap 10.8 s; lines 20-30 s early from
+line 3 on although lrclib and the aligned text have the same 56 lines). Cause not yet fixed: the whole-song CTC alignment
+drifts when the audio holds repeated/extra sung material the text lacks. Candidate fix: anchor alignment windows to
+Whisper's segment times.
+
+## 2026-09-19 (night) — Lyric timing drifted 20-50 s on repeated choruses; fixed with anchored alignment
+
+Owner asked for every possible fix for songs whose lyrics are "wildly off", and for anything unfixable to be set aside for
+review. Ranking all songs by agreement between our aligned line times and Whisper's own timestamps found several badly early
+(worst: Girls Just Want to Have Fun, 9% within 3 s; lines 20-50 s early). Root cause: `align.py` runs the whole song as ONE
+CTC pass; when the audio has repeated choruses/ad-libs the text lacks (or the text repeats lines more than the audio), the
+pass drifts and nothing notices. Measured against lrclib's own timestamps: Girls 4/56 lines within 2 s (45 more than 5 s off),
+Every Breath You Take 14/77, The Chain 19/35.
+
+What was built (each part test-first; real-data checked):
+- `transcribe.py`: Whisper WORD timestamps saved in `transcript.json` (older caches are redone).
+- `anchors.py`: `line_anchors` (in-order word matching gives each lyric line a coarse position); `drop_words_in_silence`
+  (Whisper hallucinated "just wanna, just wanna" at 222-228 s of a track silent after ~220 s and anchored a line there);
+  `combine_anchors` (lrclib's line timestamps settle WHICH copy of a repeated chorus was heard: anchors whose offset from lrclib
+  agrees form runs; a run is believed only if long enough for its distance from the dominant offset -- three wrong copies at
+  -33 s were first mistaken for a section shift); `plan_windows`.
+- `align.py`: `prepare_alignment` (ONE model pass, shared), `align_blocks`/`align_words_anchored` (each block's words are only
+  allowed inside its window; a window the aligner rejects is widened, then words are spread evenly), `vocal_loudness`.
+- `sync.py`: `sync_agreement` (share of lines within 2 s of their anchor after allowing <= 2.5 s of consistent bias -- Whisper's
+  first-word times run ~2 s early), `decide_alignment` (keep the whole-song result if >= 85% agree, else the anchored one if
+  >= 70%, else the song is SET ASIDE with a concern; nothing to check against = unchanged behavior).
+- `pipeline._align_lyrics` wires it; `lyric_lines.json` now carries `line_times` (from `fetch_lyric_lines_verified(times_out=)`).
+Results (whole-song -> anchored, lines within 2 s of lrclib): Girls 4/56 -> 55/56; Every Breath 14/77 -> 72/77; The Chain
+19/35 -> 29/35; Wild Horses 34/40 -> 39/40. Controls that were already right (Night Moves 55/63, Eleanor Rigby 32/34) keep the
+whole-song alignment untouched.
+
+Also: owner lyrics editing. "Flagged for Lyrics Review" rows now have Watch and Edit Lyrics (also for set-aside songs already on
+YouTube, e.g. the damaged Ironic); Edit Lyrics saves `lyrics_owner.txt` (`owner_lyrics.py`), which the next Redo uses verbatim
+(no online source, AI or audio check overrides it; Whisper words are still fetched for anchoring; timing is still checked).
+Limits: sync can only be verified when Whisper/lrclib give enough anchors (>= 4 lines and 25%); songs whose lyrics come from a
+source without timestamps, on loud recordings Whisper cannot hear, are left on the whole-song alignment.

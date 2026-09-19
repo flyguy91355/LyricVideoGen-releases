@@ -345,8 +345,11 @@ def test_run_pipeline_resuming_past_separate_skips_demucs_when_stems_exist(tmp_p
     work_dir = tmp_path / "work"
     stems = work_dir / "htdemucs" / "audio"
     stems.mkdir(parents=True)
-    (stems / "vocals.wav").write_bytes(b"fake")
-    (stems / "no_vocals.wav").write_bytes(b"fake")
+    import numpy as np
+    import soundfile
+
+    for name in ("vocals.wav", "no_vocals.wav"):        # real audio of the song's length (10 s)
+        soundfile.write(str(stems / name), np.zeros(10 * 8000), 8000)
     (work_dir / "song_info.json").write_text(
         json.dumps({"title": "t", "artist": "a", "duration": 10.0, "alt_titles": []}), encoding="utf-8",
     )
@@ -965,3 +968,290 @@ def test_run_pipeline_says_when_ai_review_accepted_lyrics_the_recognizer_could_n
 
     out = capsys.readouterr().out
     assert "AI review" in out and "speech-recognition" in out and "lrclib" in out
+
+
+def _truncated_stems(work_dir, audio_stem="audio", seconds=5):
+    import numpy as np
+    import soundfile
+
+    stem_dir = work_dir / "htdemucs" / audio_stem
+    stem_dir.mkdir(parents=True)
+    for name in ("vocals.wav", "no_vocals.wav"):
+        soundfile.write(str(stem_dir / name), np.zeros(seconds * 8000), 8000)
+
+
+def test_run_pipeline_reruns_separation_when_the_stems_on_disk_are_truncated(tmp_path, monkeypatch):
+    """Real ('Ironic'): 43-second stems for a 230-second song were used silently, for both the lyric
+    alignment and the chords. Resuming past separation must notice and run Demucs again."""
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "song_info.json").write_text(json.dumps({"title": "Test Song", "artist": "A", "duration": 60.0, "alt_titles": []}))
+    _truncated_stems(work_dir)
+    calls = []
+    monkeypatch.setattr("lyricvideo.pipeline.separate_vocals", lambda *a, **k: calls.append(k) or tmp_path / "vocals.wav")
+
+    run_pipeline(Path("audio.mp3"), work_dir, start_stage="fetch_lyrics")
+
+    assert len(calls) == 1
+    assert calls[0]["expected_seconds"] == 60.0
+
+
+def test_run_pipeline_keeps_complete_stems_and_does_not_rerun_demucs(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "song_info.json").write_text(json.dumps({"title": "Test Song", "artist": "A", "duration": 5.0, "alt_titles": []}))
+    _truncated_stems(work_dir, seconds=5)               # 5 s stems for a 5 s song: complete
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.separate_vocals",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("complete stems must not be re-separated")),
+    )
+
+    run_pipeline(Path("audio.mp3"), work_dir, start_stage="fetch_lyrics")
+
+
+def test_run_pipeline_tells_the_separation_stage_how_long_the_song_is(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    seen = {}
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.separate_vocals",
+        lambda *a, **k: seen.update(k) or tmp_path / "vocals.wav",
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert seen["expected_seconds"] == 10.0             # the stubbed identify stage reports 10 s
+
+
+# --- anchored alignment + the sync check (2026-09-19) -----------------------------------------------
+
+_SYNC_LINES = [
+    "the river runs beside the old stone mill", "and morning fog lies heavy on the hill",
+    "a lantern swings above the wooden door", "i wait for you like i have waited before",
+    "the winter came and covered every road", "we traded all our dreams for heavy loads",
+    "a whisper crossed the empty market square", "and told me you were waiting for me there",
+]
+_TRUE_STARTS = [10.0, 16.0, 22.0, 28.0, 34.0, 40.0, 46.0, 52.0]
+
+
+def _heard_at(starts):
+    return [
+        {"word": w, "start": s + i * 0.4, "end": s + i * 0.4 + 0.35}
+        for s, line in zip(starts, _SYNC_LINES) for i, w in enumerate(line.split())
+    ]
+
+
+def _times_starting_at(starts):
+    times = []
+    for s, line in zip(starts, _SYNC_LINES):
+        times.extend((s + i * 0.4, s + i * 0.4 + 0.35) for i in range(len(line.split())))
+    return times
+
+
+def _sync_setup(monkeypatch, tmp_path, whole_starts, anchored_starts, heard=True):
+    import torch
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.pipeline.torchaudio.load", lambda path: (torch.zeros(1, 16000 * 60), 16000))  # a 60 s stem
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", lambda *a, **k: (list(_SYNC_LINES), "lrclib", ""))
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at(_TRUE_STARTS) if heard else [])
+    used = {"whole": 0, "anchored": 0, "prepared": 0}
+    monkeypatch.setattr("lyricvideo.pipeline.prepare_alignment", lambda *a, **k: used.__setitem__("prepared", used["prepared"] + 1) or object())
+
+    def whole(vocals_path, words, prepared=None):
+        used["whole"] += 1
+        return _times_starting_at(whole_starts)
+
+    def anchored(vocals_path, lines_words, anchors, prepared=None, **k):
+        used["anchored"] += 1
+        return _times_starting_at(anchored_starts), []
+
+    monkeypatch.setattr("lyricvideo.pipeline.align_words", whole)
+    monkeypatch.setattr("lyricvideo.pipeline.align_words_anchored", anchored)
+    return used
+
+
+def test_a_whole_song_alignment_that_agrees_with_what_was_heard_is_kept(tmp_path, monkeypatch, capsys):
+    used = _sync_setup(monkeypatch, tmp_path, _TRUE_STARTS, [s + 99 for s in _TRUE_STARTS])
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    song = load_song(work_dir / "lyrics_timed.json")
+    assert abs(song.lines[0].words[0].start_time - 10.0) < 0.01
+    assert "sync" not in song.lyrics_accuracy_concern.lower() and "timing" not in song.lyrics_accuracy_concern.lower()
+    assert "whole-song" in capsys.readouterr().out
+
+
+def test_a_drifted_whole_song_alignment_is_replaced_by_the_anchored_one(tmp_path, monkeypatch, capsys):
+    """Real ('Girls Just Want to Have Fun'): the whole-song pass put lines 20-50 s early."""
+    drifted = [max(0.0, s - 25.0) for s in _TRUE_STARTS]
+    _sync_setup(monkeypatch, tmp_path, drifted, _TRUE_STARTS)
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    song = load_song(work_dir / "lyrics_timed.json")
+    assert abs(song.lines[3].words[0].start_time - 28.0) < 0.01           # the anchored time, not the drifted one
+    assert song.lyrics_accuracy_concern == ""
+    assert "anchored" in capsys.readouterr().out
+
+
+def test_a_song_whose_timing_cannot_be_fixed_is_set_aside_for_review(tmp_path, monkeypatch):
+    _sync_setup(monkeypatch, tmp_path, [max(0.0, s - 25.0) for s in _TRUE_STARTS], [s + 30.0 for s in _TRUE_STARTS])
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    concern = load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+    assert "timing" in concern.lower() and "review" in concern.lower()
+
+
+def test_without_word_timings_the_original_whole_song_alignment_is_used_unchanged(tmp_path, monkeypatch):
+    used = _sync_setup(monkeypatch, tmp_path, _TRUE_STARTS, _TRUE_STARTS, heard=False)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert used == {"whole": 1, "anchored": 0, "prepared": 0}
+
+
+def test_the_timing_concern_is_added_to_an_existing_lyrics_concern(tmp_path, monkeypatch):
+    _sync_setup(monkeypatch, tmp_path, [max(0.0, s - 25.0) for s in _TRUE_STARTS], [s + 30.0 for s in _TRUE_STARTS])
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: (list(_SYNC_LINES), "lrclib", "Only 60% of these lyrics match what is sung."),
+    )
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    concern = load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+    assert concern.startswith("Only 60%") and "timing" in concern.lower()
+
+
+def test_words_heard_in_a_silent_stretch_do_not_anchor_any_line(tmp_path, monkeypatch):
+    """Real ('Girls Just Want to Have Fun'): Whisper 'heard' words after the vocals had gone silent, which
+    anchored a line at the wrong time and dragged the rest into the silent tail."""
+    used = _sync_setup(monkeypatch, tmp_path, _TRUE_STARTS, _TRUE_STARTS)
+    ghost_starts = _TRUE_STARTS[:6] + [50.0, 56.0]                        # the last two lines "heard" in silence
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at(ghost_starts))
+    monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: [0.5] * 90 + [0.0] * 30)   # voiced to 45 s
+    seen = {}
+
+    def anchored(vocals_path, lines_words, anchors, prepared=None, **k):
+        seen["anchors"] = sorted(anchors)
+        return _times_starting_at(_TRUE_STARTS), []
+
+    monkeypatch.setattr("lyricvideo.pipeline.align_words", lambda vocals_path, words, prepared=None: _times_starting_at([s - 30 for s in _TRUE_STARTS]))
+    monkeypatch.setattr("lyricvideo.pipeline.align_words_anchored", anchored)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert seen["anchors"] == [0, 1, 2, 3, 4, 5]
+
+
+def test_the_lyrics_stage_saves_the_sources_line_times_for_the_aligner(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+
+    def fetch(*args, **kwargs):
+        kwargs["times_out"]["line_times"] = [1.5, 4.0]
+        return ["hello there", "my friend"], "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fetch)
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert json.loads((work_dir / "lyric_lines.json").read_text())["line_times"] == [1.5, 4.0]
+
+
+def test_lrclib_line_times_repair_whisper_anchors_that_picked_the_wrong_chorus_copy(tmp_path, monkeypatch):
+    """Real ('Girls Just Want to Have Fun'): repeated lines were anchored to the wrong occurrence, 20-30 s off."""
+    _sync_setup(monkeypatch, tmp_path, _TRUE_STARTS, _TRUE_STARTS)
+    wrong = list(_TRUE_STARTS)
+    wrong[5] = 100.0                                     # line 6 "heard" at the wrong copy
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at(wrong))
+    monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: [])
+
+    def fetch(*args, **kwargs):
+        kwargs["times_out"]["line_times"] = [s - 3.0 for s in _TRUE_STARTS]     # lrclib's edition runs 3 s earlier
+        return list(_SYNC_LINES), "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fetch)
+    seen = {}
+
+    def anchored(vocals_path, lines_words, anchors, prepared=None, **k):
+        seen["anchors"] = anchors
+        return _times_starting_at(_TRUE_STARTS), []
+
+    monkeypatch.setattr("lyricvideo.pipeline.align_words", lambda vocals_path, words, prepared=None: _times_starting_at([s - 30 for s in _TRUE_STARTS]))
+    monkeypatch.setattr("lyricvideo.pipeline.align_words_anchored", anchored)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert abs(seen["anchors"][5].start - _TRUE_STARTS[5]) < 0.6         # lrclib + the offset, not the bad 100.0
+
+
+# --- the owner's own edited lyrics (2026-09-19) ---------------------------------------------------
+
+def test_the_owners_edited_lyrics_are_used_instead_of_any_online_source(tmp_path, monkeypatch, capsys):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "lyrics_owner.txt").write_text("my corrected first line\nmy second line\n", encoding="utf-8")
+
+    def must_not_run(*a, **k):
+        raise AssertionError("no online lookup or AI check may override the owner's lyrics")
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", must_not_run)
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    saved = json.loads((work_dir / "lyric_lines.json").read_text())
+    assert saved["lines"] == ["my corrected first line", "my second line"]
+    assert saved["source"] == "owner" and saved["concern"] == ""
+    song = load_song(work_dir / "lyrics_timed.json")
+    assert song.lyrics_source == "owner" and song.lyrics_accuracy_concern == ""
+    assert "lyrics you edited" in capsys.readouterr().out
+
+
+def test_the_owners_lyrics_still_get_whisper_word_timings_for_the_aligner(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "lyrics_owner.txt").write_text("a line\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: calls.append(a) or "words")
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert len(calls) == 1
+
+
+def test_a_failing_transcription_does_not_stop_a_song_with_owner_lyrics(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "lyrics_owner.txt").write_text("a line\n", encoding="utf-8")
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no model")))
+
+    run_pipeline(Path("audio.mp3"), work_dir)          # must not raise
+
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_source == "owner"
+
+
+def test_list_flagged_songs_can_include_songs_already_uploaded(tmp_path):
+    """The review panel also shows set-aside songs that are already on YouTube (e.g. the damaged 'Ironic'), since
+    replacing those there is the owner's call; the auto-upload paths keep using the default (pending only)."""
+    work_root = tmp_path / "work"
+    for slug, uploaded in (("pending-song", False), ("uploaded-song", True)):
+        song_dir = work_root / slug
+        song_dir.mkdir(parents=True)
+        save_song(Song(title=slug, audio_path="a.mp3", lyrics_accuracy_concern="looks wrong"), song_dir / "lyrics_timed.json")
+        (song_dir / f"{slug}.mp4").write_bytes(b"video")
+        if uploaded:
+            (song_dir / "youtube_state.json").write_text("{}", encoding="utf-8")
+
+    assert list_flagged_songs(work_root) == ["pending-song"]
+    assert list_flagged_songs(work_root, include_uploaded=True) == ["pending-song", "uploaded-song"]

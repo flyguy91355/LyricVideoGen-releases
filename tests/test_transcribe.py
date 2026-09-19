@@ -180,3 +180,52 @@ def test_missing_or_corrupt_transcript_segments_read_as_empty(tmp_path):
     assert load_transcript_segments(tmp_path) == []
     (tmp_path / "transcript.json").write_text("{nope", encoding="utf-8")
     assert load_transcript_segments(tmp_path) == []
+
+
+# --- word-level timestamps (anchors for lyric alignment, 2026-09-19) --------------------------------
+
+class _WordModel(_FakeModel):
+    """A fake WhisperModel whose segments carry word timings, like word_timestamps=True."""
+
+    def transcribe(self, path, **kwargs):
+        self.calls += 1
+        self.kwargs = kwargs
+        words = [SimpleNamespace(word=" hello", start=1.0, end=1.4), SimpleNamespace(word=" there", start=1.5, end=2.0)]
+        segs = [SimpleNamespace(start=0.9, end=2.1, text=" hello there", words=words)]
+        return iter(segs), SimpleNamespace(language="en", language_probability=0.9)
+
+
+def test_word_timestamps_are_requested_and_saved(tmp_path):
+    from lyricvideo.transcribe import load_transcript_words
+
+    model = _WordModel([])
+    transcribe_vocals(_vocals(tmp_path), tmp_path, model=model)
+
+    assert model.kwargs["word_timestamps"] is True
+    assert load_transcript_words(tmp_path) == [
+        {"word": "hello", "start": 1.0, "end": 1.4},
+        {"word": "there", "start": 1.5, "end": 2.0},
+    ]
+
+
+def test_a_cache_without_word_timings_is_not_reused(tmp_path):
+    """Caches written before 2026-09-19 have segments only; the aligner needs the words, so they are redone."""
+    vocals = _vocals(tmp_path)
+    transcribe_vocals(vocals, tmp_path, model=_FakeModel([" old segments only"]))
+    cache = json.loads((tmp_path / "transcript.json").read_text())
+    cache.pop("words", None)
+    cache.pop("word_timestamps", None)
+    (tmp_path / "transcript.json").write_text(json.dumps(cache))
+
+    model = _WordModel([])
+    transcribe_vocals(vocals, tmp_path, model=model)
+
+    assert model.calls == 1
+
+
+def test_missing_word_timings_read_as_empty(tmp_path):
+    from lyricvideo.transcribe import load_transcript_words
+
+    assert load_transcript_words(tmp_path) == []
+    transcribe_vocals(_vocals(tmp_path), tmp_path, model=_FakeModel([" no word timings here"]))
+    assert load_transcript_words(tmp_path) == []

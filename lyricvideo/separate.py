@@ -130,8 +130,36 @@ def _demucs_command(audio_path: Path, out_dir: Path, device: str) -> list[str]:
     ]
 
 
-def separate_vocals(audio_path: Path, out_dir: Path, device: str | None = None) -> Path:
+def _stem_seconds(path: Path) -> float | None:
+    try:
+        import soundfile
+
+        return float(soundfile.info(str(path)).duration)
+    except Exception:  # missing, empty, or not a readable audio file
+        return None
+
+
+def stems_look_complete(vocals_path: Path, instrumental_path: Path, expected_seconds: float | None) -> bool:
+    """True when both stems exist, are readable, and (if the song's length is known) are within
+    max(3 s, 3%) of it. Real bug (2026-09-19): 'Ironic' (230 s) had 43-second stems that the app
+    accepted, so the aligner squeezed all 42 lyric lines into the first 43 s, chord detection only
+    saw 43 s of music, and that video was uploaded. An unknown length skips only the comparison."""
+    lengths = [_stem_seconds(Path(vocals_path)), _stem_seconds(Path(instrumental_path))]
+    if any(length is None for length in lengths):
+        return False
+    if not expected_seconds or expected_seconds <= 0:
+        return True
+    tolerance = max(3.0, 0.03 * expected_seconds)
+    return all(abs(length - expected_seconds) <= tolerance for length in lengths)
+
+
+def separate_vocals(
+    audio_path: Path, out_dir: Path, device: str | None = None, expected_seconds: float | None = None,
+) -> Path:
     """Run Demucs two-stem separation and return the path to vocals.wav.
+
+    With `expected_seconds` (the song's real length) the result is checked and a truncated
+    output raises SeparationError instead of being accepted (see stems_look_complete).
     Uses CUDA when available (see compute_device), CPU otherwise.
 
     When the GPU was picked automatically (no `device` argument and no
@@ -158,4 +186,12 @@ def separate_vocals(audio_path: Path, out_dir: Path, device: str | None = None) 
     vocals_path = out_dir / "htdemucs" / stem_name / "vocals.wav"
     if not vocals_path.exists():
         raise SeparationError(f"Demucs did not produce expected output at {vocals_path}")
+    if expected_seconds and not stems_look_complete(vocals_path, vocals_path.with_name("no_vocals.wav"), expected_seconds):
+        got = _stem_seconds(vocals_path)
+        raise SeparationError(
+            f"Demucs produced truncated stems ({'unreadable' if got is None else f'{got:.0f} s'} of "
+            f"{expected_seconds:.0f} s). Delete {vocals_path.parent} and run this song again; if it comes out the "
+            "same length again, the audio file itself is probably damaged (an incomplete copy or download) -- "
+            "replace it with a good copy."
+        )
     return vocals_path

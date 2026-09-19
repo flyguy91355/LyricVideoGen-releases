@@ -31,6 +31,7 @@ from .batch import (
 )
 from .identify import extract_metadata
 from .dismissed_songs import dismiss_song, load_dismissed
+from .owner_lyrics import load_editable_lyrics, save_owner_lyrics
 from .pipeline import (
     STAGES,
     run_pipeline,
@@ -1747,7 +1748,7 @@ class LyricVideoGUI:
     def _refresh_flagged_songs(self) -> None:
         for child in self.flagged_songs_frame.winfo_children():
             child.destroy()
-        slugs = list_flagged_songs(PROJECT_ROOT / "work")
+        slugs = list_flagged_songs(PROJECT_ROOT / "work", include_uploaded=True)
         for slug in slugs:
             try:
                 self._render_one_flagged_song(slug)
@@ -1767,6 +1768,7 @@ class LyricVideoGUI:
             concern = load_song(PROJECT_ROOT / "work" / slug / "lyrics_timed.json").lyrics_accuracy_concern
         except Exception:
             pass
+        uploaded = load_youtube_state(PROJECT_ROOT / "work" / slug) is not None
         row = ctk.CTkFrame(self.flagged_songs_frame)
         row.pack(fill="x", pady=4)
         ctk.CTkLabel(row, text=slug, anchor="w", font=ctk.CTkFont(weight="bold")).pack(
@@ -1775,15 +1777,97 @@ class LyricVideoGUI:
         ctk.CTkLabel(row, text=concern, anchor="w", wraplength=400, justify="left").pack(
             fill="x", padx=6, pady=(0, 4)
         )
+        if uploaded:
+            ctk.CTkLabel(
+                row, text="Already on YouTube -- replacing it there is your call.", anchor="w",
+                text_color="gray60", wraplength=400, justify="left",
+            ).pack(fill="x", padx=6, pady=(0, 4))
         buttons = ctk.CTkFrame(row, fg_color="transparent")
         buttons.pack(fill="x", padx=6, pady=(0, 6))
         ctk.CTkButton(
-            buttons, text="Redo", width=80, command=lambda: self._on_redo_flagged(slug),
+            buttons, text="▶ Watch", width=70, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_watch_song(slug),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
-            buttons, text="Upload Anyway", width=120, fg_color="gray30", hover_color="gray20",
-            command=lambda: self._on_upload_anyway_flagged(slug),
+            buttons, text="✎ Edit Lyrics", width=100, command=lambda: self._on_edit_lyrics_flagged(slug),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Redo", width=70, command=lambda: self._on_redo_flagged(slug),
+        ).pack(side="left", padx=(0, 6))
+        if not uploaded:  # an uploaded song would be a duplicate video
+            ctk.CTkButton(
+                buttons, text="Upload Anyway", width=110, fg_color="gray30", hover_color="gray20",
+                command=lambda: self._on_upload_anyway_flagged(slug),
+            ).pack(side="left")
+
+    def _on_edit_lyrics_flagged(self, slug: str) -> None:
+        self._open_lyrics_editor(slug)
+
+    def _save_owner_lyrics_from_editor(self, slug: str, text: str) -> bool:
+        """Saves the owner's edited lyrics (lyrics_owner.txt) for the next Redo. False (with a message) if the text
+        is empty -- an accidental select-all-delete must never wipe a song's lyrics."""
+        try:
+            save_owner_lyrics(PROJECT_ROOT / "work" / slug, text)
+        except (ValueError, OSError) as e:
+            messagebox.showerror("Could not save lyrics", f"{e}")
+            return False
+        return True
+
+    def _open_lyrics_editor(self, slug: str) -> None:
+        """A window to watch the video and correct its lyrics: one lyric line per row. Save keeps them for the
+        next Redo; Save & Redo runs the Redo right away. The owner's lyrics are used exactly as written."""
+        work_dir = PROJECT_ROOT / "work" / slug
+        concern = ""
+        try:
+            concern = load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+        except Exception:
+            pass
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title(f"Edit lyrics -- {slug}")
+        dialog_w, dialog_h = 680, 760
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_h) // 2
+        dialog.geometry(f"{dialog_w}x{dialog_h}+{max(x, 0)}+{max(y, 0)}")
+        dialog.transient(self.root)   # deliberately NOT grab_set: the owner may want to Watch while editing
+        dialog.lift()
+        dialog.focus_force()
+        dialog.attributes("-topmost", True)
+        dialog.after(300, lambda: dialog.attributes("-topmost", False))
+
+        if concern:
+            ctk.CTkLabel(dialog, text=concern, anchor="w", wraplength=dialog_w - 40, justify="left").pack(
+                fill="x", padx=14, pady=(12, 4)
+            )
+        ctk.CTkLabel(
+            dialog, anchor="w", wraplength=dialog_w - 40, justify="left", text_color="gray60",
+            text="One lyric line per row; blank rows are ignored. Your lyrics are used exactly as written on the "
+                 "next Redo (no online lookup or AI check overrides them); the timing is still worked out from "
+                 "the audio.",
+        ).pack(fill="x", padx=14, pady=(0, 6))
+        box = ctk.CTkTextbox(dialog, wrap="word", font=ctk.CTkFont(size=14))
+        box.pack(fill="both", expand=True, padx=14, pady=6)
+        box.insert("1.0", load_editable_lyrics(work_dir))
+
+        def save(redo: bool) -> None:
+            if not self._save_owner_lyrics_from_editor(slug, box.get("1.0", "end")):
+                return
+            dialog.destroy()
+            if redo:
+                self._on_redo_flagged(slug)
+            else:
+                messagebox.showinfo("Lyrics saved", "Saved. Use Redo to rebuild the video with these lyrics.")
+
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.pack(fill="x", padx=14, pady=(0, 12))
+        ctk.CTkButton(
+            buttons, text="▶ Watch video", width=110, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_watch_song(slug),
         ).pack(side="left")
+        ctk.CTkButton(buttons, text="Cancel", width=80, fg_color="gray30", hover_color="gray20",
+                      command=dialog.destroy).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(buttons, text="Save & Redo", width=110, command=lambda: save(True)).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(buttons, text="Save", width=80, command=lambda: save(False)).pack(side="right")
 
     def _on_redo_flagged(self, slug: str) -> None:
         # Reuses the Redo dropdown + confirmation flow verbatim -- Redo

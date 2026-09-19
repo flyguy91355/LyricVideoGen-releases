@@ -277,3 +277,114 @@ def test_run_demucs_relays_child_output_through_the_current_sys_stdout(monkeypat
 def test_run_demucs_raises_on_a_nonzero_exit():
     with pytest.raises(subprocess.CalledProcessError):
         separate_module._run_demucs([sys.executable, "-c", "raise SystemExit(3)"])
+
+
+# --- truncated stems (Ironic, 2026-09-19) ------------------------------------------------------
+# Real: 'Ironic' (230 s) had 43-second stems. The app accepted them, the aligner squeezed all 42 lyric
+# lines into the first 43 s, and chord detection only saw 43 s of music -- and that video was uploaded.
+
+def _write_wav(path, seconds, rate=8000):
+    import numpy as np
+    import soundfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    soundfile.write(str(path), np.zeros(int(seconds * rate)), rate)
+
+
+def test_stems_matching_the_song_length_look_complete(tmp_path):
+    from lyricvideo.separate import stems_look_complete
+
+    _write_wav(tmp_path / "vocals.wav", 230)
+    _write_wav(tmp_path / "no_vocals.wav", 230.4)
+
+    assert stems_look_complete(tmp_path / "vocals.wav", tmp_path / "no_vocals.wav", 230.0)
+
+
+def test_a_truncated_stem_is_incomplete_even_if_the_other_one_is_fine(tmp_path):
+    from lyricvideo.separate import stems_look_complete
+
+    _write_wav(tmp_path / "vocals.wav", 43)               # the Ironic case: 19% of the song
+    _write_wav(tmp_path / "no_vocals.wav", 230)
+
+    assert not stems_look_complete(tmp_path / "vocals.wav", tmp_path / "no_vocals.wav", 230.0)
+    assert not stems_look_complete(tmp_path / "no_vocals.wav", tmp_path / "vocals.wav", 230.0)
+
+
+def test_a_missing_or_unreadable_stem_is_incomplete(tmp_path):
+    from lyricvideo.separate import stems_look_complete
+
+    _write_wav(tmp_path / "vocals.wav", 10)
+    (tmp_path / "broken.wav").write_bytes(b"not audio")
+
+    assert not stems_look_complete(tmp_path / "vocals.wav", tmp_path / "nope.wav", 10.0)
+    assert not stems_look_complete(tmp_path / "vocals.wav", tmp_path / "broken.wav", 10.0)
+
+
+def test_an_unknown_song_length_skips_only_the_length_comparison(tmp_path):
+    from lyricvideo.separate import stems_look_complete
+
+    _write_wav(tmp_path / "vocals.wav", 43)
+    _write_wav(tmp_path / "no_vocals.wav", 43)
+
+    assert stems_look_complete(tmp_path / "vocals.wav", tmp_path / "no_vocals.wav", None)
+    assert stems_look_complete(tmp_path / "vocals.wav", tmp_path / "no_vocals.wav", 0)
+
+
+def test_a_small_length_difference_is_tolerated(tmp_path):
+    from lyricvideo.separate import stems_look_complete
+
+    _write_wav(tmp_path / "vocals.wav", 226)              # 1.7% short: within the 3% / 3 s tolerance
+    _write_wav(tmp_path / "no_vocals.wav", 226)
+
+    assert stems_look_complete(tmp_path / "vocals.wav", tmp_path / "no_vocals.wav", 230.0)
+
+
+def test_separate_vocals_refuses_stems_that_demucs_left_truncated(tmp_path, monkeypatch):
+    from lyricvideo.separate import SeparationError
+
+    out_dir = tmp_path / "work"
+    stem_dir = out_dir / "htdemucs" / "song"
+
+    def truncated_demucs(cmd):
+        _write_wav(stem_dir / "vocals.wav", 43)
+        _write_wav(stem_dir / "no_vocals.wav", 43)
+
+    monkeypatch.setattr("lyricvideo.separate._run_demucs", truncated_demucs)
+
+    with pytest.raises(SeparationError, match="truncated"):
+        separate_vocals(tmp_path / "song.mp3", out_dir, device="cpu", expected_seconds=230.0)
+
+
+def test_separate_vocals_accepts_complete_stems_and_does_not_check_when_no_length_is_given(tmp_path, monkeypatch):
+    out_dir = tmp_path / "work"
+    stem_dir = out_dir / "htdemucs" / "song"
+
+    def demucs(cmd):
+        _write_wav(stem_dir / "vocals.wav", 230)
+        _write_wav(stem_dir / "no_vocals.wav", 230)
+
+    monkeypatch.setattr("lyricvideo.separate._run_demucs", demucs)
+
+    assert separate_vocals(tmp_path / "song.mp3", out_dir, device="cpu", expected_seconds=230.0).exists()
+    assert separate_vocals(tmp_path / "song.mp3", out_dir, device="cpu").exists()
+
+
+def test_the_truncated_stems_error_points_at_a_damaged_audio_file_as_the_likely_cause(tmp_path, monkeypatch):
+    """Real ('Ironic'): re-running Demucs gave 43 s again because the source .m4a itself was a partial file
+    (ffmpeg: 'partial file', 'Packet corrupt'); 'run this song again' was the wrong advice."""
+    from lyricvideo.separate import SeparationError
+
+    out_dir = tmp_path / "work"
+    stem_dir = out_dir / "htdemucs" / "song"
+
+    def truncated_demucs(cmd):
+        _write_wav(stem_dir / "vocals.wav", 43)
+        _write_wav(stem_dir / "no_vocals.wav", 43)
+
+    monkeypatch.setattr("lyricvideo.separate._run_demucs", truncated_demucs)
+
+    with pytest.raises(SeparationError) as error:
+        separate_vocals(tmp_path / "song.mp3", out_dir, device="cpu", expected_seconds=230.0)
+
+    message = str(error.value)
+    assert "audio file itself" in message and "damaged" in message

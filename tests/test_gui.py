@@ -1666,3 +1666,40 @@ def test_on_batch_done_refreshes_retry_upload_options(monkeypatch):
     LyricVideoGUI._on_batch_done(stub, {"succeeded": ["Angie"], "skipped_already_done": [], "failed": []})
 
     assert refreshed == [True]
+
+
+# --- Watch + Edit Lyrics in the review section (owner request, 2026-09-19) -----------------------------
+
+def test_edit_lyrics_button_opens_the_editor_for_that_song():
+    opened = []
+    stub = _gui_stub(_open_lyrics_editor=lambda slug: opened.append(slug))
+
+    LyricVideoGUI._on_edit_lyrics_flagged(stub, "angie-rolling-stones")
+
+    assert opened == ["angie-rolling-stones"]
+
+
+def test_saving_from_the_editor_writes_the_owners_lyrics(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    (tmp_path / "work" / "angie").mkdir(parents=True)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append(title))
+    stub = _gui_stub()
+
+    ok = LyricVideoGUI._save_owner_lyrics_from_editor(stub, "angie", "  first line \n\nsecond line\n")
+
+    assert ok is True and shown == []
+    assert (tmp_path / "work" / "angie" / "lyrics_owner.txt").read_text() == "first line\nsecond line\n"
+
+
+def test_saving_empty_lyrics_from_the_editor_is_refused_with_a_message(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    (tmp_path / "work" / "angie").mkdir(parents=True)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append(title))
+    stub = _gui_stub()
+
+    ok = LyricVideoGUI._save_owner_lyrics_from_editor(stub, "angie", "   \n  ")
+
+    assert ok is False and len(shown) == 1
+    assert not (tmp_path / "work" / "angie" / "lyrics_owner.txt").exists()

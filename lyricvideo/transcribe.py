@@ -57,6 +57,7 @@ def _read_cache(cache_path: Path, vocals_size: int, language: str | None) -> str
             data["model"] == _model_name()
             and data["vocals_bytes"] == vocals_size
             and data["language_requested"] == (language or "auto")
+            and data.get("word_timestamps") is True   # caches from before word timings existed are redone
         ):
             return str(data["text"])
     except (OSError, ValueError, KeyError, TypeError):
@@ -81,10 +82,14 @@ def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None) -> str:
     model = model or _load_model()
     segments, info = model.transcribe(
         str(vocals_path), language=language, vad_filter=False, temperature=0.0,
-        condition_on_previous_text=False, beam_size=1,
+        condition_on_previous_text=False, beam_size=1, word_timestamps=True,
     )
     segments = [s for s in segments if s.text.strip()]
     text = " ".join(s.text.strip() for s in segments)
+    words = [
+        {"word": w.word.strip(), "start": float(w.start), "end": float(w.end)}
+        for s in segments for w in (getattr(s, "words", None) or []) if w.word.strip()
+    ]
     cache_path.write_text(
         json.dumps({
             "model": _model_name(),
@@ -92,6 +97,8 @@ def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None) -> str:
             "language_requested": language or "auto",
             "language": getattr(info, "language", ""),
             "text": text,
+            "word_timestamps": True,
+            "words": words,
             "segments": [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments],
         }),
         encoding="utf-8",
@@ -107,6 +114,20 @@ def load_transcript_segments(work_dir: Path) -> list[dict]:
         return [
             {"start": float(s["start"]), "end": float(s["end"]), "text": str(s["text"])}
             for s in data["segments"]
+        ]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def load_transcript_words(work_dir: Path) -> list[dict]:
+    """The cached transcript's [{word, start, end}] word timings, or [] if there are none (older cache,
+    unreadable file) -- the anchors the lyric aligner uses to keep every line inside its own stretch of the
+    song (see anchors.py)."""
+    try:
+        data = json.loads((Path(work_dir) / _TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+        return [
+            {"word": str(w["word"]), "start": float(w["start"]), "end": float(w["end"])}
+            for w in data.get("words", [])
         ]
     except (OSError, ValueError, KeyError, TypeError):
         return []

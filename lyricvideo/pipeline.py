@@ -14,7 +14,8 @@ import anthropic
 import torchaudio
 from dotenv import load_dotenv
 
-from .align import align_words
+from .align import align_words, align_words_anchored, prepare_alignment, vocal_loudness
+from .anchors import HeardWord, combine_anchors, drop_words_in_silence, line_anchors
 from .assemble import assemble_video
 from .combine import combine_alignment
 from .detect_chords import detect_chords
@@ -25,10 +26,12 @@ from .layout import instrumental_image_captions
 from .lyric_arbiter import arbitrate
 from .lyric_audio_match import score_lyrics_against_transcript
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
+from .owner_lyrics import owner_lyrics_lines
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
-from .separate import separate_vocals
+from .separate import separate_vocals, stems_look_complete
+from .sync import decide_alignment, sync_agreement
 from .settings import Settings
-from .transcribe import load_transcript_segments, transcribe_vocals
+from .transcribe import load_transcript_segments, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
 STAGES = ["identify", "separate", "fetch_lyrics", "align", "detect_chords", "images", "render"]
@@ -142,7 +145,7 @@ def list_pending_uploads(work_root: Path) -> list[str]:
     )
 
 
-def list_flagged_songs(work_root: Path) -> list[str]:
+def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[str]:
     """Names of work_root's immediate subdirectories whose lyrics were
     never confirmed accurate by check_lyric_accuracy() across every source
     tried (Song.lyrics_accuracy_concern non-empty) and that haven't been
@@ -156,7 +159,9 @@ def list_flagged_songs(work_root: Path) -> list[str]:
         return []
     flagged = []
     for entry in sorted(work_root.iterdir(), key=lambda e: e.name):
-        if not entry.is_dir() or (entry / STATE_FILENAME).exists() or song_video_path(entry) is None:
+        if not entry.is_dir() or song_video_path(entry) is None:
+            continue
+        if not include_uploaded and (entry / STATE_FILENAME).exists():
             continue
         timed_path = entry / "lyrics_timed.json"
         if not timed_path.exists():
@@ -275,6 +280,49 @@ def _build_arbiter(work_dir: Path, anthropic_client):
     return judge
 
 
+def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=None):
+    """(per-word times, timing concern). Uses Whisper's word times (when a transcript exists) to CHECK where the
+    whole-song alignment put each line and, if it drifted, to redo the alignment one bounded window at a time
+    (align.align_words_anchored). Both are computed from one model pass; sync.decide_alignment picks. A song whose
+    timing still cannot be trusted comes back with a non-empty concern so it is set aside for the owner's review.
+    Without word timings (Whisper unavailable) this is exactly the original single whole-song alignment."""
+    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
+    try:  # Whisper hallucinates words in silence; they must not anchor a line (a read failure just keeps them)
+        heard = drop_words_in_silence(heard, vocal_loudness(vocals_path), hop=0.5)
+    except Exception:
+        pass
+    line_texts = [" ".join(w.word for w in line.words) for line in parsed_lines]
+    anchors = line_anchors(line_texts, heard) if heard else {}
+    # lrclib's own timestamps settle which copy of a repeated chorus Whisper heard (see combine_anchors)
+    anchors = combine_anchors(anchors, line_times, [len(line.words) for line in parsed_lines])
+    if not anchors:
+        return align_words(vocals_path, flat_words), ""
+
+    def line_starts(times):
+        starts, i = [], 0
+        for line in parsed_lines:
+            starts.append(times[i][0] if line.words else 0.0)
+            i += len(line.words)
+        return starts
+
+    prepared = prepare_alignment(vocals_path)
+    whole = align_words(vocals_path, flat_words, prepared=prepared)
+    anchored, _ = align_words_anchored(
+        vocals_path, [[w.word for w in line.words] for line in parsed_lines], anchors, prepared=prepared,
+    )
+    decision = decide_alignment(line_starts(whole), line_starts(anchored), anchors)
+    whole_report = sync_agreement(line_starts(whole), anchors)
+    print(
+        f"Timing check: {whole_report.anchored} of {whole_report.total_lines} lines can be checked against what was "
+        f"heard; the whole-song alignment agrees on {whole_report.agreement:.0%}. Using the {decision.method} "
+        f"alignment ({decision.report.agreement:.0%} agree)."
+    )
+    if decision.concern:
+        print(f"WARNING: {decision.concern}", file=sys.stderr)
+    chosen = whole if decision.method == "whole-song" else anchored
+    return [(min(a, audio_duration), min(b, audio_duration)) for a, b in chosen], decision.concern
+
+
 def run_pipeline(
     audio_path: Path,
     work_dir: Path,
@@ -375,11 +423,17 @@ def run_pipeline(
 
     final_path = work_dir / f"{slugify(resolved_title)}.mp4"
 
+    def song_seconds() -> float | None:
+        try:
+            return float(json.loads(info_path.read_text(encoding="utf-8"))["duration"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
     if start_idx <= STAGES.index("separate"):
         report("separate")
-        vocals_path = separate_vocals(audio_path, work_dir)
-    elif start_idx <= STAGES.index("detect_chords") and not (
-        vocals_path.exists() and instrumental_stem_path.exists()
+        vocals_path = separate_vocals(audio_path, work_dir, expected_seconds=song_seconds())
+    elif start_idx <= STAGES.index("detect_chords") and not stems_look_complete(
+        vocals_path, instrumental_stem_path, song_seconds(),
     ):
         # Resuming past separation, but the stems the align/detect_chords
         # stages below read aren't on disk (an htdemucs/ folder deleted to
@@ -388,38 +442,58 @@ def run_pipeline(
         # is deterministic and costs no API spend, so just run it again --
         # the same self-heal the identify bootstrap above applies to a
         # missing song_info.json. A resume at images/render never reads the
-        # stems, so it's left alone.
+        # stems, so it's left alone. Stems that exist but are TRUNCATED (real:
+        # 'Ironic', 43 s of a 230 s song) get the same treatment.
         report("separate")
-        vocals_path = separate_vocals(audio_path, work_dir)
+        if vocals_path.exists():
+            print("The saved vocal stems are missing or shorter than the song; running Demucs again.")
+        vocals_path = separate_vocals(audio_path, work_dir, expected_seconds=song_seconds())
 
     if start_idx <= STAGES.index("fetch_lyrics"):
         report("fetch_lyrics")
         info_data = json.loads(info_path.read_text(encoding="utf-8"))
-        lyrics_anthropic_client = anthropic.Anthropic()
-        audio_check = _build_audio_check(vocals_path, work_dir)
-        reconcile = _build_reconcile(work_dir, lyrics_anthropic_client) if audio_check is not None else None
-        arbiter = _build_arbiter(work_dir, lyrics_anthropic_client) if audio_check is not None else None
-        lines_text, lyrics_source, lyrics_concern = fetch_lyric_lines_verified(
-            audio_path, info_data["title"], info_data["artist"], info_data["duration"],
-            info_data.get("alt_titles"), lyrics_anthropic_client, audio_check=audio_check, reconcile=reconcile,
-            arbiter=arbiter,
-        )
-        if audio_check is not None:
-            if lyrics_concern:
-                print(
-                    f"WARNING: the lyrics could not be confirmed against the audio "
-                    f"({lyrics_source or 'no source'}): {lyrics_concern} This song is held in "
-                    "Flagged for Lyrics Review instead of auto-uploading.", file=sys.stderr,
-                )
-            elif lyrics_source.endswith("+ai-confirmed"):
-                print(
-                    f"Lyrics accepted after AI review (source: {lyrics_source.split('+')[0]}): the stretches the "
-                    "audio check could not match were judged speech-recognition errors, not lyric errors."
-                )
-            else:
-                print(f"Lyrics verified against the audio (source: {lyrics_source}).")
+        owner_lines = owner_lyrics_lines(work_dir)
+        if owner_lines is not None:
+            # The owner edited these lyrics by hand (Flagged for Lyrics Review > Edit Lyrics): their word is final,
+            # so no online source, AI or audio check may override them. Whisper's word timings are still needed by
+            # the aligner as anchors (cached), and the aligner and sync check still time them.
+            print("Using the lyrics you edited (lyrics_owner.txt); no online lookup or AI check for these.")
+            try:
+                transcribe_vocals(vocals_path, work_dir)
+            except Exception as e:
+                print(f"WARNING: could not listen to the vocals ({type(e).__name__}: {e}); timing will use the "
+                      "whole-song alignment.", file=sys.stderr)
+            lines_text, lyrics_source, lyrics_concern, times_out = owner_lines, "owner", "", {}
+        else:
+            lyrics_anthropic_client = anthropic.Anthropic()
+            times_out: dict = {}
+            audio_check = _build_audio_check(vocals_path, work_dir)
+            reconcile = _build_reconcile(work_dir, lyrics_anthropic_client) if audio_check is not None else None
+            arbiter = _build_arbiter(work_dir, lyrics_anthropic_client) if audio_check is not None else None
+            lines_text, lyrics_source, lyrics_concern = fetch_lyric_lines_verified(
+                audio_path, info_data["title"], info_data["artist"], info_data["duration"],
+                info_data.get("alt_titles"), lyrics_anthropic_client, audio_check=audio_check, reconcile=reconcile,
+                arbiter=arbiter, times_out=times_out,
+            )
+            if audio_check is not None:
+                if lyrics_concern:
+                    print(
+                        f"WARNING: the lyrics could not be confirmed against the audio "
+                        f"({lyrics_source or 'no source'}): {lyrics_concern} This song is held in "
+                        "Flagged for Lyrics Review instead of auto-uploading.", file=sys.stderr,
+                    )
+                elif lyrics_source.endswith("+ai-confirmed"):
+                    print(
+                        f"Lyrics accepted after AI review (source: {lyrics_source.split('+')[0]}): the stretches the "
+                        "audio check could not match were judged speech-recognition errors, not lyric errors."
+                    )
+                else:
+                    print(f"Lyrics verified against the audio (source: {lyrics_source}).")
         lyrics_path.write_text(
-            json.dumps({"lines": lines_text, "source": lyrics_source, "concern": lyrics_concern}),
+            json.dumps({
+                "lines": lines_text, "source": lyrics_source, "concern": lyrics_concern,
+                "line_times": times_out.get("line_times"),
+            }),
             encoding="utf-8",
         )
 
@@ -450,7 +524,12 @@ def run_pipeline(
         waveform, sample_rate = torchaudio.load(str(vocals_path))
         audio_duration = waveform.shape[1] / sample_rate
         flat_words = [w.word for line in parsed_lines for w in line.words]
-        word_times = align_words(vocals_path, flat_words)
+        line_times = lyrics_data.get("line_times") if isinstance(lyrics_data, dict) else None
+        word_times, timing_concern = _align_lyrics(
+            vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=line_times,
+        )
+        if timing_concern:
+            lyrics_concern = f"{lyrics_concern} {timing_concern}".strip()
         timed_lines = combine_alignment(parsed_lines, word_times, audio_duration)
         song = Song(
             title=resolved_title,

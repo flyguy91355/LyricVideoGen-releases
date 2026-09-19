@@ -594,3 +594,76 @@ def test_the_source_kept_when_none_match_is_the_least_bad_not_the_highest_covera
     )
 
     assert source == "lrclib" and lines == complete_with_a_bad_stretch
+
+
+# --- lrclib's line timestamps travel with the lyrics (a second opinion for the aligner) ---------------
+
+_SYNCED = (
+    "[00:00.00]作曲 : Someone\n[00:10.00]the river runs beside the old stone mill\n[00:16.00]and morning fog lies heavy on the hill\n"
+    "[00:22.00]a lantern swings above the wooden door\n[00:28.00]i wait for you like i have waited before\n"
+)
+
+
+def test_a_synced_source_gives_its_line_timestamps_with_credit_lines_dropped_together_with_their_times():
+    from lyricvideo.fetch_lyrics import _hit_to_lines_and_times
+
+    lines, times = _hit_to_lines_and_times((_SYNCED, True, 0.0), 60.0)
+
+    assert lines == _SUNG
+    assert times == [10.0, 16.0, 22.0, 28.0]
+
+
+def test_a_plain_source_has_no_line_timestamps():
+    from lyricvideo.fetch_lyrics import _hit_to_lines_and_times
+
+    lines, times = _hit_to_lines_and_times(("\n".join(_SUNG), False, 0.0), 60.0)
+
+    assert lines == _SUNG and times is None
+
+
+def test_the_chosen_sources_line_times_are_reported_through_times_out(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: (_SYNCED, True, 0.0))
+    out = {}
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 60.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(_SUNG), times_out=out,
+    )
+
+    assert (lines, source) == (_SUNG, "lrclib")
+    assert out["line_times"] == [10.0, 16.0, 22.0, 28.0]
+
+
+def test_times_out_is_none_for_a_source_without_timestamps(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(_SUNG), False, 0.0))
+    out = {}
+
+    fetch_lyric_lines_verified(
+        audio_path, "T", "A", 60.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(_SUNG), times_out=out,
+    )
+
+    assert out["line_times"] is None
+
+
+def test_line_times_follow_the_best_candidate_when_none_match_and_the_judge_accepts_it(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _SUNG[:2] + _WRONG_EDITION[:2]
+    synced = "\n".join(f"[00:{10 + 6 * i:02d}.00]{line}" for i, line in enumerate(half_right))
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: (synced, True, 0.0))
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", lambda *a, **k: None)
+    out = {}
+
+    lines, source, _ = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 60.0, [], _FakeAnthropicClient(),
+        audio_check=_audio_check_for(_SUNG), arbiter=_confirming_arbiter(), times_out=out,
+    )
+
+    assert source == "lrclib+ai-confirmed"
+    assert out["line_times"] == [10.0, 16.0, 22.0, 28.0]

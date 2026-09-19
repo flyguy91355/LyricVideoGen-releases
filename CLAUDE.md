@@ -49,10 +49,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   `BatchItem.resume_stage="fetch_lyrics"` instead of redoing the slowest
   stage from scratch (HISTORY 2026-09-18). `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
   after every song, success or failure -- RSS climbs across a long Batch
-  run without it, even with no real leak (HISTORY 2026-09-18). The chosen
-  folder's path is never `.strip()`'d (a real folder name can carry whitespace),
-  and `resolve_existing_folder()` recovers a folder whose trailing space the
-  native picker itself dropped (HISTORY 2026-09-10). The batch folder field
+  run without it, even with no real leak (HISTORY 2026-09-18). The chosen folder path is never `.strip()`'d; `resolve_existing_folder()` recovers a trailing-space name the picker dropped (HISTORY 2026-09-10). The batch folder field
   also remembers the last folder used (`load_last_batch_folder`/
   `save_last_batch_folder` in `lyricvideo/batch.py`, a separate JSON file --
   not a `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
@@ -119,9 +116,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    (`cuda_build_supports_device()`, torch's same-major cubin rule; issue #5:
    `torch.cuda.is_available()` was true on the GT 1030 under a cu130 wheel
    built for sm_75+, and Demucs died on its first kernel launch), else `cpu`,
-   logging why; `LYRICVIDEO_DEVICE=cpu|cuda` overrides and is never
-   second-guessed. An auto-picked GPU run that still fails is retried once on
-   CPU (too little memory, driver mismatch). Output path convention
+   logging why; `LYRICVIDEO_DEVICE=cpu|cuda` overrides and is never second-guessed. Stems >3% shorter than the song are rejected. An auto-picked GPU run that still fails is retried once on
+   CPU. Output path convention
    (`work_dir/htdemucs/<audio_stem>/{vocals,no_vocals}.wav`) is what makes
    `--stage` resumption work — later stages look for the file at that same
    path; a resume at fetch_lyrics/align/detect_chords whose stems are missing
@@ -138,15 +134,17 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. `python -m
    lyricvideo.verify_lyrics -h` re-checks finished songs; `replace_report` lists uploaded.
    Whisper unavailable -> old Claude text check. LRC timestamps discarded.
-4. **align** — forced word-level alignment (`align.py`) against the isolated
-   vocal stem, timing `fetch_lyrics`'s text; `combine.py` merges the timing onto
-   the lines (a last word ending microseconds past the stem's duration is a
-   resample rounding artifact, tolerated; issue #6). An empty lyric list raises a
-   clear RuntimeError pointing at a sidecar file instead of dying inside the
-   aligner. MMS_FA knows only a-z and `'`: `_normalize_word_for_alignment`
-   spells digit runs out as sung ("31" -> "thirtyone"), reads `&` as "and",
-   and gives a word with nothing left the model's `*` star token instead of
-   raising (issue #3). Display text never changes.
+4. **align** — forced word-level alignment (`align.py`) of `fetch_lyrics`'s text
+   against the vocal stem; `combine.py` merges it onto the lines (a last word
+   microseconds past the stem's end is tolerated, issue #6; an empty lyric list
+   raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
+   choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
+   against lrclib's line timestamps (`combine_anchors`) bound each line to its own
+   window (`align_words_anchored`); `sync.py` keeps the whole-song result only if it
+   agrees, else the anchored one, else the song is set aside (concern). MMS_FA knows
+   only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
+   "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
+   token (issue #3). Display text never changes.
 5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
    identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC) analyzes
    Demucs's `no_vocals.wav`; its 602-class vocabulary collapses to this
@@ -338,10 +336,8 @@ PlayAlongVideoProduction, deliberately not moved yet (see CLAUDE_HISTORY) —
 and allow-listed archive extraction/copy
 (`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
 `CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
-`work/`, `.venv/`). `self.top_frame` (the `before=` anchor `_poll_update_queue`
-packs the banner above) must be a `.pack()`-managed child of `self.root`
-(it is `body`) -- anchoring on the grid-managed `left` raised `TclError:
-window isn't packed` silently (HISTORY 2026-09-09). `gui.py` checks once on
+`work/`, `.venv/`). `self.top_frame` (the update banner's `before=` anchor) must be
+`.pack()`-managed (HISTORY 2026-09-09). `gui.py` checks once on
 launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
@@ -486,9 +482,7 @@ live from `list_pending_uploads()` (never-uploaded only;
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
 `youtube_auto_upload` (a deliberate click always has). A "Flagged for
 Lyrics Review" panel (same lazy pattern) shows each flagged song's concern
-text with Redo (re-fetches lyrics fresh; a clean fetch clears the concern
-on its own) and Upload Anyway (`_start_retry_upload()`, a deliberate
-override) buttons; `_maybe_upload_to_youtube()` skips any flagged song
+text with Watch, Edit Lyrics (saved as `lyrics_owner.txt`, used verbatim by the next Redo), Redo and Upload Anyway (a deliberate override) buttons; `_maybe_upload_to_youtube()` skips any flagged song
 outright. `_run_batch_worker` emits a `"batch_item_done"` queue message
 after each song so these three lists update live during a long Batch run
 instead of only once at the very end (real gap, HISTORY 2026-09-18).

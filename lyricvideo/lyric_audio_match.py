@@ -85,8 +85,8 @@ def _words_match(a: str, b: str) -> bool:
     return SequenceMatcher(None, a, b).ratio() >= _FUZZY_WORD_RATIO
 
 
-def _matched_lyric_positions(lyric: list[str], heard: list[str]) -> set[int]:
-    """Indexes of `lyric` words that fall on a longest in-order match against `heard`."""
+def _matched_pairs(lyric: list[str], heard: list[str]) -> list[tuple[int, int]]:
+    """(lyric index, heard index) pairs on a longest in-order match, both indexes strictly increasing."""
     n, m = len(lyric), len(heard)
     table = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(n - 1, -1, -1):
@@ -96,18 +96,23 @@ def _matched_lyric_positions(lyric: list[str], heard: list[str]) -> set[int]:
                 row[j] = below[j + 1] + 1
             else:
                 row[j] = max(below[j], row[j + 1])
-    matched: set[int] = set()
+    pairs: list[tuple[int, int]] = []
     i = j = 0
     while i < n and j < m:
         if _words_match(lyric[i], heard[j]) and table[i][j] == table[i + 1][j + 1] + 1:
-            matched.add(i)
+            pairs.append((i, j))
             i += 1
             j += 1
         elif table[i + 1][j] >= table[i][j + 1]:
             i += 1
         else:
             j += 1
-    return matched
+    return pairs
+
+
+def _matched_lyric_positions(lyric: list[str], heard: list[str]) -> set[int]:
+    """Indexes of `lyric` words that fall on a longest in-order match against `heard`."""
+    return {i for i, _ in _matched_pairs(lyric, heard)}
 
 
 def _collapse_loops(tokens: list[str], max_ngram: int = 8) -> list[str]:
