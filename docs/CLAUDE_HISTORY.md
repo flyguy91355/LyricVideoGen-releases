@@ -2986,3 +2986,44 @@ publish counts as a claim at its real publish time (an off-slot moment like 10:3
 today's five capacity counts, so today looked full and the freed 12:00 slot was never reused (next upload
 went to tomorrow). Fix: `compute_next_publish_slot()` ignores a claim that has already happened AND sits at
 a non-slot minute; a still-scheduled odd-hour video (future claim) still counts against its day, unchanged.
+
+## 2026-09-19 — Lyrics are now checked against the audio (Whisper), not just against a title
+
+Symptom (owner): some finished videos show lyrics that are not the right lyrics in the right order for the
+recording ("not one of these songs went to my review"). Root cause: nothing ever compared the lyric TEXT to the
+AUDIO. `align.py` squeezes any text onto the vocals without error, and `lyric_accuracy.py` only asks Claude if
+the text looks like real lyrics for that title -- and `fetch_lyric_lines_verified()` stopped at the first source
+that passed (50 of 53 checked songs stopped at lrclib; 0 of 139 songs were ever flagged; 86 predate the check).
+Design: `docs/superpowers/specs/2026-09-19-verify-lyrics-against-audio-design.md`.
+
+What was built: `transcribe.py` (faster-whisper, cached `work_dir/transcript.json`), `lyric_audio_match.py`
+(pure scoring), `fetch_lyric_lines_verified(audio_check=...)` (a source passes only if it matches what is
+SUNG; none passing keeps the best match, flagged, with the unmatched line numbers in the concern), and
+`pipeline._build_audio_check` (falls back to the old Claude text check if Whisper can't run). Flagged songs use
+the existing machinery: no auto-upload, listed in "Flagged for Lyrics Review". `faster-whisper` added to
+`requirements.txt` (dry-run: it changed none of the TensorFlow/crema pins).
+
+Real findings, each pinned by a regression test (measured on the owner's songs, not assumed):
+1. Whisper's speech VAD deleted singing ("Like a Prayer": 61 words of ~660 -> correct lyrics scored 8%). VAD off,
+   `temperature=0` (also ~5x faster).
+2. Language auto-detect heard "Billie Jean" as Portuguese (19%). Forced English (`LYRICVIDEO_WHISPER_LANGUAGE`).
+3. `small` looped on loud rock ("wild, wild, wild") and scored 19-62% on correct lyrics; `medium` 53-78%.
+   `medium` is the default (~70 s a song on this 4-core, no-GPU machine; `LYRICVIDEO_WHISPER_MODEL`).
+4. Common words match by chance (a different song "matched" 35%): scored on content words only.
+5. Parenthesized backing vocals / "whoa" are optional: not required to be heard, but count as support when
+   heard ("Every Breath You Take": ignoring them made a 26-line section one unsupported run), and they still
+   explain what was sung. A fade-out vamp (3+ identical lines) is excused if that phrase matched elsewhere.
+6. A sung verse missing from the file is invisible from the lyric side, so the check also measures the longest run
+   of sung content words no lyric line explains (Whisper loops are trimmed to two copies for that measure only).
+
+Thresholds (`lyric_audio_match.py`): coverage >= 70%, no run of > 3 unmatched lines, no > 12 unexplained sung
+words. Controlled corruption of 8 real songs that pass untouched (0 wrongly rejected): lines from another song
+8/8 (4 or 6 lines), a 6-line verse missing 8/8, words changed 7/8 (6 lines) and 6/8 (4 lines), verse and chorus
+swapped 4/8, a 4-line verse missing 3/8. Real songs, first 18 in the folder: 12 pass, 6 held for review
+(every-breath-you-take, 08-anyhow, all-along-the-watchtower, all-i-wanna-do-is-make-love-to-you,
+back-in-the-saddle, beat-it) -- each is either a real mismatch or a recording Whisper can't hear (08-anyhow:
+"oh oh oh" loops for a minute), and only a listen can tell which.
+
+Limits: this cannot certify word-for-word perfection; it catches wrong editions, wrong/missing/out-of-order
+sections of roughly 5+ lines, and holds anything it cannot confirm. A displaced chorus inside a run of identical
+choruses, and a 1-2 line error, are not detectable. Existing songs were NOT re-checked retroactively.

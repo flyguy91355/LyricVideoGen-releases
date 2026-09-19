@@ -25,6 +25,7 @@ from typing import Callable
 import requests
 
 from .lyric_accuracy import check_lyric_accuracy
+from .lyric_audio_match import AudioMatch, audio_match_passes, describe_mismatch
 from .text_clean import artist_key, normalize
 from .vocal_onset import vocal_onset_rise
 
@@ -425,19 +426,27 @@ def _hit_to_lines(hit: Hit, duration: float) -> list[str]:
 def fetch_lyric_lines_verified(
     audio_path: Path, title: str, artist: str, duration: float, alt_titles: list[str] | None,
     anthropic_client, model: str = "claude-sonnet-5",
+    audio_check: Callable[[list[str]], AudioMatch] | None = None,
 ) -> tuple[list[str], str, str]:
     """Like fetch_lyric_lines(), but tries every real source in
-    _ACCURACY_CHECK_SOURCES in order, running check_lyric_accuracy() after
-    each, and returns as soon as one passes -- rather than settling for
-    whichever source happens to answer first. Returns (lines, source,
-    concern); concern is "" only when some source's text passed the check
-    cleanly. If every source is exhausted without a clean pass, the FIRST
-    non-empty candidate found is kept (with its concern) rather than
-    blocking generation -- never fabricates lyrics, same as
-    fetch_lyric_lines()."""
+    _ACCURACY_CHECK_SOURCES in order, checking each, and returns as soon as
+    one passes -- rather than settling for whichever source happens to
+    answer first. Returns (lines, source, concern); concern is "" only when
+    some source's text passed the check cleanly.
+
+    With `audio_check` (2026-09-19, lyric_audio_match.py), a source passes only if
+    its lines match what Whisper actually heard in the vocal stem -- the Claude
+    text check, which never hears the audio and passed a different edition or a
+    mixed-up verse/chorus, is not used at all. If no source matches, the one
+    with the BEST audio match is kept and flagged (its concern names the lines
+    that don't match). Without `audio_check` (e.g. Whisper unavailable) the
+    original behavior applies: check_lyric_accuracy() per source, and if none
+    pass the FIRST non-empty candidate is kept with its concern. Either way
+    generation is never blocked and lyrics are never fabricated."""
     best_lines: list[str] = []
     best_source = ""
     best_concern = "No lyrics found from any source."
+    best_coverage = -1.0
     for source in _ACCURACY_CHECK_SOURCES:
         if source == "sidecar":
             hit = _sidecar(audio_path)
@@ -449,6 +458,14 @@ def fetch_lyric_lines_verified(
             continue
         lines = _hit_to_lines(hit, duration)
         if not lines:
+            continue
+        if audio_check is not None:
+            match = audio_check(lines)
+            if audio_match_passes(match):
+                return lines, source, ""
+            if match.coverage > best_coverage:  # strict: on a tie the earlier source stays
+                best_lines, best_source = lines, source
+                best_concern, best_coverage = describe_mismatch(match), match.coverage
             continue
         looks_accurate, concern = check_lyric_accuracy(anthropic_client, title, artist, lines, model=model)
         if looks_accurate:

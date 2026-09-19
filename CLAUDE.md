@@ -32,8 +32,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   detected directly from the audio, and the title field is an editable override, not
   a required input — then click Generate; work dir (no Browse) falls back to
   the filename if identification isn't done (HISTORY). A "New Song"
-  button next to Generate
-  clears the form/log/progress bar back to blank without relaunching the app.
+  button beside Generate resets the form/log/progress bar (no relaunch).
   The window's own close (X) button (bound via `root.protocol("WM_DELETE_WINDOW",
   self._on_close_window)` in `__init__` -- the only way to quit) confirms first
   if a Generate/Redo/Batch is actively running -- closing mid-run kills the
@@ -59,8 +58,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   not a `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
   `Settings` and would silently reset any field with no widget behind it) --
   prefilled on launch and used as the Browse
-  dialog's `initialdir`. Built with
-  CustomTkinter
+  dialog's `initialdir`. Built with CustomTkinter
   (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
   Redo/log console/generation progress bar, right = the YouTube connect status/
   button/comments panel plus a "⚙ Settings" button. Settings (live preview + the
@@ -106,8 +104,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   `detect_chords`/`images` are the slow/expensive stages.
 - Requires `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` at the repo
   root (both are set locally; see `.env.example` for the template). No
-  Alpaca/trading credentials are involved — this is a separate, unrelated
-  project from AITrading despite living alongside it on this machine.
+  Alpaca/trading credentials -- unrelated to AITrading, which lives beside it.
 
 ## Pipeline stages (`lyricvideo/pipeline.py`, `STAGES`)
 
@@ -130,19 +127,17 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    path; a resume at fetch_lyrics/align/detect_chords whose stems are missing
    re-runs Demucs instead of crashing. Demucs's own output is relayed through
    `sys.stdout` (`_run_demucs`) so the GUI log shows its progress.
-3. **fetch_lyrics** (`fetch_lyrics.py` + `vocal_onset.py` + `lyric_accuracy.py`,
-   HISTORY 2026-09-18) — `fetch_lyric_lines_verified()` tries each real
-   source until one passes a check, recorded on `Song`. Plain lyric-line
-   text, no manual input required: a sidecar `.lrc`/`.txt` next to the
-   audio file `run_pipeline()` now uses (its `work_dir` copy, not the
-   original; 9-15), then lrclib.net (edition-consensus voting
-   across matching-length records, using `vocal_onset.py`'s narrow
-   vocal-onset-rise check to disambiguate disagreeing first-line
-   candidates), then `syncedlyrics` last, written to
-   `work_dir/lyric_lines.json`. LRC timestamps are discarded — real
-   timing comes from the next stage.
-   Plain (unsynced) text is split into lines directly, so a file whose
-   duration couldn't be probed still keeps its lyrics (9-14).
+3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`; HISTORY
+   2026-09-18/19) -- `fetch_lyric_lines_verified()` tries each source in turn (sidecar
+   `.lrc`/`.txt` beside `work_dir`'s audio copy, 9-15; lrclib.net edition-consensus
+   voting, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes,
+   into `lyric_lines.json`/`Song`. Passing = matching what faster-whisper HEARS in the
+   vocal stem (medium model, cached `transcript.json`; VAD off, it drops singing): >=70%
+   in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack
+   (backing vocals/"whoa" ignored, immediate repeats excused). None passing keeps
+   the best match flagged: no auto-upload, listed in "Flagged for Lyrics Review".
+   Whisper unavailable -> the old Claude text check (`lyric_accuracy.py`). LRC
+   timestamps are discarded (`align` times). Plain text splits directly (9-14).
 4. **align** — forced word-level alignment (`align.py`) against the isolated
    vocal stem, timing `fetch_lyrics`'s text; `combine.py` merges the timing onto
    the lines (a last word ending microseconds past the stem's duration is a

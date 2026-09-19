@@ -36,6 +36,8 @@ def _patch_common(monkeypatch, tmp_path):
         lambda *a, **k: (["hello there", "my friend"], "sidecar", ""),
     )
     monkeypatch.setattr("lyricvideo.pipeline.separate_vocals", lambda *a, **k: tmp_path / "vocals.wav")
+    # Never start a real Whisper from a pipeline-wiring test (the audio-check tests below override this).
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: "hello there my friend")
     monkeypatch.setattr("lyricvideo.pipeline.torchaudio.load", lambda path: (torch.zeros(1, 16000 * 10), 16000))
     monkeypatch.setattr("lyricvideo.pipeline.align_words", lambda vocals_path, words: [
         (float(i), float(i) + 0.4) for i in range(len(words))
@@ -777,3 +779,91 @@ def test_run_pipeline_explains_a_song_with_no_lyric_text_instead_of_dying_in_the
 
     with pytest.raises(RuntimeError, match=r"No lyrics were found for 'Test Song'.*audio\.lrc"):
         run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+
+def test_run_pipeline_gives_the_lyrics_fetch_an_audio_check_built_from_the_transcript(tmp_path, monkeypatch):
+    from lyricvideo.lyric_audio_match import audio_match_passes
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda vocals, work_dir: "pale morning harbor lantern")
+    seen = {}
+
+    def fake_fetch(*args, **kwargs):
+        seen["audio_check"] = kwargs.get("audio_check")
+        return ["pale morning harbor lantern"], "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fake_fetch)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    check = seen["audio_check"]
+    assert callable(check)
+    assert audio_match_passes(check(["pale morning harbor lantern"]))
+    assert not audio_match_passes(check(["thunder rolling over concrete valleys"]))
+
+
+def test_run_pipeline_falls_back_to_the_text_check_when_transcription_fails(tmp_path, monkeypatch, capsys):
+    _patch_common(monkeypatch, tmp_path)
+
+    def broken(*a, **k):
+        raise RuntimeError("model download blocked")
+
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", broken)
+    seen = {}
+
+    def fake_fetch(*args, **kwargs):
+        seen["audio_check"] = kwargs.get("audio_check", "missing")
+        return ["hello there"], "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fake_fetch)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")  # must not raise
+
+    assert seen["audio_check"] is None
+    assert "model download blocked" in capsys.readouterr().err
+
+
+def test_run_pipeline_tells_the_log_when_lyrics_were_verified_against_the_audio(tmp_path, monkeypatch, capsys):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified", lambda *a, **k: (["hello there"], "lrclib", ""),
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert "verified against the audio (source: lrclib)" in capsys.readouterr().out
+
+
+def test_run_pipeline_warns_in_the_log_when_lyrics_could_not_be_confirmed(tmp_path, monkeypatch, capsys):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: (["hello there"], "lrclib", "Only 41% of these lyrics match what is sung; lines 3-9 don't match the audio."),
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    err = capsys.readouterr().err
+    assert "could not be confirmed against the audio" in err
+    assert "lines 3-9" in err
+    assert "Flagged for Lyrics Review" in err
+
+
+def test_run_pipeline_says_it_is_listening_before_the_slow_transcription(tmp_path, monkeypatch, capsys):
+    """Transcribing takes about a minute; the log must not sit silent meanwhile."""
+    _patch_common(monkeypatch, tmp_path)
+    order = []
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.transcribe_vocals",
+        lambda *a, **k: order.append("transcribe") or "hello there my friend",
+    )
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.print",
+        lambda *a, **k: order.append(("print", " ".join(str(x) for x in a))),
+        raising=False,
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    first_listening = next(i for i, x in enumerate(order) if isinstance(x, tuple) and "Listening" in x[1])
+    assert first_listening < order.index("transcribe")

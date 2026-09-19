@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -21,9 +22,11 @@ from .fetch_lyrics import fetch_lyric_lines_verified
 from .identify import extract_metadata
 from .imagery import get_or_generate_image, is_fallback_image, substitute_fallback_images, summarize_song_gist
 from .layout import instrumental_image_captions
+from .lyric_audio_match import score_lyrics_against_transcript
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals
 from .settings import Settings
+from .transcribe import transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
 STAGES = ["identify", "separate", "fetch_lyrics", "align", "detect_chords", "images", "render"]
@@ -221,6 +224,24 @@ def prepare_images_for_fresh_regeneration(images_dir: Path, now: datetime | None
     return moved_to
 
 
+def _build_audio_check(vocals_path: Path, work_dir: Path):
+    """A function scoring candidate lyric lines against what Whisper hears in the
+    vocal stem (lyric_audio_match.py), or None when the transcription can't run --
+    then the lyrics fetch quietly falls back to the older text-only check, so a
+    missing package or blocked model download never stops a song from being made."""
+    print("Listening to the vocals to check the lyrics against what is sung (about a minute)...")
+    try:
+        heard = transcribe_vocals(vocals_path, work_dir)
+    except Exception as e:
+        print(
+            f"WARNING: could not check the lyrics against the audio ({type(e).__name__}: {e}); "
+            "using the text-only check instead.", file=sys.stderr,
+        )
+        return None
+    print(f"Heard {len(heard.split())} words in the vocals; checking the lyric sources against them...")
+    return lambda lines: score_lyrics_against_transcript(lines, heard)
+
+
 def run_pipeline(
     audio_path: Path,
     work_dir: Path,
@@ -342,10 +363,20 @@ def run_pipeline(
         report("fetch_lyrics")
         info_data = json.loads(info_path.read_text(encoding="utf-8"))
         lyrics_anthropic_client = anthropic.Anthropic()
+        audio_check = _build_audio_check(vocals_path, work_dir)
         lines_text, lyrics_source, lyrics_concern = fetch_lyric_lines_verified(
             audio_path, info_data["title"], info_data["artist"], info_data["duration"],
-            info_data.get("alt_titles"), lyrics_anthropic_client,
+            info_data.get("alt_titles"), lyrics_anthropic_client, audio_check=audio_check,
         )
+        if audio_check is not None:
+            if lyrics_concern:
+                print(
+                    f"WARNING: the lyrics could not be confirmed against the audio "
+                    f"({lyrics_source or 'no source'}): {lyrics_concern} This song is held in "
+                    "Flagged for Lyrics Review instead of auto-uploading.", file=sys.stderr,
+                )
+            else:
+                print(f"Lyrics verified against the audio (source: {lyrics_source}).")
         lyrics_path.write_text(
             json.dumps({"lines": lines_text, "source": lyrics_source, "concern": lyrics_concern}),
             encoding="utf-8",

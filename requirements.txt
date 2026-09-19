@@ -24,6 +24,11 @@ torch>=2.1
 torchaudio>=2.1
 torchcodec>=0.1
 demucs>=4.0
+# Speech recognition of the isolated vocals, used to check every lyric source
+# against what is actually sung (lyric_audio_match.py / transcribe.py). CPU-only
+# (int8), no torch dependency of its own; the `small` model downloads once on first
+# use (~460 MB). A dry-run install changed none of the pins below (2026-09-19).
+faster-whisper>=1.0
 librosa>=0.10
 # crema (chord detection, see detect_chords.py's own docstring for why it
 # replaced hand-tuned chroma-template matching -- CLAUDE_HISTORY 2026-09-13)

@@ -260,3 +260,96 @@ def test_fetch_lyric_lines_verified_returns_empty_when_nothing_found_anywhere(tm
     assert lines == []
     assert source == ""
     assert concern == "No lyrics found from any source."
+
+
+# --- audio verification (2026-09-19): sources pass on matching what is SUNG ---------------
+
+_SUNG = [
+    "the river runs beside the old stone mill",
+    "and morning fog lies heavy on the hill",
+    "a lantern swings above the wooden door",
+    "i wait for you like i have waited before",
+]
+_WRONG_EDITION = [
+    "neon signs are flashing down the avenue",
+    "every stranger's face looks like a stranger's face to you",
+    "dance until the sunrise turns the pavement gold",
+    "nobody will ever tell the story we were told",
+]
+
+
+def _audio_check_for(heard_lines):
+    from lyricvideo.lyric_audio_match import score_lyrics_against_transcript
+
+    heard = " ".join(heard_lines)
+    return lambda lines: score_lyrics_against_transcript(lines, heard)
+
+
+def _no_claude_check(monkeypatch):
+    def fail(*a, **k):
+        raise AssertionError("the Claude text check must not run when an audio check is supplied")
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.check_lyric_accuracy", fail)
+
+
+def test_verified_fetch_with_an_audio_check_skips_a_source_that_does_not_match_the_audio(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(_WRONG_EDITION), False, 0.0),
+    )
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit",
+        lambda title, artist, providers=None: ("\n".join(_SUNG), False, 0.0) if providers == ["Musixmatch"] else None,
+    )
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(_SUNG),
+    )
+
+    assert lines == _SUNG
+    assert source == "Musixmatch"
+    assert concern == ""
+
+
+def test_verified_fetch_with_an_audio_check_stops_at_the_first_source_that_matches(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(_SUNG), False, 0.0))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("no further source should be asked once one matches the audio")
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", fail_if_called)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(_SUNG),
+    )
+
+    assert (lines, source, concern) == (_SUNG, "lrclib", "")
+
+
+def test_verified_fetch_keeps_and_flags_the_best_audio_match_when_none_match(tmp_path, monkeypatch):
+    """lrclib is half right (its first two lines match); Musixmatch is the wrong edition
+    entirely. Nothing passes, so the better one is kept -- flagged, with the reason."""
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _SUNG[:2] + _WRONG_EDITION[:2]
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(_WRONG_EDITION), False, 0.0))
+
+    def providers(title, artist, providers=None):
+        return ("\n".join(half_right), False, 0.0) if providers == ["Genius"] else ("\n".join(_WRONG_EDITION), False, 0.0)
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", providers)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(_SUNG),
+    )
+
+    assert lines == half_right
+    assert source == "Genius"
+    assert "match what is sung" in concern
+    assert "lines 3-4" in concern
