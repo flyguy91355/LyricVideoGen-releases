@@ -2927,3 +2927,37 @@ is "fetch_lyrics" when both stem files exist, stays "identify" when only
 one exists (separate() itself interrupted partway), and
 `_run_batch_worker` actually threads `resume_stage` through to
 `run_pipeline`'s `start_stage` per item. Full suite: 729 passed.
+
+## 2026-09-19 — A Batch kept retrying uploads after YouTube said the upload limit was hit
+
+Symptom (owner's live log): after one song failed with `ResumableUploadError: <HttpError 400 ... "The user
+has exceeded the number of videos they may upload." ... 'reason': 'uploadLimitExceeded'>`, the NEXT songs in
+the same Batch each attempted (and failed) their own upload, even though the 2026-09-18 quota-cooldown and
+daily-cap guards exist specifically to stop that.
+
+Root cause: both guards were keyed on things this error never triggers. `is_quota_exceeded_error()` (the one
+predicate every cooldown-recording call site in `gui.py` routes through) only matched HTTP **429**; YouTube
+signals its per-channel upload ceiling as HTTP **400** + reason `uploadLimitExceeded` (confirmed against
+the official `videos.insert` docs -- a distinct error from the 429 API quota). Unrecognized, it fell into the
+generic "upload failed" warning branch: no `save_quota_blocked_until()`, so the next song's
+`load_quota_blocked_until()` check saw nothing. The daily cap (`youtube_max_uploads_per_day`) didn't help
+either: `record_upload()` only counts *successful* uploads, so failed attempts never advance it (by design --
+it's an owner-side ceiling on successes, not a reaction to YouTube refusing).
+
+Why no test caught it: every `test_gui.py` quota test stubs `is_quota_exceeded_error` to `lambda e: True`,
+and `test_youtube.py` only tried a 429 and a 404 -- the real predicate was never run against the real error
+shape.
+
+Fix: `is_quota_exceeded_error()` now also returns True for a 400 whose `error_details` carry reason
+`uploadLimitExceeded` (a 400 with any other reason is still False). Every existing call site therefore starts
+recording the cooldown (`youtube_quota_retry_hours`) and halting, with no per-site change. Side effect worth
+knowing: the cooldown is global (by the 2026-09-18 "halt all YouTube API activity" design), so hitting the
+upload limit also pauses comment scanning/playlist organizing for that window, not only uploads.
+
+Tests: two predicate tests in `test_youtube.py` (real `ResumableUploadError` shape -> True; 400 with another
+reason -> False), plus `test_gui.py::test_maybe_upload_to_youtube_stops_retrying_after_a_real_upload_limit_
+exceeded_error`, which uses the real error AND the real predicate across two consecutive songs and asserts the
+second never attempts an upload (verified to fail without the fix). Also fixed an unrelated time bomb found
+by the full run: `test_youtube_status_text_skips_the_api_call_while_quota_blocked` hardcoded
+`blocked_until = 2026-09-19 06:00 UTC`, which stopped being "in the future" that morning -- now relative.
+Full suite: 732 passed.

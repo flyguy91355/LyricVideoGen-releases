@@ -491,3 +491,31 @@ def test_is_quota_exceeded_error_false_for_a_different_http_status():
 
 def test_is_quota_exceeded_error_false_for_a_non_http_error():
     assert is_quota_exceeded_error(RuntimeError("boom")) is False
+
+
+def _make_upload_limit_error():
+    """The exact error a real upload got on 2026-09-19: a ResumableUploadError
+    (HttpError subclass) with HTTP 400 + reason uploadLimitExceeded, not a 429."""
+    from googleapiclient.errors import ResumableUploadError
+
+    resp = SimpleNamespace(status=400, reason="Bad Request")
+    content = (
+        b'{"error": {"code": 400, "message": "The user has exceeded the number of videos they may upload.", '
+        b'"errors": [{"message": "The user has exceeded the number of videos they may upload.", '
+        b'"domain": "youtube.video", "reason": "uploadLimitExceeded"}]}}'
+    )
+    return ResumableUploadError(resp, content)
+
+
+def test_is_quota_exceeded_error_true_for_a_400_upload_limit_exceeded():
+    # Real incident, 2026-09-19: every song in a Batch kept retrying the upload
+    # because this 400 (not a 429) was never recognized, so no cooldown was set.
+    assert is_quota_exceeded_error(_make_upload_limit_error()) is True
+
+
+def test_is_quota_exceeded_error_false_for_a_400_with_a_different_reason():
+    from googleapiclient.errors import HttpError
+
+    resp = SimpleNamespace(status=400, reason="Bad Request")
+    content = b'{"error": {"code": 400, "errors": [{"domain": "youtube.video", "reason": "invalidTitle"}]}}'
+    assert is_quota_exceeded_error(HttpError(resp, content)) is False

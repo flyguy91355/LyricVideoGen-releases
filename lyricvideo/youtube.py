@@ -172,10 +172,22 @@ def is_quota_exceeded_error(exc: Exception) -> bool:
     upload failure the same way. Real incident, 2026-09-17: creating
     playlists and adding videos both cost real quota, and organizing many
     songs at once (or, going forward, uploading several times a day) can
-    exhaust the channel's daily cap."""
+    exhaust the channel's daily cap. Also true for videos.insert's own
+    HTTP 400 `uploadLimitExceeded` ("The user has exceeded the number of
+    videos they may upload") -- a different status and a per-channel upload
+    ceiling rather than API quota, but the right response is identical:
+    stop and back off. Real incident, 2026-09-19: it went unrecognized, so
+    no cooldown was ever recorded and every song in a Batch retried into it."""
     from googleapiclient.errors import HttpError
 
-    return isinstance(exc, HttpError) and exc.status_code == 429
+    if not isinstance(exc, HttpError):
+        return False
+    if exc.status_code == 429:
+        return True
+    return exc.status_code == 400 and any(
+        detail.get("reason") == "uploadLimitExceeded" for detail in (exc.error_details or [])
+        if isinstance(detail, dict)
+    )
 
 
 def video_exists(youtube_client, video_id: str) -> bool:

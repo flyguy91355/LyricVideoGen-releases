@@ -238,6 +238,44 @@ def test_maybe_upload_to_youtube_saves_a_quota_cooldown_on_a_quota_exceeded_erro
     assert before + timedelta(hours=5, minutes=59) < saved[0] < before + timedelta(hours=6, minutes=1)
 
 
+def test_maybe_upload_to_youtube_stops_retrying_after_a_real_upload_limit_exceeded_error(tmp_path, monkeypatch):
+    """Regression, 2026-09-19: every other test here stubs is_quota_exceeded_error
+    to `lambda e: True`, so none noticed that the real predicate never recognized
+    YouTube's actual HTTP 400 uploadLimitExceeded -- no cooldown was recorded and
+    every following song in a Batch attempted (and failed) its own upload. This
+    one uses the real error and the real predicate, across two songs."""
+    from types import SimpleNamespace
+
+    from googleapiclient.errors import ResumableUploadError
+
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.load_uploads_today", lambda: 0)
+    cooldown = []
+    monkeypatch.setattr("lyricvideo.gui.save_quota_blocked_until", lambda dt: cooldown.append(dt))
+    monkeypatch.setattr("lyricvideo.gui.load_quota_blocked_until", lambda: cooldown[-1] if cooldown else None)
+    error = ResumableUploadError(
+        SimpleNamespace(status=400, reason="Bad Request"),
+        b'{"error": {"code": 400, "message": "The user has exceeded the number of videos they may upload.", '
+        b'"errors": [{"domain": "youtube.video", "reason": "uploadLimitExceeded"}]}}',
+    )
+    attempts = []
+
+    def failing_upload(youtube_client, anthropic_client, work_dir, settings):
+        attempts.append(work_dir)
+        raise error
+
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", failing_upload)
+    settings = Settings(youtube_auto_upload=True)
+
+    _maybe_upload_to_youtube(tmp_path / "song-one", settings)
+    _maybe_upload_to_youtube(tmp_path / "song-two", settings)
+
+    assert attempts == [tmp_path / "song-one"]  # song-two must be skipped by the recorded cooldown
+    assert len(cooldown) == 1
+
+
 def test_maybe_upload_to_youtube_skips_when_todays_upload_cap_is_reached(tmp_path, monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
     monkeypatch.setattr("lyricvideo.gui.load_uploads_today", lambda: 3)
@@ -1069,7 +1107,7 @@ def test_youtube_status_text_skips_the_api_call_while_quota_blocked(monkeypatch)
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
     monkeypatch.setattr(
         "lyricvideo.gui.load_quota_blocked_until",
-        lambda: datetime(2026, 9, 19, 6, 0, tzinfo=timezone.utc),
+        lambda: datetime.now(timezone.utc) + timedelta(hours=6),  # was a hardcoded date that expired 2026-09-19
     )
     monkeypatch.setattr(
         "lyricvideo.gui.youtube_auth.get_channel_title",
