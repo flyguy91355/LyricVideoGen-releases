@@ -1126,7 +1126,7 @@ class LyricVideoGUI:
                     else:
                         run_pipeline(
                             item.audio_path, item.work_dir, item.title,
-                            settings=self.settings,
+                            start_stage=item.resume_stage, settings=self.settings,
                             progress_callback=lambda stage: self._queue.put(("stage", stage)),
                         )
                     _maybe_upload_to_youtube(item.work_dir, self.settings)

@@ -2880,3 +2880,50 @@ Two new tests in `test_imagery.py` cover both branches (reuses a real
 `previous_image` when given one; still falls back to plain color when the
 given `previous_image` doesn't exist, i.e. no predecessor yet). Full
 suite: 726 passed.
+
+## 2026-09-18 — An interrupted Batch item redid Demucs from scratch on the next Start Batch
+
+Told the owner that restarting the app mid-Batch would kill the pipeline
+partway through "with no way to resume" (documented, existing behavior).
+Owner's reply left no ambiguity: "that needs to be fix.. that no resume..
+of course i want to resume the last one that failed along with all the
+rest."
+
+Checked what actually happens today: `resolve_batch_items()` (`batch.py`)
+only tracks `already_done` (does the final mp4 exist). Restarting "Start
+Batch" on the same folder already naturally skips fully-done songs and
+continues through the remaining ones -- that part already worked. But the
+one song that was mid-pipeline when the app died is never `already_done`
+(no mp4 yet), so `_run_batch_worker` (`gui.py`) called `run_pipeline()`
+with no `start_stage` for it, meaning "start over from `identify`" --
+silently redoing `separate` (Demucs), the single slowest, most
+expensive stage in the entire pipeline, even when its output was already
+sitting on disk untouched.
+
+`run_pipeline()` already fully supports resuming from any later stage
+via disk artifacts (CLI `--stage`, and the GUI's Redo/already-done-batch
+paths already use `start_stage="fetch_lyrics"` deliberately) -- the gap
+was purely that a freshly-interrupted, never-completed item never got
+offered that same resumption.
+
+Fix: `BatchItem` gained a `resume_stage` field (default `"identify"`).
+`resolve_batch_items()` sets it to `"fetch_lyrics"` when both
+`htdemucs/<audio_stem>/{vocals,no_vocals}.wav` already exist for that
+item -- the exact same path convention `run_pipeline()` itself uses, so
+this can never disagree with what the pipeline would independently
+discover. `_run_batch_worker`'s not-already-done branch now passes
+`start_stage=item.resume_stage` instead of always defaulting to
+`"identify"`. No change to the already-done branch (still backs up and
+resumes at `fetch_lyrics` unconditionally, as intended for a deliberate
+full regenerate).
+
+Practical effect: closing the app (or a crash) mid-Batch is now safe to
+just restart from -- click Start Batch on the same folder, choose "skip
+already-done," and the interrupted song resumes past Demucs instead of
+paying for it twice, while every other remaining song proceeds normally.
+
+Three new tests (`test_batch.py` x2, `test_gui.py` x1) cover: resume_stage
+is "fetch_lyrics" when both stem files exist, stays "identify" when only
+one exists (separate() itself interrupted partway), and
+`_run_batch_worker` actually threads `resume_stage` through to
+`run_pipeline`'s `start_stage` per item. Full suite: 729 passed.

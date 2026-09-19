@@ -152,6 +152,51 @@ def test_resolve_batch_items_already_done_true_when_video_exists(tmp_path, monke
     assert items[0].already_done is True
 
 
+def test_resolve_batch_items_resume_stage_is_fetch_lyrics_when_demucs_stems_exist(tmp_path, monkeypatch):
+    """A song interrupted (app closed/crashed) after separate() already
+    finished must not redo the slowest stage in the pipeline from scratch
+    on the next Start Batch -- real owner complaint, 2026-09-18: closing
+    mid-batch left the interrupted song with "no way to resume"."""
+    audio = tmp_path / "some-song.mp3"
+    audio.write_bytes(b"")
+    work_root = tmp_path / "work"
+    demucs_dir = work_root / "some-song" / "htdemucs" / "some-song"
+    demucs_dir.mkdir(parents=True)
+    (demucs_dir / "vocals.wav").write_bytes(b"fake vocals")
+    (demucs_dir / "no_vocals.wav").write_bytes(b"fake instrumental")
+
+    monkeypatch.setattr(
+        "lyricvideo.batch.extract_metadata",
+        lambda path: type("Info", (), {"title": "Some Song"})(),
+    )
+
+    items = resolve_batch_items([audio], work_root)
+
+    assert items[0].already_done is False
+    assert items[0].resume_stage == "fetch_lyrics"
+
+
+def test_resolve_batch_items_resume_stage_is_identify_when_stems_incomplete(tmp_path, monkeypatch):
+    """Only one of the two stem files exists (separate() was itself
+    interrupted partway) -- must not resume past a stage that never
+    actually finished."""
+    audio = tmp_path / "some-song.mp3"
+    audio.write_bytes(b"")
+    work_root = tmp_path / "work"
+    demucs_dir = work_root / "some-song" / "htdemucs" / "some-song"
+    demucs_dir.mkdir(parents=True)
+    (demucs_dir / "vocals.wav").write_bytes(b"fake vocals")
+
+    monkeypatch.setattr(
+        "lyricvideo.batch.extract_metadata",
+        lambda path: type("Info", (), {"title": "Some Song"})(),
+    )
+
+    items = resolve_batch_items([audio], work_root)
+
+    assert items[0].resume_stage == "identify"
+
+
 def test_resolve_batch_items_falls_back_to_filename_stem_on_extraction_failure(tmp_path, monkeypatch):
     """A file whose metadata extraction raises still gets a usable, UNIQUE
     identity (its own filename stem) -- not a shared constant like "" or

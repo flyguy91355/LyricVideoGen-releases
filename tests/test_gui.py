@@ -1556,6 +1556,40 @@ def test_run_batch_worker_releases_memory_after_every_item_success_or_failure(mo
     assert released == [True, True]
 
 
+def test_run_batch_worker_resumes_an_interrupted_item_at_its_own_resume_stage(monkeypatch):
+    """resolve_batch_items() computes resume_stage="fetch_lyrics" for an item
+    whose Demucs stems already exist on disk (interrupted after separate()
+    finished) -- _run_batch_worker must actually pass that through to
+    run_pipeline for a not-already-done item, not always default to
+    "identify" (real owner complaint, 2026-09-18: closing mid-batch left the
+    interrupted song with "no way to resume" other than redoing everything,
+    including the slowest stage in the whole pipeline)."""
+    monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    calls = []
+
+    def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
+        calls.append(kwargs.get("start_stage"))
+
+    monkeypatch.setattr("lyricvideo.gui.run_pipeline", fake_run_pipeline)
+
+    items = [
+        BatchItem(
+            audio_path=Path("a.mp3"), title="Fresh Song", work_dir=Path("work/fresh"),
+            already_done=False, resume_stage="identify",
+        ),
+        BatchItem(
+            audio_path=Path("b.mp3"), title="Interrupted Song", work_dir=Path("work/interrupted"),
+            already_done=False, resume_stage="fetch_lyrics",
+        ),
+    ]
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
+
+    LyricVideoGUI._run_batch_worker(stub, items)
+
+    assert calls == ["identify", "fetch_lyrics"]
+
+
 def test_on_batch_done_refreshes_retry_upload_options(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda *a, **k: None)
     refreshed = []

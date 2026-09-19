@@ -45,8 +45,10 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or
   regenerated (backing up each one first, like Redo) for the whole batch; a
-  file that errors is logged and skipped, never aborting the rest.
-  `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
+  file that errors is logged and skipped, never aborting the rest. An
+  interrupted item whose Demucs stems already exist resumes at
+  `BatchItem.resume_stage="fetch_lyrics"` instead of redoing the slowest
+  stage from scratch (HISTORY 2026-09-18). `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
   after every song, success or failure -- RSS climbs across a long Batch
   run without it, even with no real leak (HISTORY 2026-09-18). The chosen
   folder's path is never `.strip()`'d (a real folder name can carry whitespace),
@@ -84,8 +86,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   the draggable slider (parsed/clamped by `_parse_clamped_float`, tolerant of a
   stray "%"/"s" suffix) -- driven off a trace on the slider's own Tk variable rather
   than `CTkSlider`'s `command` callback, since that callback only fires on a live
-  drag, never a programmatic `.set()` (real bug, found via an actual screenshot;
-  HISTORY 2026-09-11). An
+  drag, never a programmatic `.set()` (HISTORY 2026-09-11). An
   unsaved field's row label is bold+orange (was plain orange text), still governed
   by the same `_dirty_fields()`/itemized-confirm-before-Save mechanism as before.
   `render.py`/`detect_chords.py`/`assemble_video()` all take plain keyword arguments
@@ -391,9 +392,9 @@ actually on disk) is compared field-by-field against the live widgets on every
 change; any field that differs gets a small "●" marker directly on its own label
 (`_refresh_dirty_indicators`), and Save Settings/Discard changes only enable when
 something is actually dirty. Save shows an itemized `old → new` confirm dialog
-for every changed field before writing anything (catches an earlier accidental
-change riding along with a later deliberate one -- the exact scenario the owner
-described); Discard just reloads `self._baseline`, touching disk not at all.
+for every changed field before writing anything (catches an accidental change
+riding along with a later deliberate one); Discard just reloads
+`self._baseline`, touching disk not at all.
 Closing the app (or a crash) with unsaved changes simply loses them, by design.
 `gui.py`'s in-memory `self.settings` still updates live on every change (so the
 current session's own Generate/Redo/Batch always uses your latest tweak) -- only

@@ -82,6 +82,7 @@ class BatchItem:
     title: str
     work_dir: Path
     already_done: bool
+    resume_stage: str = "identify"
 
 
 def resolve_batch_items(files: list[Path], work_root: Path) -> list[BatchItem]:
@@ -91,7 +92,16 @@ def resolve_batch_items(files: list[Path], work_root: Path) -> list[BatchItem]:
     A file whose metadata extraction itself raises still gets a usable,
     unique identity -- its own filename stem, never a shared constant --
     so two different failing files in the same batch never collide on the
-    same work_dir. Order is preserved from `files`."""
+    same work_dir. Order is preserved from `files`.
+
+    resume_stage is "fetch_lyrics" instead of the default "identify" when
+    Demucs stems already exist for this item (same htdemucs/<audio_stem>/
+    path convention run_pipeline() itself uses) -- a song interrupted after
+    separate() completed (app closed/crashed mid-batch) would otherwise
+    redo the slowest stage in the whole pipeline from scratch on the next
+    Start Batch, exactly like a completed song's own reprocessing already
+    resumes past it (real owner complaint, 2026-09-18: closing mid-batch
+    left "no way to resume" the interrupted song)."""
     items: list[BatchItem] = []
     for audio_path in files:
         try:
@@ -100,9 +110,12 @@ def resolve_batch_items(files: list[Path], work_root: Path) -> list[BatchItem]:
             title = audio_path.stem
         work_dir = work_root / slugify(title)
         final_video = work_dir / f"{slugify(title)}.mp4"
+        demucs_dir = work_dir / "htdemucs" / audio_path.stem
+        has_stems = (demucs_dir / "vocals.wav").exists() and (demucs_dir / "no_vocals.wav").exists()
         items.append(BatchItem(
             audio_path=audio_path, title=title, work_dir=work_dir,
             already_done=final_video.exists(),
+            resume_stage="fetch_lyrics" if has_stems else "identify",
         ))
     return items
 
