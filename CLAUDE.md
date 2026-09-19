@@ -461,8 +461,8 @@ made-for-kids, publish times/uploads-per-day, the separate enforced
 `settings.py`'s YouTube block for the full field list and current defaults).
 `SettingsPanel` gained a
 "YouTube" section (secrets picker, auto-upload checkbox, privacy/category
-dropdowns, made-for-kids checkbox, a publish-times text box, an
-"Uploads per day" slider) --
+dropdowns, made-for-kids checkbox, a publish-times text box, a
+"Max uploads per day" slider) --
 the Category dropdown shows friendly labels ("Howto & Style"/"Education"/
 "Music") while `Settings.youtube_category_id` stores the real numeric
 YouTube category id; `values_to_settings()`/`load_from()` translate

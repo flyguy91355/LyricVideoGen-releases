@@ -15,7 +15,6 @@ from typing import Optional
 import customtkinter as ctk
 
 from .settings import ENCODERS, FPS_OPTIONS, RESOLUTIONS, Settings, hex_to_rgb
-from .youtube_schedule import evenly_spaced_upload_times, format_upload_times
 
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -219,15 +218,6 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         _refresh_entry_text()
         self._add(name, label, frame)
 
-    def _regenerate_upload_times(self, count: float) -> None:
-        # Owner request, 2026-09-17: moving the "Uploads per day" slider
-        # fills the times box with that many sensible defaults spread
-        # across the day, which the owner can then hand-edit further (e.g.
-        # nudge one to 9:30) -- that edit sticks until the slider moves
-        # again. The slider is purely a default-generator; the times text
-        # itself is what schedule_upload() actually reads.
-        self.vars["youtube_upload_times"].set(format_upload_times(evenly_spaced_upload_times(int(count))))
-
     def _color(self, name: str, label: str) -> None:
         var = self._var(name, tk.StringVar)
         self._add(name, label, ColorButton(self, var))
@@ -404,11 +394,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._option("youtube_category_id", "Category", list(_YOUTUBE_CATEGORY_IDS.keys()))
         self._check("youtube_made_for_kids", "Made for kids")
         self._text("youtube_upload_times", "Scheduled publish times (HH:MM,...)")
-        self._slider(
-            "youtube_uploads_per_day", "Uploads per day", 1, 10, 9, lambda v: f"{int(v)}/day",
-            on_value_change=self._regenerate_upload_times,
-        )
-        self._slider("youtube_max_uploads_per_day", "Daily upload cap", 1, 10, 9, lambda v: f"{int(v)}/day")
+        self._slider("youtube_max_uploads_per_day", "Max uploads per day", 1, 10, 9, lambda v: f"{int(v)}/day")
         self._slider("youtube_quota_retry_hours", "Retry wait after quota exceeded", 1, 48, 47,
                      lambda v: f"{int(v)}h")
 
