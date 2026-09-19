@@ -150,3 +150,14 @@ def test_arbitrate_has_nothing_to_judge_for_a_fully_matching_song():
 
     assert arbitrate(client, SUNG, matching, SEGMENTS) is None
     assert client.calls == []
+
+
+def test_the_prompt_says_a_line_missing_from_the_transcript_is_not_evidence_the_lyrics_are_wrong():
+    """Real ('Night Moves', 2026-09-19): Whisper skipped 'We weren't in love, oh no, far from it' and the judge
+    called the line wrong ('the transcript lacks the weren't-in-love clause'), holding a correct song."""
+    prompt = build_arbiter_prompt(LYRICS, MATCH, SEGMENTS)
+
+    assert "missing from the transcript" in prompt
+    assert "merged" in prompt
+    assert "not evidence" in prompt.lower()
+    assert "contradict" in prompt          # lyrics_wrong needs transcript words that CONTRADICT the file's

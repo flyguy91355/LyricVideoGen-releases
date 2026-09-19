@@ -286,3 +286,34 @@ def test_a_song_with_nothing_unexplained_has_no_gap_text():
     match = score_lyrics_against_transcript(SUNG_ORDER, whisper_like(SUNG_ORDER))
 
     assert match.gap_text == "" or len(match.gap_text.split()) <= 3
+
+
+# --- choosing the least-bad candidate (Night Moves, 2026-09-19) -------------------------------
+
+def test_a_passing_match_has_zero_badness():
+    from lyricvideo.lyric_audio_match import audio_match_badness
+
+    assert audio_match_badness(score_lyrics_against_transcript(SUNG_ORDER, whisper_like(SUNG_ORDER))) == 0
+
+
+def test_badness_grows_with_how_far_each_limit_is_exceeded():
+    from lyricvideo.lyric_audio_match import audio_match_badness
+
+    heard = whisper_like(SUNG_ORDER)
+    small_miss = score_lyrics_against_transcript(V1 + OTHER_SONG[:4] + V2 + CHORUS + BRIDGE + CHORUS, heard)
+    big_miss = score_lyrics_against_transcript(OTHER_SONG * 3, heard)
+
+    assert 0 < audio_match_badness(small_miss) < audio_match_badness(big_miss)
+
+
+def test_a_complete_version_that_narrowly_fails_is_less_bad_than_a_short_one_that_omits_a_verse():
+    """Real ('Night Moves'): coverage alone picked NetEase (0.82, a shorter version with a missing section,
+    38 unexplained sung words) over lrclib (0.78, the complete lyrics, failing only a 5-line run)."""
+    from lyricvideo.lyric_audio_match import audio_match_badness
+
+    heard = whisper_like(SUNG_ORDER)
+    complete_but_one_wrong_block = score_lyrics_against_transcript(V1 + OTHER_SONG + V2 + CHORUS + BRIDGE + CHORUS, heard)
+    short_but_all_matching = score_lyrics_against_transcript(V1, heard)
+
+    assert short_but_all_matching.coverage > complete_but_one_wrong_block.coverage    # the trap coverage falls into
+    assert audio_match_badness(complete_but_one_wrong_block) < audio_match_badness(short_but_all_matching)

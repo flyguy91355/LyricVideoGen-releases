@@ -520,3 +520,77 @@ def test_the_judge_is_not_consulted_when_a_source_already_matches(tmp_path, monk
     )
 
     assert (lines, source, concern) == (_SUNG, "lrclib", "")
+
+
+# --- credit/metadata lines are not lyrics (Night Moves, 2026-09-19) ---------------------------
+
+def test_credit_lines_from_a_lyrics_provider_are_not_lyrics():
+    """Real: NetEase's lyrics for 'Night Moves' began '作曲 : Bob Seger' / '作词 : Bob Seger'
+    ('Composer:' / 'Lyricist:'). They were aligned across the whole 17 s intro and rendered on screen as
+    empty boxes (the font has no CJK glyphs)."""
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    synced = "[00:00.00]作曲 : Bob Seger\n[00:01.00]作词 : Bob Seger\n[00:17.00]I was a little too tall\n[00:20.00]Could've used a few pounds\n"
+
+    assert _hit_to_lines((synced, True, 0.0), 300.0) == ["I was a little too tall", "Could've used a few pounds"]
+
+
+def test_english_credit_lines_are_dropped_from_plain_lyrics_too():
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    plain = "Composer: Bob Seger\nLyrics by: Bob Seger\nWritten by：Someone\nI was a little too tall\nProduced by - the band\n"
+
+    assert _hit_to_lines((plain, False, 0.0), 300.0) == ["I was a little too tall", "Produced by - the band"]
+
+
+def test_a_real_lyric_line_that_merely_contains_a_credit_word_is_kept():
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    lines = "Written by the wind and the rain\nComposer of my own fate\nProducer, I'm so tired\n"
+
+    assert _hit_to_lines((lines, False, 0.0), 300.0) == [
+        "Written by the wind and the rain", "Composer of my own fate", "Producer, I'm so tired",
+    ]
+
+
+def test_full_width_punctuation_is_normalised_and_a_stray_trailing_bracket_is_dropped():
+    """Real: 'And points all her own sitting way up high（' rendered a box at the end of the line."""
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    text = "And points all her own sitting way up high（\n（Hey dudes!）\nWorkin' on mysteries, without any clues（\nHello，world\n"
+
+    assert _hit_to_lines((text, False, 0.0), 300.0) == [
+        "And points all her own sitting way up high", "(Hey dudes!)",
+        "Workin' on mysteries, without any clues", "Hello,world",
+    ]
+
+
+def test_the_source_kept_when_none_match_is_the_least_bad_not_the_highest_coverage(tmp_path, monkeypatch):
+    """The Night Moves choice: a short version that matches perfectly but omits a verse must lose to the
+    complete version that merely has one unheard stretch."""
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    later_verses = [
+        "the winter came and covered every road", "we traded all our dreams for heavy loads",
+        "a whisper crossed the empty market square", "and told me you were waiting for me there",
+        "carry me home across the silver sea", "carry me home where i long to be",
+        "the stars will guide us through the night", "carry me home to the morning light",
+    ]
+    full_song = _SUNG + later_verses
+    short_version = list(_SUNG)                         # every line matches, but two whole verses are missing
+    complete_with_a_bad_stretch = _SUNG[:2] + _WRONG_EDITION + later_verses
+
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(complete_with_a_bad_stretch), False, 0.0),
+    )
+    monkeypatch.setattr(
+        "lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit",
+        lambda title, artist, providers=None: ("\n".join(short_version), False, 0.0) if providers == ["NetEase"] else None,
+    )
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(full_song),
+    )
+
+    assert source == "lrclib" and lines == complete_with_a_bad_stretch

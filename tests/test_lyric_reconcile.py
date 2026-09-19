@@ -208,3 +208,11 @@ def test_the_repair_request_leaves_room_for_the_answer_after_the_models_reasonin
 
     assert seen["max_tokens"] >= 12000
     assert seen["output_config"] == {"effort": "medium"}
+
+
+def test_the_repair_prompt_warns_against_deleting_lines_merely_absent_from_the_transcript():
+    """Real ('Night Moves'): the suggestion deleted three correct lyric lines because Whisper skipped them."""
+    prompt = build_reconcile_prompt(V1 + WRONG, match_for(V1 + WRONG), SEGMENTS)
+
+    assert "absent from the transcript" in prompt
+    assert "do not delete" in prompt.lower()

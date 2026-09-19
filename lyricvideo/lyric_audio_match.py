@@ -288,3 +288,17 @@ def describe_mismatch(match: AudioMatch) -> str:
             "(a verse or chorus may be missing)"
         )
     return "; ".join(parts) + "."
+
+
+def audio_match_badness(match: AudioMatch) -> float:
+    """0 for a candidate that passes; otherwise how far past each limit it is, as a fraction of that limit,
+    summed. Used to keep the LEAST bad candidate when no source passes. Coverage alone chose a shorter
+    version that omitted a verse (0.82) over the complete lyrics that failed one stretch narrowly (0.78) --
+    'Night Moves', 2026-09-19."""
+    if not match.line_supported:
+        return float("inf")
+    return (
+        max(0.0, MIN_COVERAGE - match.coverage) / MIN_COVERAGE
+        + max(0, match.worst_run - MAX_UNSUPPORTED_RUN) / MAX_UNSUPPORTED_RUN
+        + max(0, match.worst_heard_gap - MAX_UNEXPLAINED_SUNG_WORDS) / MAX_UNEXPLAINED_SUNG_WORDS
+    )

@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +26,7 @@ from typing import Callable
 import requests
 
 from .lyric_accuracy import check_lyric_accuracy
-from .lyric_audio_match import AudioMatch, audio_match_passes, describe_mismatch
+from .lyric_audio_match import AudioMatch, audio_match_badness, audio_match_passes, describe_mismatch
 from .lyric_arbiter import Arbitration, describe_arbitration
 from .lyric_reconcile import SUGGESTION_FILENAME
 from .text_clean import artist_key, normalize
@@ -411,18 +412,45 @@ def _fetch_syncedlyrics_hit(title: str, artist: str, providers: list[str] | None
 _ACCURACY_CHECK_SOURCES = ["sidecar", "lrclib", "Musixmatch", "NetEase", "Megalobiz", "Genius"]
 
 
+# "作曲 : Bob Seger", "Composer: X", "Lyrics by：X" -- a provider's credit line, not a sung line. Needs the
+# colon (ASCII or full-width) so a real lyric like "Written by the wind" or "Producer, I'm so tired" stays.
+_CREDIT_LINE_RE = re.compile(
+    r"^\s*(?:作曲|作词|作詞|词|曲|编曲|編曲|制作人|製作人|演唱|歌手|专辑|專輯|录音|錄音|混音|"
+    r"composers?|composed\s+by|lyricists?|lyrics(?:\s+by)?|music(?:\s+by)?|words(?:\s+by)?|written\s+by|"
+    r"produced\s+by|producers?|arranged\s+by|arranger|mixed\s+by|mastered\s+by|recorded\s+by|"
+    r"published\s+by|publisher|vocals?|artist|album|title)\s*[:：]",
+    re.IGNORECASE,
+)
+
+
+def _clean_lyric_lines(rows: list[str]) -> list[str]:
+    """Drops provider credit lines and normalises full-width punctuation ("（" -> "(", "，" -> ",") --
+    NetEase's Night Moves showed '作曲 : Bob Seger' as the first lyric for the whole intro, and a stray
+    full-width bracket at a line's end rendered as an empty box. A trailing unclosed "(" is dropped."""
+    cleaned: list[str] = []
+    for row in rows:
+        if _CREDIT_LINE_RE.match(row):
+            continue
+        row = unicodedata.normalize("NFKC", row).strip()
+        if row.endswith("(") and row.count("(") > row.count(")"):
+            row = row[:-1].rstrip()
+        if row:
+            cleaned.append(row)
+    return cleaned
+
+
 def _hit_to_lines(hit: Hit, duration: float) -> list[str]:
     text, synced, _ref_duration = hit
     if synced and not text.strip():
         return []  # provider flagged this track instrumental
     if synced:
-        return [l.text for l in parse_lrc(text, duration) if l.text.strip()]
+        return _clean_lyric_lines([l.text for l in parse_lrc(text, duration) if l.text.strip()])
     # Plain lyrics: the text IS the result -- no timing is derived from it
     # here, so this must not go through plain_to_lines(), whose evenly-spread
     # fake timing needs a positive duration and returns NOTHING for a file
     # whose length couldn't be probed -- real lyrics were being thrown away
     # in exactly that case (found by code review, 2026-09-14).
-    return [row.strip() for row in text.splitlines() if row.strip()]
+    return _clean_lyric_lines([row.strip() for row in text.splitlines() if row.strip()])
 
 
 def fetch_lyric_lines_verified(
@@ -460,7 +488,7 @@ def fetch_lyric_lines_verified(
     best_lines: list[str] = []
     best_source = ""
     best_concern = "No lyrics found from any source."
-    best_coverage = -1.0
+    best_badness = float("inf")
     best_match: AudioMatch | None = None
     for source in _ACCURACY_CHECK_SOURCES:
         if source == "sidecar":
@@ -478,9 +506,10 @@ def fetch_lyric_lines_verified(
             match = audio_check(lines)
             if audio_match_passes(match):
                 return lines, source, ""
-            if match.coverage > best_coverage:  # strict: on a tie the earlier source stays
+            badness = audio_match_badness(match)
+            if badness < best_badness:  # strict: on a tie the earlier source stays
                 best_lines, best_source = lines, source
-                best_concern, best_coverage = describe_mismatch(match), match.coverage
+                best_concern, best_badness = describe_mismatch(match), badness
                 best_match = match
             continue
         looks_accurate, concern = check_lyric_accuracy(anthropic_client, title, artist, lines, model=model)

@@ -3091,3 +3091,27 @@ alone wrote (recognized by describe_mismatch's phrases; a concern from the older
 public, easiest to swap) / already public (most viewed first) / no longer on YouTube, with links. Respects the quota
 cooldown (no YouTube calls while it is active). It never deletes, edits or uploads: replacing a video needs correct
 lyrics first, which the check cannot reliably produce, and deleting is the owner's per-song call.
+
+## 2026-09-19 (night) — First monitored Batch item ("Night Moves") found three real bugs
+
+The owner had every step of the first Batch item logged (song #66, "Night Moves", Bob Seger; the log, every model
+call and frames from the video are in `~/night-moves-run-log/`). The video came out wrong despite being an easy song:
+
+1. **Provider credit lines were shown as lyrics.** NetEase's lyrics began `作曲 : Bob Seger` / `作词 : Bob Seger`
+   ("Composer:" / "Lyricist:"). The aligner stretched the first across the whole 17 s intro and the font (no CJK)
+   drew empty boxes; a stray full-width "（" at a line's end drew a box too. `fetch_lyrics._clean_lyric_lines` now drops
+   credit lines (a credit word followed by a colon, ASCII or full-width, so "Written by the wind" is kept) and
+   NFKC-normalises full-width punctuation, dropping a trailing unclosed "(".
+2. **The "best" source was chosen by coverage alone.** NetEase (a shorter 40-line version omitting a section, 38
+   unexplained sung words, coverage 0.82) beat lrclib (the complete 63 lines, failing only a 5-line run, coverage
+   0.78). `lyric_audio_match.audio_match_badness` scores how far each candidate is past EACH limit (coverage, unmatched
+   run, unexplained words) and the least-bad source is kept.
+3. **The AI judge called a correct line wrong** because Whisper had skipped it ("the transcript lacks the weren't-in-love
+   clause"), and the suggested fix would have deleted three real lines. Both prompts now say a line merely missing from
+   the transcript, or merged into a neighbour, is not evidence the lyric is wrong (`lyrics_wrong` needs transcript words that
+   CONTRADICT the file's). Re-checked on real data: all 8 deliberately corrupted songs are still rejected; the judge's
+   answers on right-lyrics/hard-to-hear songs vary between runs (3/4 then 2/4 confirmed) and the misses err toward holding.
+
+Re-run of Night Moves with the fixes: lrclib chosen, judge confirms every unmatched stretch as a recognizer error,
+accepted (`lrclib+ai-confirmed`), no credit lines. Other observations (not bugs): Replicate returned transient 503s while
+polling (handled) and one NSFW false positive on an innocent prompt (retried).
