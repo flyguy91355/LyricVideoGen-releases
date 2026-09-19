@@ -353,3 +353,90 @@ def test_verified_fetch_keeps_and_flags_the_best_audio_match_when_none_match(tmp
     assert source == "Genius"
     assert "match what is sung" in concern
     assert "lines 3-4" in concern
+
+
+# --- AI repair (2026-09-19): when no source matches, repair the best one from the transcript ---
+
+def _one_half_right_source(monkeypatch):
+    half_right = _SUNG[:2] + _WRONG_EDITION[:2]
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(half_right), False, 0.0))
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", lambda *a, **k: None)
+    return half_right
+
+
+def test_a_better_repair_is_offered_as_a_suggestion_but_never_applied(tmp_path, monkeypatch):
+    """Real finding, 2026-09-19: applied to real songs, the repair 'improved' the audio match by
+    replacing CORRECT lyrics ('No reason to get excited...') with what Whisper misheard ('I'm going
+    to sing a song'). Text built from the recognizer's words matches the recognizer by construction,
+    so a repair can only ever be a SUGGESTION for the owner to review."""
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _one_half_right_source(monkeypatch)
+    seen = {}
+
+    def reconcile(lines, match):
+        seen["lines"] = lines
+        return list(_SUNG), ["lines 3-4 replaced"]
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+        audio_check=_audio_check_for(_SUNG), reconcile=reconcile,
+    )
+
+    assert seen["lines"] == half_right          # proposes a fix for the BEST candidate
+    assert lines == half_right                  # ...but the video's lyrics are NOT changed
+    assert source == "lrclib"
+    assert "match what is sung" in concern      # still held for review, with the original reason
+    assert "possible fix" in concern and "lines 3-4 replaced" in concern and "NOT applied" in concern
+
+
+def test_a_repair_that_does_not_improve_the_match_is_ignored(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _one_half_right_source(monkeypatch)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+        audio_check=_audio_check_for(_SUNG), reconcile=lambda lines, match: (list(_WRONG_EDITION), ["everything replaced"]),
+    )
+
+    assert lines == half_right
+    assert source == "lrclib"
+    assert "match what is sung" in concern
+
+
+def test_no_repair_is_attempted_when_a_source_already_matches(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: ("\n".join(_SUNG), False, 0.0))
+
+    def must_not_run(*a, **k):
+        raise AssertionError("nothing to repair")
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+        audio_check=_audio_check_for(_SUNG), reconcile=must_not_run,
+    )
+
+    assert (lines, source, concern) == (_SUNG, "lrclib", "")
+
+
+def test_a_repair_that_returns_nothing_or_crashes_keeps_the_original_flagged(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    _no_claude_check(monkeypatch)
+    half_right = _one_half_right_source(monkeypatch)
+
+    def crash(lines, match):
+        raise RuntimeError("API down")
+
+    for reconcile in (lambda lines, match: None, crash):
+        lines, source, concern = fetch_lyric_lines_verified(
+            audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+            audio_check=_audio_check_for(_SUNG), reconcile=reconcile,
+        )
+        assert (lines, source) == (half_right, "lrclib")
+        assert "match what is sung" in concern

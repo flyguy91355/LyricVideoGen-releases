@@ -37,9 +37,15 @@ nothing was ever flagged).
    download blocked), the pipeline logs a warning and uses the previous Claude
    text check, never failing the song.
 
-## Out of scope (possible follow-ups)
+## Follow-ups built afterwards (see CLAUDE_HISTORY 2026-09-19 later)
 
-- Automatically repairing an unmatched stretch from the transcript.
+- `verify_lyrics.py` re-checks already-made songs.
+- `lyric_reconcile.py` proposes a fix; measured unsafe to APPLY (it replaced correct lyrics with Whisper's
+  mishearings), so it is saved as `lyrics_suggested.txt` for review only.
+
+## Out of scope
+
+- Automatically applying a repair (see above).
 - A Settings field for model size/thresholds (module constants for now).
 
 ## Testing

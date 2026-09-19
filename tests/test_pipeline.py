@@ -867,3 +867,48 @@ def test_run_pipeline_says_it_is_listening_before_the_slow_transcription(tmp_pat
 
     first_listening = next(i for i, x in enumerate(order) if isinstance(x, tuple) and "Listening" in x[1])
     assert first_listening < order.index("transcribe")
+
+
+def test_run_pipeline_gives_the_lyrics_fetch_a_repair_step_that_saves_its_suggestion(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    segments = [{"start": 1.0, "end": 3.0, "text": "hello there my friend"}]
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_segments", lambda work_dir: segments)
+    calls = {}
+
+    def fake_reconcile_lyrics(client, lines, match, segs):
+        calls.update(client=client, lines=lines, segments=segs)
+        return ["hello there", "my friend"], ["line 2 replaced"]
+
+    monkeypatch.setattr("lyricvideo.pipeline.reconcile_lyrics", fake_reconcile_lyrics)
+    seen = {}
+
+    def fake_fetch(*args, **kwargs):
+        seen["reconcile"] = kwargs.get("reconcile")
+        return ["hello there"], "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fake_fetch)
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    result = seen["reconcile"](["some line"], object())
+    assert result == (["hello there", "my friend"], ["line 2 replaced"])
+    assert calls["lines"] == ["some line"] and calls["segments"] == segments
+    # The suggestion is saved for the owner to read; it is never fed back into the video.
+    assert (work_dir / "lyrics_suggested.txt").read_text(encoding="utf-8").splitlines() == ["hello there", "my friend"]
+
+
+def test_run_pipeline_offers_no_repair_step_when_the_audio_could_not_be_checked(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    seen = {}
+
+    def fake_fetch(*args, **kwargs):
+        seen["reconcile"] = kwargs.get("reconcile", "missing")
+        return ["hello there"], "lrclib", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fake_fetch)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert seen["reconcile"] is None

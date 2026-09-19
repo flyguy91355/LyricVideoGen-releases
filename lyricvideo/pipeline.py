@@ -23,10 +23,11 @@ from .identify import extract_metadata
 from .imagery import get_or_generate_image, is_fallback_image, substitute_fallback_images, summarize_song_gist
 from .layout import instrumental_image_captions
 from .lyric_audio_match import score_lyrics_against_transcript
+from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals
 from .settings import Settings
-from .transcribe import transcribe_vocals
+from .transcribe import load_transcript_segments, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
 STAGES = ["identify", "separate", "fetch_lyrics", "align", "detect_chords", "images", "render"]
@@ -242,6 +243,23 @@ def _build_audio_check(vocals_path: Path, work_dir: Path):
     return lambda lines: score_lyrics_against_transcript(lines, heard)
 
 
+def _build_reconcile(work_dir: Path, anthropic_client):
+    """The lyric-repair step handed to the lyrics fetch: shows Claude the lyrics and the
+    saved transcript and returns (suggested lines, changes), or None. The suggestion is saved
+    for the owner to read (SUGGESTION_FILENAME) and is NEVER used for the video itself."""
+    def reconcile(lines, match):
+        segments = load_transcript_segments(work_dir)
+        if not segments:
+            return None
+        print("No lyrics source matched the audio; asking Claude for a possible fix to review...")
+        result = reconcile_lyrics(anthropic_client, lines, match, segments)
+        if result is not None:
+            (work_dir / SUGGESTION_FILENAME).write_text("\n".join(result[0]) + "\n", encoding="utf-8")
+        return result
+
+    return reconcile
+
+
 def run_pipeline(
     audio_path: Path,
     work_dir: Path,
@@ -364,9 +382,10 @@ def run_pipeline(
         info_data = json.loads(info_path.read_text(encoding="utf-8"))
         lyrics_anthropic_client = anthropic.Anthropic()
         audio_check = _build_audio_check(vocals_path, work_dir)
+        reconcile = _build_reconcile(work_dir, lyrics_anthropic_client) if audio_check is not None else None
         lines_text, lyrics_source, lyrics_concern = fetch_lyric_lines_verified(
             audio_path, info_data["title"], info_data["artist"], info_data["duration"],
-            info_data.get("alt_titles"), lyrics_anthropic_client, audio_check=audio_check,
+            info_data.get("alt_titles"), lyrics_anthropic_client, audio_check=audio_check, reconcile=reconcile,
         )
         if audio_check is not None:
             if lyrics_concern:

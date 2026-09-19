@@ -97,3 +97,16 @@ def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None) -> str:
         encoding="utf-8",
     )
     return text
+
+
+def load_transcript_segments(work_dir: Path) -> list[dict]:
+    """The cached transcript's [{start, end, text}] segments, or [] if there is none (or it
+    is unreadable) -- used by the lyric repair step, which shows Claude what was heard."""
+    try:
+        data = json.loads((Path(work_dir) / _TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+        return [
+            {"start": float(s["start"]), "end": float(s["end"]), "text": str(s["text"])}
+            for s in data["segments"]
+        ]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []

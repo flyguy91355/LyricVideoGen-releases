@@ -26,6 +26,7 @@ import requests
 
 from .lyric_accuracy import check_lyric_accuracy
 from .lyric_audio_match import AudioMatch, audio_match_passes, describe_mismatch
+from .lyric_reconcile import SUGGESTION_FILENAME
 from .text_clean import artist_key, normalize
 from .vocal_onset import vocal_onset_rise
 
@@ -427,6 +428,7 @@ def fetch_lyric_lines_verified(
     audio_path: Path, title: str, artist: str, duration: float, alt_titles: list[str] | None,
     anthropic_client, model: str = "claude-sonnet-5",
     audio_check: Callable[[list[str]], AudioMatch] | None = None,
+    reconcile: Callable[[list[str], AudioMatch], tuple[list[str], list[str]] | None] | None = None,
 ) -> tuple[list[str], str, str]:
     """Like fetch_lyric_lines(), but tries every real source in
     _ACCURACY_CHECK_SOURCES in order, checking each, and returns as soon as
@@ -439,7 +441,12 @@ def fetch_lyric_lines_verified(
     text check, which never hears the audio and passed a different edition or a
     mixed-up verse/chorus, is not used at all. If no source matches, the one
     with the BEST audio match is kept and flagged (its concern names the lines
-    that don't match). Without `audio_check` (e.g. Whisper unavailable) the
+    that don't match). With `reconcile` too, a repair is proposed for that best candidate
+    (lyric_reconcile.py) and, if it would match the audio better, is mentioned in the
+    concern as a possible fix -- but NEVER applied: on real songs the "improvement" was
+    Whisper's own mishearings replacing correct lyrics (text built from the recognizer's
+    words matches the recognizer by construction), so it can only be a suggestion.
+    Without `audio_check` (e.g. Whisper unavailable) the
     original behavior applies: check_lyric_accuracy() per source, and if none
     pass the FIRST non-empty candidate is kept with its concern. Either way
     generation is never blocked and lyrics are never fabricated."""
@@ -447,6 +454,7 @@ def fetch_lyric_lines_verified(
     best_source = ""
     best_concern = "No lyrics found from any source."
     best_coverage = -1.0
+    best_match: AudioMatch | None = None
     for source in _ACCURACY_CHECK_SOURCES:
         if source == "sidecar":
             hit = _sidecar(audio_path)
@@ -466,13 +474,36 @@ def fetch_lyric_lines_verified(
             if match.coverage > best_coverage:  # strict: on a tie the earlier source stays
                 best_lines, best_source = lines, source
                 best_concern, best_coverage = describe_mismatch(match), match.coverage
+                best_match = match
             continue
         looks_accurate, concern = check_lyric_accuracy(anthropic_client, title, artist, lines, model=model)
         if looks_accurate:
             return lines, source, ""
         if not best_lines:
             best_lines, best_source, best_concern = lines, source, concern
+    if audio_check is not None and reconcile is not None and best_lines and best_match is not None:
+        try:
+            repair = reconcile(best_lines, best_match)
+        except Exception as e:  # a failed repair must never stop the song from being made
+            log.warning("Lyric repair failed: %s: %s", type(e).__name__, e)
+            repair = None
+        if repair:
+            new_lines, changes = repair
+            new_match = audio_check(new_lines)
+            if _repair_is_better(new_match, best_match):
+                best_concern += (
+                    f" A possible fix ({'; '.join(changes)}) was saved as {SUGGESTION_FILENAME} in the "
+                    "song's folder for you to review; it was NOT applied, because a fix built from what "
+                    "the recognizer heard can be wrong."
+                )
     return best_lines, best_source, best_concern
+
+
+def _repair_is_better(new: AudioMatch, old: AudioMatch) -> bool:
+    """A repair must never be worse on any measure, and better on at least one."""
+    if new.coverage < old.coverage or new.worst_run > old.worst_run or new.worst_heard_gap > old.worst_heard_gap:
+        return False
+    return new.coverage > old.coverage or new.worst_run < old.worst_run or new.worst_heard_gap < old.worst_heard_gap
 
 
 def fetch_lyric_lines(audio_path: Path, title: str, artist: str, duration: float,

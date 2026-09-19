@@ -161,3 +161,22 @@ def test_a_cache_made_by_a_different_model_is_not_reused(tmp_path, monkeypatch):
     text = transcribe_vocals(vocals, tmp_path, model=_FakeModel([" from the medium model"]))
 
     assert text == "from the medium model"
+
+
+def test_the_saved_transcript_segments_can_be_read_back(tmp_path):
+    from lyricvideo.transcribe import load_transcript_segments
+
+    transcribe_vocals(_vocals(tmp_path), tmp_path, model=_FakeModel([" first line", " second line"]))
+
+    assert load_transcript_segments(tmp_path) == [
+        {"start": 0.0, "end": 4.0, "text": "first line"},
+        {"start": 5.0, "end": 9.0, "text": "second line"},
+    ]
+
+
+def test_missing_or_corrupt_transcript_segments_read_as_empty(tmp_path):
+    from lyricvideo.transcribe import load_transcript_segments
+
+    assert load_transcript_segments(tmp_path) == []
+    (tmp_path / "transcript.json").write_text("{nope", encoding="utf-8")
+    assert load_transcript_segments(tmp_path) == []

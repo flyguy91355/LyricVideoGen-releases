@@ -3027,3 +3027,33 @@ back-in-the-saddle, beat-it) -- each is either a real mismatch or a recording Wh
 Limits: this cannot certify word-for-word perfection; it catches wrong editions, wrong/missing/out-of-order
 sections of roughly 5+ lines, and holds anything it cannot confirm. A displaced chorus inside a run of identical
 choruses, and a 1-2 line error, are not detectable. Existing songs were NOT re-checked retroactively.
+
+## 2026-09-19 (later) — Re-checking existing songs, and why an AI "repair" can only be a suggestion
+
+Two follow-ups to the Whisper lyric check. (Owner: "yes both".)
+
+**1. `lyricvideo/verify_lyrics.py`** -- `python -m lyricvideo.verify_lyrics [--flag] [--report FILE]` re-checks every
+finished song's saved lyrics against its vocal stem (86 of the songs predate any check). Report-only by default;
+`--flag` writes a concern onto a not-yet-uploaded song's `lyrics_timed.json` (so it skips auto-upload and shows in
+"Flagged for Lyrics Review"). Never overwrites an existing concern, never touches an uploaded song (reported as
+`mismatch-uploaded`), one broken song never stops the run, results append to the report as it goes and a re-run
+resumes. Each song's transcript is cached in its own work folder, so a later Redo reuses it. Run over the owner's
+folder in the background with `--flag`; the durable result is the flags themselves.
+
+**2. `lyricvideo/lyric_reconcile.py`** -- Claude is shown the numbered lyrics + the transcript and returns small EDITS
+(replace/insert/delete), never lyrics from memory; code validates each edit (new text must come from the
+transcript, supported lines can't be touched, overlaps dropped, applied bottom-up). Result: **it works mechanically and is
+unsafe.** On four real held songs the repair raised the audio match (Every Breath You Take 80->91%, Watchtower
+65->79%, Back in the Saddle 53->87%) by replacing CORRECT lyrics with Whisper's fluent mishearings ("No reason to
+get excited / The thief, he kindly spoke" became "I'm going to sing a song"; "Crazy horse saloon" section became
+"I'm sorry / I'm sorry"). Text built from the recognizer's words matches the recognizer by construction, so
+"passes the audio check" proves nothing for a repair, and Whisper's own per-segment confidence (avg_logprob,
+compression ratio) did not separate its good segments from its bad (a wrong segment scored as confidently as a
+right one). So the repair is SUGGESTION-ONLY: `pipeline._build_reconcile` saves it as `work_dir/lyrics_suggested.txt`,
+`fetch_lyric_lines_verified` mentions it in the concern ("A possible fix (...) ... NOT applied"), and the video's lyrics
+are never changed. Also found: with `max_tokens=2000`, Sonnet 5 (thinking on by default) spent the whole budget
+reasoning and returned no text; the request now uses `max_tokens=16000` and `output_config={"effort": "medium"}`.
+
+Consequence to remember: a genuinely accurate lyric file cannot be generated from Whisper's output on loud/produced
+recordings; the reliable fixes are a better lyrics source or a sidecar `.lrc`/`.txt` the owner supplies (which the
+audio check then verifies).
