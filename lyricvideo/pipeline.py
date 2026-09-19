@@ -315,7 +315,7 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
     anchored, _ = align_words_anchored(
         vocals_path, [[w.word for w in line.words] for line in parsed_lines], anchors, prepared=prepared,
     )
-    decision = decide_alignment(line_starts(whole), line_starts(anchored), anchors)
+    decision = decide_alignment(line_starts(whole), line_starts(anchored), anchors, source_times=line_times)
     whole_report = sync_agreement(line_starts(whole), anchors)
     print(
         f"Timing check: {whole_report.anchored} of {whole_report.total_lines} lines can be checked against what was "

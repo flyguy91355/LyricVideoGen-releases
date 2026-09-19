@@ -7,7 +7,7 @@ tab or chord sheet) composited over an AI-generated, Ken-Burns-panned background
 image that changes per lyric line — and per active chord during instrumental
 gaps — to follow the song. Original tab-PDF-input design in
 `docs/superpowers/specs/2026-09-06-tab-pdf-video-generator-design.md` (superseded —
-see the MP3-only merge design below); that build plan (all steps checked off) is in
+see the MP3-only merge design below); that build plan is in
 `docs/superpowers/plans/2026-09-06-tab-pdf-video-generator.md`. The MP3-only merge
 design is `docs/superpowers/specs/2026-09-09-chord-detection-merge-design.md`, plan
 `docs/superpowers/plans/2026-09-09-mp3-only-chord-merge.md`. The GUI is built on
@@ -141,7 +141,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
    against lrclib's line timestamps (`combine_anchors`) bound each line to its own
    window (`align_words_anchored`); `sync.py` keeps the whole-song result only if it
-   agrees, else the anchored one, else the song is set aside (concern). MMS_FA knows
+   agrees, else the anchored one (if Whisper or the source's line times back it), else set aside. MMS_FA knows
    only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
    "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
    token (issue #3). Display text never changes.

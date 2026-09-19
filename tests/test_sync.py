@@ -89,3 +89,69 @@ def test_a_drifting_alignment_disagrees_even_though_its_median_offset_is_small()
     drifting = [s + (k - 4) * 3.0 for k, s in enumerate(TRUE_STARTS)]      # -12 s ... +9 s
 
     assert sync_agreement(drifting, anchors_at(TRUE_STARTS)).agreement < 0.5
+
+
+# --- the lyrics source's own timestamps as a second opinion ------------------------------------------------------
+
+def noisy_anchors(starts, wrong_every=3):
+    """Whisper anchors on a loud recording: every third line is heard somewhere else."""
+    return {i: LineAnchor(i, s + (9.0 if i % wrong_every == 0 else 0.0), s + 3.0, 5, 6) for i, s in enumerate(starts)}
+
+
+LONG_STARTS = [10.0 + 6.0 * i for i in range(12)]
+
+
+def test_source_timestamps_that_agree_rescue_a_song_whisper_could_only_half_confirm():
+    """Real ('Back in the Saddle'): NetEase's own line times agreed within 3 s on 31 of 33 lines and none were 5 s off,
+    yet Whisper's noisy anchors on a loud rock recording confirmed only 67-70% and the song was set aside."""
+    source = [s + 0.4 for s in LONG_STARTS]
+
+    decision = decide_alignment(LONG_STARTS, LONG_STARTS, noisy_anchors(LONG_STARTS), source_times=source)
+
+    assert decision.ok and decision.concern == ""
+
+
+def test_without_source_timestamps_the_same_song_is_still_set_aside():
+    decision = decide_alignment(LONG_STARTS, LONG_STARTS, noisy_anchors(LONG_STARTS))
+
+    assert not decision.ok
+
+
+def test_source_timestamps_that_disagree_do_not_rescue_a_song():
+    """Real (old 'The Chain'): 60% within 3 s and lines up to 32 s off."""
+    source = [s + (30.0 if i % 3 == 0 else 0.4) for i, s in enumerate(LONG_STARTS)]
+
+    decision = decide_alignment(LONG_STARTS, LONG_STARTS, noisy_anchors(LONG_STARTS), source_times=source)
+
+    assert not decision.ok
+
+
+def test_one_line_far_from_its_source_time_blocks_the_rescue():
+    source = [s + 0.4 for s in LONG_STARTS]
+    source[5] += 8.0                                       # a single line 8 s away
+
+    decision = decide_alignment(LONG_STARTS, LONG_STARTS, noisy_anchors(LONG_STARTS), source_times=source)
+
+    assert not decision.ok
+
+
+def test_source_timestamps_never_rescue_a_song_whisper_contradicts():
+    """Whisper agreeing on almost nothing means the source's timing is not evidence the video is right."""
+    hopeless = {i: LineAnchor(i, s + 25.0, s + 28.0, 5, 6) for i, s in enumerate(LONG_STARTS)}
+
+    decision = decide_alignment(LONG_STARTS, LONG_STARTS, hopeless, source_times=list(LONG_STARTS))
+
+    assert not decision.ok
+
+
+def test_a_consistent_offset_of_a_second_or_two_from_the_source_is_allowed():
+    source = [s - 2.0 for s in LONG_STARTS]                # another edition with a slightly longer intro
+
+    decision = decide_alignment(LONG_STARTS, LONG_STARTS, noisy_anchors(LONG_STARTS), source_times=source)
+
+    assert decision.ok
+
+
+def test_missing_or_mismatched_source_timestamps_are_ignored():
+    for bad in (None, [], LONG_STARTS[:-1]):
+        assert not decide_alignment(LONG_STARTS, LONG_STARTS, noisy_anchors(LONG_STARTS), source_times=bad).ok

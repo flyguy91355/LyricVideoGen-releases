@@ -1193,6 +1193,39 @@ def test_lrclib_line_times_repair_whisper_anchors_that_picked_the_wrong_chorus_c
     assert abs(seen["anchors"][5].start - _TRUE_STARTS[5]) < 0.6         # lrclib + the offset, not the bad 100.0
 
 
+def _loud_song_setup(monkeypatch, tmp_path, source_times):
+    """Whisper hears lines 1-3 about 9 s late (a consistent run, so combine_anchors keeps it) -- only ~62% agree."""
+    _sync_setup(monkeypatch, tmp_path, _TRUE_STARTS, _TRUE_STARTS)
+    misheard = [s + 9.0 if i < 3 else s for i, s in enumerate(_TRUE_STARTS)]
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at(misheard))
+    monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: [])
+
+    def fetch(*args, **kwargs):
+        kwargs["times_out"]["line_times"] = source_times
+        return list(_SYNC_LINES), "netease", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fetch)
+
+
+def test_a_loud_song_whisper_only_half_confirms_is_kept_when_the_sources_own_line_times_agree(tmp_path, monkeypatch):
+    """Real ('Back in the Saddle', 2026-09-19): NetEase's timestamps agreed on 31 of 33 lines, Whisper on ~70%."""
+    _loud_song_setup(monkeypatch, tmp_path, [s - 0.5 for s in _TRUE_STARTS])
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == ""
+
+
+def test_the_same_song_is_set_aside_when_the_source_has_no_line_times(tmp_path, monkeypatch):
+    _loud_song_setup(monkeypatch, tmp_path, None)
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert "review" in load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern.lower()
+
+
 # --- the owner's own edited lyrics (2026-09-19) ---------------------------------------------------
 
 def test_the_owners_edited_lyrics_are_used_instead_of_any_online_source(tmp_path, monkeypatch, capsys):

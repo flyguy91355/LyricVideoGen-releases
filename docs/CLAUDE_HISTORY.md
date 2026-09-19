@@ -3182,3 +3182,16 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   word times, 69/76 within 2 s of NetEase's timestamps, none >5 s off). The lyric source changed to NetEase (76 lines; the old
   lrclib text lacked the repeated ending choruses), so the redo generated 47 new images -- a redo only reuses images whose lyric
   text is unchanged.
+
+## 2026-09-19 (later): the lyrics source's own line times as a second timing opinion
+
+- `sync.decide_alignment(..., source_times=line_times)`: when neither alignment reaches `TRUST_AT_LEAST` (70%) against Whisper's
+  word times but the better one still agrees with Whisper on >=50% (`WHISPER_MIN_SUPPORT`), it is kept if `source_timing_agrees()`:
+  the lyrics source's own timestamps (lrclib/NetEase, saved as `line_times` in `lyric_lines.json`) agree on >=85% of lines within
+  3 s, after allowing up to 3 s of consistent offset, and NO line is more than 5 s away. Never used to rescue an alignment Whisper
+  contradicts (<50%), or when the source has no times.
+- Real case: Back in the Saddle (loud rock) -- Whisper anchors confirmed only 67-70% and the song was set aside, yet NetEase's own
+  times agreed on 31/33 lines within 3 s, none >5 s off (offset +0.2 s). Old (drifted) The Chain measured 60% within 3 s and lines
+  up to 32 s off, so the check separates good from bad timing on the songs available.
+- The 86 songs made before the anchored alignment have lyrics verified but NO word-timed transcript, so their timing has not been
+  checked yet (only redone songs were).
