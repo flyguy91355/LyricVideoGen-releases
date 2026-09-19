@@ -45,9 +45,9 @@ def test_youtube_settings_defaults():
     assert s.youtube_privacy == "public"
     assert s.youtube_category_id == "27"
     assert s.youtube_made_for_kids is False
-    assert s.youtube_uploads_per_day == 1
-    assert s.youtube_upload_times == "15:00"
-    assert s.youtube_max_uploads_per_day == 5
+    assert s.youtube_uploads_per_day == 5
+    assert s.youtube_upload_times == "09:00,12:00,15:00,18:00,21:00"
+    assert s.youtube_max_uploads_per_day == 7
     assert s.youtube_quota_retry_hours == 24
 
 
@@ -224,3 +224,15 @@ def test_render_kwargs_falls_back_to_the_default_resolution_for_an_unknown_label
     kwargs = Settings(resolution="8K (someday)").render_kwargs()
 
     assert kwargs["frame_size"] == RESOLUTIONS[DEFAULT_RESOLUTION] == (1920, 1080)
+
+
+def test_default_publish_times_match_the_default_maximum_publish_per_day():
+    """The times box and its "Maximum publish per day" slider must never start
+    out disagreeing: the slider auto-fills the box, so the default box text has
+    to be exactly what the slider would generate at its own default."""
+    from lyricvideo.youtube_schedule import evenly_spaced_upload_times, format_upload_times
+
+    defaults = Settings()
+    assert defaults.youtube_upload_times == format_upload_times(
+        evenly_spaced_upload_times(defaults.youtube_uploads_per_day)
+    )

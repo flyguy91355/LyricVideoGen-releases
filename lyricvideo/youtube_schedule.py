@@ -109,6 +109,14 @@ def _load_artist(work_dir: Path) -> str:
         return ""
 
 
+def _has_happened(moment: datetime, reference: datetime) -> bool:
+    """moment <= reference, treating a naive/aware mismatch as "not yet"."""
+    try:
+        return moment <= reference
+    except TypeError:
+        return False
+
+
 def compute_next_publish_slot(
     now: datetime, claimed_datetimes: set[datetime], upload_times: list[time],
 ) -> datetime:
@@ -136,10 +144,17 @@ def compute_next_publish_slot(
     slot left (full, or every remaining time already past), the walk rolls
     over to tomorrow."""
     local_now = now.astimezone() if now.tzinfo is not None else now
+    sorted_times = sorted(upload_times)
+    slot_minutes = {(t.hour, t.minute) for t in sorted_times}
     claimed_by_date: dict = {}
     for d in claimed_datetimes:
+        # A video the owner published by hand ahead of its slot (2026-09-19)
+        # already happened at an off-slot moment in the past; it must not
+        # also use up one of that day's slots, or making a scheduled video
+        # public would never open a slot for the next upload.
+        if (d.hour, d.minute) not in slot_minutes and _has_happened(d, local_now):
+            continue
         claimed_by_date.setdefault(d.date(), []).append((d.hour, d.minute))
-    sorted_times = sorted(upload_times)
     candidate_date = local_now.date()
     while True:
         day_claims = claimed_by_date.get(candidate_date, [])

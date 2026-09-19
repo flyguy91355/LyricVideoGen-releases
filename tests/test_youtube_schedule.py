@@ -430,3 +430,55 @@ def test_schedule_upload_tolerates_a_missing_song_info_json(tmp_path):
 
     assert video_id == "vidabc"
     assert "performed by" not in client.messages.prompt_text().lower()
+
+
+def test_seven_uploads_with_five_publish_times_fill_five_today_then_two_tomorrow():
+    """Owner's intended behavior (2026-09-19): 5 publish times a day; uploads
+    beyond today's 5 spill onto tomorrow's slots, still 5 a day."""
+    from datetime import datetime, timedelta
+
+    times = parse_upload_times("09:00,12:00,15:00,18:00,21:00")
+    now = datetime(2026, 9, 19, 8, 0).astimezone()
+    claimed: set = set()
+    slots = []
+    for _ in range(7):
+        slot = compute_next_publish_slot(now, claimed, times)
+        claimed.add(slot)
+        slots.append(slot)
+
+    today = now.date()
+    assert [(s.date() - today).days for s in slots] == [0, 0, 0, 0, 0, 1, 1]
+    assert [f"{s:%H:%M}" for s in slots] == ["09:00", "12:00", "15:00", "18:00", "21:00", "09:00", "12:00"]
+
+
+def test_publishing_todays_scheduled_video_early_frees_its_slot_for_the_next_upload():
+    """Owner's requirement (2026-09-19): making a scheduled video public by hand
+    opens up a slot for another video. Same-day case: at 10:30 the owner
+    publishes today's 12:00 video right now. That early publish is a past,
+    off-slot moment -- it must not also eat one of today's five slots, so the
+    next upload lands in the freed 12:00 slot instead of rolling to tomorrow."""
+    times = [time(9, 0), time(12, 0), time(15, 0), time(18, 0), time(21, 0)]
+    now = datetime(2026, 9, 19, 10, 30, 0)
+    claimed = {
+        datetime(2026, 9, 19, 9, 0, 0),    # already published on schedule
+        datetime(2026, 9, 19, 10, 30, 0),  # the 12:00 video, published early by hand
+        datetime(2026, 9, 19, 15, 0, 0),
+        datetime(2026, 9, 19, 18, 0, 0),
+        datetime(2026, 9, 19, 21, 0, 0),
+    }
+
+    slot = compute_next_publish_slot(now, claimed, times)
+
+    assert slot == datetime(2026, 9, 19, 12, 0, 0)
+
+
+def test_a_still_scheduled_off_slot_video_still_counts_against_its_day():
+    """Unchanged rule: a FUTURE claim at an odd hour (e.g. a manual upload
+    scheduled for 10:00/13:00) still uses up that day's capacity."""
+    times = [time(9, 0), time(15, 0)]
+    now = datetime(2026, 9, 19, 8, 0, 0)
+    claimed = {datetime(2026, 9, 19, 10, 0, 0), datetime(2026, 9, 19, 13, 0, 0)}
+
+    slot = compute_next_publish_slot(now, claimed, times)
+
+    assert slot == datetime(2026, 9, 20, 9, 0, 0)

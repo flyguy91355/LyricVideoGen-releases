@@ -529,6 +529,29 @@ def test_retry_pending_uploads_defers_songs_once_todays_upload_cap_is_reached(tm
     assert results == {"succeeded": ["song-a"], "failed": [], "deferred": ["song-b", "song-c"]}
 
 
+def test_retry_pending_uploads_uploads_only_seven_of_twenty_pending_songs(tmp_path, monkeypatch):
+    """Owner's intended behavior (2026-09-19): 20 songs are ready but the
+    Maximum uploads per day is 7 -- exactly 7 upload today, the other 13 stay
+    pending for a later day."""
+    slugs = [f"song-{i:02d}" for i in range(20)]
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: list(slugs))
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    count = [0]
+    monkeypatch.setattr("lyricvideo.gui.load_uploads_today", lambda: count[0])
+    monkeypatch.setattr("lyricvideo.gui.record_upload", lambda: count.__setitem__(0, count[0] + 1))
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.gui.organize_video", lambda *a, **k: None)
+
+    results = _retry_pending_uploads(tmp_path, Settings())  # default cap
+
+    assert Settings().youtube_max_uploads_per_day == 7
+    assert results["succeeded"] == slugs[:7]
+    assert results["deferred"] == slugs[7:]
+    assert results["failed"] == []
+
+
 def test_retry_pending_uploads_defers_everything_when_todays_upload_cap_is_already_used_up(tmp_path, monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["song-a", "song-b"])
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")

@@ -2961,3 +2961,28 @@ second never attempts an upload (verified to fail without the fix). Also fixed a
 by the full run: `test_youtube_status_text_skips_the_api_call_while_quota_blocked` hardcoded
 `blocked_until = 2026-09-19 06:00 UTC`, which stopped being "in the future" that morning -- now relative.
 Full suite: 732 passed.
+
+## 2026-09-19 — YouTube Settings: two clearly named sliders, right defaults, and early-publish frees a slot
+
+Owner's intended model, stated plainly after a round of confusing labels:
+- **Maximum publish per day** (`youtube_uploads_per_day`, default 5): a slider that auto-fills the
+  **Scheduled publish times** box with that many evenly spaced times (9:00-21:00). The box's own length is
+  what `compute_next_publish_slot()` schedules against.
+- **Maximum uploads per day** (`youtube_max_uploads_per_day`, default 7): the real cap on upload calls per
+  calendar day (`_uploads_remaining_today`); with 20 songs ready, 7 upload today and the rest wait for a later
+  day (picked up by the 20-minute tick / next Batch song). Publish scheduling is separate: uploads spill
+  onto later days' slots, 5 a day.
+Field names are unchanged (only panel labels and defaults), so existing `settings.json` files still load.
+Default `youtube_upload_times` is now the five-time list so it agrees with the slider's default
+(`test_default_publish_times_match_the_default_maximum_publish_per_day`). An earlier same-day change removed
+the publish-times slider (mistakenly, it did have a purpose) and it is restored here.
+
+Verified with tests: 7 uploads at 5 publish times -> 5 today + 2 tomorrow; 20 pending with cap 7 -> exactly 7
+upload, 13 deferred.
+
+Bug found while verifying "publishing a scheduled video by hand opens a slot": that worked when the video
+was scheduled for a LATER DAY (its old slot frees), but NOT for one scheduled for later TODAY -- the early
+publish counts as a claim at its real publish time (an off-slot moment like 10:30), which filled one of
+today's five capacity counts, so today looked full and the freed 12:00 slot was never reused (next upload
+went to tomorrow). Fix: `compute_next_publish_slot()` ignores a claim that has already happened AND sits at
+a non-slot minute; a still-scheduled odd-hour video (future claim) still counts against its day, unchanged.

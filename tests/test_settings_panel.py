@@ -37,9 +37,9 @@ def _raw_defaults() -> dict:
         "youtube_privacy": "public",
         "youtube_category_id": "Education",
         "youtube_made_for_kids": False,
-        "youtube_uploads_per_day": 1.0,
-        "youtube_upload_times": "15:00",
-        "youtube_max_uploads_per_day": 5.0,
+        "youtube_uploads_per_day": 5.0,
+        "youtube_upload_times": "09:00,12:00,15:00,18:00,21:00",
+        "youtube_max_uploads_per_day": 7.0,
         "youtube_quota_retry_hours": 24.0,
     }
 
