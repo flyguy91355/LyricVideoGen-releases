@@ -3243,3 +3243,6 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   source's line times (NetEase/lrclib); applied in the fetch stage, logged ("Removed lines that are not part of the song's audio").
   The pattern filters stay for plain-text sources: `_BY_CREDIT_RE` (first 3 rows only), "Recorded/Mixed/Mastered at", symbol-only
   lines, and title/artist header lines.
+- `precision.blend` bug (Respect redo failed with `AlignmentSanityError`): mixing lines from two valid alignments could leave a word
+  ending after the next one starts (58.53 s vs 58.27 s), which `combine.py` refuses. The blend now cuts the earlier word where
+  the next begins; a property test covers it.

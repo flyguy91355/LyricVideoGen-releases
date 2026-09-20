@@ -201,7 +201,10 @@ def blend(
     for i in range(len(lines) - 1, -1, -1):
         chosen[lines[i]] = which
         which = best[i][which][1] if best[i][which][1] is not None else which
-    return [candidates[chosen[line_of_word[k]]][k] for k in range(len(whole))]
+    mixed = [candidates[chosen[line_of_word[k]]][k] for k in range(len(whole))]
+    # Two alignments can each be valid yet overlap where they are joined (a word ending after the next one starts), which
+    # the renderer's sanity check refuses (Respect): cut the earlier word where the next begins.
+    return [(s, min(e, mixed[k + 1][0]) if k + 1 < len(mixed) else e) for k, (s, e) in enumerate(mixed)]
 
 
 def _passes(precision: Precision) -> bool:

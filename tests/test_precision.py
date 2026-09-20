@@ -111,6 +111,7 @@ def test_a_blend_never_puts_lines_out_of_order():
 
         assert mixed is not None
         assert all(mixed[k][0] <= mixed[k + 1][0] for k in range(len(mixed) - 1)), seed
+        assert all(mixed[k][1] <= mixed[k + 1][0] and mixed[k][0] <= mixed[k][1] for k in range(len(mixed) - 1)), seed   # no word overlaps the next
 
 
 def test_a_mix_that_saves_precision_on_later_lines_survives_an_early_conflict():
@@ -324,3 +325,16 @@ def test_a_line_stretched_across_a_solo_is_not_silent_when_its_words_are_sung():
     times = [(5.0, 5.4), (5.5, 5.9), (101.0, 101.4), (101.5, 101.9)]   # the line's span is only ~7% voiced, its words 100%
 
     assert silent_lines(times, [0, 0, 0, 0], loudness, hop=0.5) == set()
+
+
+def test_a_blend_never_lets_a_word_end_after_the_next_one_starts():
+    """Real (Respect, 2026-09-20): taking line 10 from one alignment and line 11 from the other left a word ending at
+    58.53 s before the next started at 58.27 s; the renderer's sanity check (combine.py) refused the whole song."""
+    whole = [(0.0, 0.9), (1.0, 1.9), (2.0, 2.9), (3.0, 3.9)]              # valid, exact for line 0
+    anchored = [(0.1, 0.5), (0.6, 1.5), (1.6, 2.4), (2.5, 3.0)]           # valid, exact for line 1
+    evidence = {0: 0.0, 1: 1.0, 2: 1.6, 3: 2.5}
+
+    mixed = blend(whole, anchored, [0, 0, 1, 1], evidence, 2)
+
+    assert mixed[1] == (1.0, 1.6) and mixed[2] == (1.6, 2.4)              # whole's word 2 is cut where anchored's word 3 begins
+    assert all(mixed[k][1] <= mixed[k + 1][0] for k in range(3)) and all(s <= e for s, e in mixed)

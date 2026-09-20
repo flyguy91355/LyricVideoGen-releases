@@ -140,7 +140,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
    choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
    against lrclib's line timestamps (`combine_anchors`) bound each line to its own
-   window (`align_words_anchored`); `precision.py` scores each word against Whisper's (+silent lines), takes the best per-line mix of whole-song/anchored, else sets the song aside (`sync.py`: fallback). MMS_FA knows
+   window (`align_words_anchored`); `precision.py` scores each word against Whisper's (+silence), takes the best per-line mix of whole-song/anchored, else sets the song aside (`sync.py`: fallback). MMS_FA knows
    only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
    "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
    token (issue #3). Display text never changes.
