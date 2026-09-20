@@ -3262,3 +3262,18 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   (the auto-retry path already skipped them). `list_pending_uploads()` now leaves out any song with a concern; held songs stay in
   Flagged for Lyrics Review, where Upload Anyway is a deliberate override.
 - Backfill on 2026-09-20: 102 cleared (33 waiting to upload, 69 on YouTube), 38 not cleared.
+
+## 2026-09-20: alignment memory no longer grows with song length
+
+- Owner's redo queue: 'Tuesday's Gone' (7.5 min) was SIGTERMed by earlyoom at 10.3 GB RSS during the align stage (other jobs were
+  running too); 'November Rain' (9 min), 'Ballad of Dwight Fry' and 'Sympathy for the Devil' were at the same risk, and 20+ minute
+  tracks always died (see the long-track memory memory). Cause: `prepare_alignment` fed the whole vocal stem through wav2vec2 at once.
+- `align._emission_in_pieces()` runs the model in 75 s pieces with 4 s of padding either side, drops the padding's frames and joins
+  them, so frame k is frame k of a single pass (same count, same timing). Measured with the real MMS model: peak memory one pass
+  100 s = 4.3 GB, 200 s = 6.5 GB (superlinear), pieces at 200 s = 3.9 GB (model alone 3.2 GB) -- flat for any length. Word timings vs
+  one pass on 150 s of Night Moves: median 0 ms, 94% within 40 ms, none over 0.26 s (30 s pieces moved a hummed "Mm-mm" by 3 s, so
+  keep pieces long). Shortened CLAUDE.md's "HISTORY 2026-09-" references to "HISTORY 9-" to stay under the size budget.
+- Also this session: the queue runner let a song's process eat the next line of the queue file ('the-chain' became 'chain'); fixed by
+  reading the list first and giving each song `< /dev/null`. November Rain and Janie's Got a Gun had lost their source files from
+  the batch folder; identical-length copies (same duration to 6 decimals) were found in the Plex folder and copied into each
+  song's work dir, where redo looks first. All the Young Dudes and Wouldn't It Be Nice audio was not found anywhere.

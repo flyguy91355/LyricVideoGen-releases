@@ -27,7 +27,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
 - **GUI (normal use):** double-click the `PlayAlongVideoProduction` desktop icon, or
   run `./run_playalongvideoproduction.sh` from the repo root. Launchers call the
   venv's own `python` directly, never `source .venv/bin/activate` (stale baked-in
-  `VIRTUAL_ENV` path; HISTORY 2026-09-09). Supply just an audio
+  `VIRTUAL_ENV` path; HISTORY 9-09). Supply just an audio
   file — title/artist/lyrics are identified and fetched automatically, chords are
   detected directly from the audio, and the title field is an editable override, not
   a required input — then click Generate; work dir (no Browse) falls back to
@@ -39,7 +39,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   pipeline (and any in-flight upload) partway through with no way to resume;
   closes immediately, no prompt, whenever nothing is running. Tests must invoke
   the registered `WM_DELETE_WINDOW` Tcl callback, not the Python method (the
-  binding was once shipped unwired; HISTORY 2026-09-10). A
+  binding was once shipped unwired; HISTORY 9-10). A
   "Batch: Process a Folder" section (`lyricvideo/batch.py` finds/resolves the
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or
@@ -47,9 +47,9 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   file that errors is logged and skipped, never aborting the rest. An
   interrupted item whose Demucs stems already exist resumes at
   `BatchItem.resume_stage="fetch_lyrics"` instead of redoing the slowest
-  stage from scratch (HISTORY 2026-09-18). `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
+  stage from scratch (HISTORY 9-18). `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
   after every song, success or failure -- RSS climbs across a long Batch
-  run without it, even with no real leak (HISTORY 2026-09-18). The chosen folder path is never `.strip()`'d; `resolve_existing_folder()` recovers a trailing-space name the picker dropped (HISTORY 2026-09-10). The batch folder field
+  run without it, even with no real leak (HISTORY 9-18). The chosen folder path is never `.strip()`'d; `resolve_existing_folder()` recovers a trailing-space name the picker dropped (HISTORY 9-10). The batch folder field
   also remembers the last folder used (`load_last_batch_folder`/
   `save_last_batch_folder` in `lyricvideo/batch.py`, a separate JSON file --
   not a `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
@@ -61,7 +61,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   button/comments panel plus a "⚙ Settings" button. Settings (live preview + the
   scrollable Settings panel) live in their own popup window (`_open_settings_window`,
   same transient/grab_set/lift/focus_force/brief-topmost treatment as the Update
-  Available dialog) rather than an embedded tab (HISTORY 2026-09-11) -- re-opening
+  Available dialog) rather than an embedded tab (HISTORY 9-11) -- re-opening
   while already open lifts the existing window instead of
   building a second `SettingsPanel` bound to the same `Settings` object. Closing the
   popup (its own X button) with unsaved changes prompts the same discard
@@ -81,7 +81,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   the draggable slider (parsed/clamped by `_parse_clamped_float`, tolerant of a
   stray "%"/"s" suffix) -- driven off a trace on the slider's own Tk variable rather
   than `CTkSlider`'s `command` callback, since that callback only fires on a live
-  drag, never a programmatic `.set()` (HISTORY 2026-09-11). An
+  drag, never a programmatic `.set()` (HISTORY 9-11). An
   unsaved field's row label is bold+orange (was plain orange text), still governed
   by the same `_dirty_fields()`/itemized-confirm-before-Save mechanism as before.
   `render.py`/`detect_chords.py`/`assemble_video()` all take plain keyword arguments
@@ -134,8 +134,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. `python -m
    lyricvideo.verify_lyrics -h` re-checks finished songs; `replace_report` lists uploaded.
    Whisper unavailable -> old Claude text check. LRC timestamps discarded.
-4. **align** — forced word-level alignment (`align.py`) of `fetch_lyrics`'s text
-   against the vocal stem; `combine.py` merges it onto the lines (a last word
+4. **align** — forced word-level alignment (`align.py`, model run in 75 s pieces: flat ~4 GB)
+   of `fetch_lyrics`'s text against the vocal stem; `combine.py` merges it onto the lines (a last word
    microseconds past the stem's end is tolerated, issue #6; an empty lyric list
    raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
    choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
@@ -166,7 +166,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    (3) times, then reuses the song's own most-recent real image
    (`pipeline.py`'s `last_real_image`) instead of a plain color whenever a
    real predecessor exists -- only a song's very first image still falls
-   back to plain color (HISTORY 2026-09-18). `substitute_fallback_images`
+   back to plain color (HISTORY 9-18). `substitute_fallback_images`
    still replaces any remaining placeholder with the nearest real image in
    the song's own sequence (`is_fallback_image`: a single perfectly solid
    color), unless every image failed. `assemble_video()`'s `get_image`
@@ -189,7 +189,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    (MIT licensed), not hand-authored — every one of the 12 roots x 5 qualities
    `detect_chords()` can produce resolves to a real shape. `chord_diagram.py`'s
    `_legend_layout()` sizes the diagrams from the song's actual chord count
-   (HISTORY 2026-09-09) -- never more than 2 rows, shrinking as needed to
+   (HISTORY 9-09) -- never more than 2 rows, shrinking as needed to
    fit within a reserved upper region, and never growing past `Settings.
    chord_legend_size` (percent, owner-adjustable, default 100%). Each diagram's
    own panel opacity is its own owner-tunable slider,
@@ -202,7 +202,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `beat_duration = 60 / bpm` from the song's own detected
    `chord_track.bpm` (falling back to 120 if undetected/zero) and the
    countdown's actual real-time length is `countdown_beats * beat_duration`
-   (HISTORY 2026-09-10). Frozen on a GUARANTEED-real background (Ken Burns held at
+   (HISTORY 9-10). Frozen on a GUARANTEED-real background (Ken Burns held at
    its own start position, so there's no visual jump into the real content)
    with a small centered `render.draw_countdown()` panel counting down --
    same rounded-box/accent-color language as the chord bar's own NOW/NEXT
@@ -210,7 +210,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    ~15% of the frame. `_first_available_image_key()` picks the real first
    moment's own image when its file exists, otherwise ANY real image
    already generated for the song, NEVER the flat `fallback_color`
-   (HISTORY 2026-09-10).
+   (HISTORY 9-10).
    `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
    (countdown-extended) timeline; real content uses `song_t = T -
    countdown_duration` throughout. Audio is delayed to match
@@ -229,14 +229,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    instead of freezing on the last-sung line — `layout.py`'s `_in_a_line()`
    decides which applies, using `_plausible_sung_intervals()` rather than a
    line's raw `start_time`/`end_time` envelope: a single misaligned word can
-   otherwise claim an implausible duration (HISTORY 2026-09-09) and make the next
+   otherwise claim an implausible duration (HISTORY 9-09) and make the next
    several minutes falsely read as "still singing," suppressing both the per-chord
    image-follow and Ken Burns pacing. `layout.build_image_timeline()` builds
    the whole song's image schedule once up front (one segment per sung line,
    unchanged; one per instrumental chord otherwise) and merges consecutive
    instrumental chords shorter than `Settings.image_min_hold_seconds`
    (default 2.0s, owner-adjustable) forward into one block until the combined
-   span reaches that minimum (HISTORY 2026-09-11). A too-short gap gets no
+   span reaches that minimum (HISTORY 9-11). A too-short gap gets no
    segment -- the prior image holds through it (9-15). Every block boundary is still a
    real chord onset lifted from the detected chord track (never an
    independent timer), so a merged block can only show a chord's own image a
@@ -252,7 +252,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    "support this channel" watermark into the LAST `Settings.
    support_overlay_lead_seconds` (default 20s) of every video only -- never
    the countdown, never the whole video -- upper-RIGHT, below the Key/BPM
-   badge, NOT upper-left, the chord legend's own corner (HISTORY 2026-09-11).
+   badge, NOT upper-left, the chord legend's own corner (HISTORY 9-11).
    `Settings.support_overlay_text` (blank = off) drives only this overlay;
    the separate `Settings.support_description_text` (blank = off) is what
    `schedule_upload()` appends to the YouTube description -- deliberately
@@ -265,10 +265,10 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `build_scene()`'s `scroll_progress` (how far the current line's own
    on-screen scroll animation has advanced) uses `_plausible_line_end()` --
    the same outlier-capped end as `_plausible_sung_intervals()` -- instead of
-   the line's raw `end_time` (HISTORY 2026-09-10). Word-highlight timing (`word_sung`/`word_active`) keys
+   the line's raw `end_time` (HISTORY 9-10). Word-highlight timing (`word_sung`/`word_active`) keys
    only on a word's own start time, never a duration, and is unaffected.
    `build_scene()`'s CURRENT-LINE TEXT is also gated on `_in_a_line()`
-   (HISTORY 2026-09-10): once past a line's own plausible end, "current"
+   (HISTORY 9-10): once past a line's own plausible end, "current"
    advances to the NEXT line early rather than blanking it -- shown as the
    same unsung preview the pre-first-line intro already used (9-15); past
    the last line it still blanks. That preview itself stays hidden until
@@ -281,7 +281,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    doesn't fit, the label is now omitted entirely (`_lane_label_visible`) --
    the colored block itself still draws, so a chord change stays visible,
    but the text no longer overflows into the neighboring segment's own
-   label (HISTORY 2026-09-10). No song title or artist text is drawn into the frame
+   label (HISTORY 9-10). No song title or artist text is drawn into the frame
    anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
    chord legend were added to the frame.
 
@@ -335,7 +335,7 @@ and allow-listed archive extraction/copy
 (`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
 `CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
 `work/`, `.venv/`). `self.top_frame` (the update banner's `before=` anchor) must be
-`.pack()`-managed (HISTORY 2026-09-09). `gui.py` checks once on
+`.pack()`-managed (HISTORY 9-09). `gui.py` checks once on
 launch (background thread) and
 shows a clickable banner if a newer release exists; clicking it opens a
 modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
@@ -348,7 +348,7 @@ periodic re-check, no manual "Check Now" button — see the spec for why.
 The Apply Update confirmation (`_on_apply_update_clicked`'s own
 `messagebox.askyesno`) is a SEPARATE dialog and needs the identical
 `parent=`/topmost treatment (`parent=self._update_dialog_window`) -- it
-opened behind the outer dialog without it (HISTORY 2026-09-10).
+opened behind the outer dialog without it (HISTORY 9-10).
 Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs both launchers; releases repo is public). The sync step exports from
 git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
 `cp`) specifically so uncommitted local changes can never leak into a
@@ -356,7 +356,7 @@ public release — see the 2026-09-08 history entry for the real incident
 that found this the hard way. `git show ... > file` drops git's executable
 bit, so the script re-applies `chmod +x` to any path `git ls-tree HEAD`
 tracks as `100755` (the `.sh` launcher once shipped non-executable;
-HISTORY 2026-09-10). The owner runs the app directly from this same
+HISTORY 9-10). The owner runs the app directly from this same
 git checkout (not a separate deployed copy), so code changes reach them
 immediately on every commit; releases exist so the Update Available banner
 and changelog stay meaningful, not because Apply Update is the only way
@@ -373,7 +373,7 @@ column is now preview pane (fixed, on top) + the scrollable `SettingsPanel` (whi
 also gained a "Reset to Defaults" button, confirmed via a dialog, that repopulates
 every control from `Settings()` in one on_change firing rather than one per field);
 main window widened to 1400x820 to fit it. **`SettingsPanel` never writes to disk
-except via its own "Save Settings" button** (HISTORY 2026-09-10) -- `self._baseline` (the settings
+except via its own "Save Settings" button** (HISTORY 9-10) -- `self._baseline` (the settings
 actually on disk) is compared field-by-field against the live widgets on every
 change; any field that differs gets a small "●" marker directly on its own label
 (`_refresh_dirty_indicators`), and Save Settings/Discard changes only enable when
@@ -441,7 +441,7 @@ Console) and saves a refresh token to
 returns `None` for "not connected" (never raises) and auto-refreshes an
 expired token; `get_channel_title()` confirms the connected channel. `Settings` holds the
 YouTube config fields (auto-upload toggle, client secrets path, privacy,
-`youtube_category_id` default `"27"` ("Education" -- HISTORY 2026-09-10),
+`youtube_category_id` default `"27"` ("Education" -- HISTORY 9-10),
 made-for-kids, publish times/uploads-per-day, the separate enforced
 `youtube_max_uploads_per_day` cap, and quota-retry hours -- see
 `settings.py`'s YouTube block for the full field list and current defaults).
@@ -460,7 +460,7 @@ and is called from `_run_worker` (shared by both Generate and Redo) and
 per-item inside `_run_batch_worker`. "Never uploaded before" is verified
 live via `youtube.video_exists(client, video_id)`
 (`videos().list(part="id", id=...)`), not just "a `youtube_state.json`
-exists" (HISTORY 2026-09-10). A verification call that itself fails (network hiccup) fails CLOSED here
+exists" (HISTORY 9-10). A verification call that itself fails (network hiccup) fails CLOSED here
 (skip, never risk a duplicate upload). Any upload failure is caught and
 logged as a warning, never raised. GUI worker threads format an error's
 text BEFORE the deferred `root.after` lambda: `except ... as e` unbinds `e`
@@ -475,7 +475,7 @@ sole manual-upload UI: a `list_rendered_songs()` single-select list (any
 song, uploaded or not) + Upload -- confirms first if that song has a
 `youtube_state.json` -- plus a "Pending YouTube Uploads" checklist below,
 live from `list_pending_uploads()` (never-uploaded, cleared;
-`list_flagged_songs()` backs a review list too, HISTORY 2026-09-18), with
+`list_flagged_songs()` backs a review list too, HISTORY 9-18), with
 "Select All" and an "Upload Selected" button; both share
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
 `youtube_auto_upload` (a deliberate click always has). A "Flagged for
@@ -483,7 +483,7 @@ Lyrics Review" panel (same lazy pattern) shows each flagged song's concern
 text with Watch, Edit Lyrics (saved as `lyrics_owner.txt`, used verbatim by the next Redo), Redo and Upload Anyway (a deliberate override) buttons; `_maybe_upload_to_youtube()` skips any flagged song
 outright. `_run_batch_worker` emits a `"batch_item_done"` queue message
 after each song so these three lists update live during a long Batch run
-instead of only once at the very end (real gap, HISTORY 2026-09-18).
+instead of only once at the very end (real gap, HISTORY 9-18).
 Redo's list, this
 one, and the Pending checklist are each `CTkRadioButton`/`CTkCheckBox`
 rows in a `CTkScrollableFrame` fixed to
@@ -509,7 +509,7 @@ flags likely error reports. `_check_youtube_comments_worker` isolates each
 video's own `list_new_comments()` call in its own try/except (plus a
 top-level one around the whole method as a last resort), so one video's
 failure (e.g. comments disabled) never blocks checking the rest
-(HISTORY 2026-09-10). `is_video_public()` skips a
+(HISTORY 9-10). `is_video_public()` skips a
 still-scheduled video before the call (9-13). That same 20-minute tick
 (`_youtube_periodic_tick`, on a background thread -- both
 `load_credentials()`'s token refresh and `get_channel_title()` can make a
@@ -547,11 +547,11 @@ lazy-build pattern) has Approve (posts, marks
 `engagement_comment_posted`) and Dismiss.
 `scripts/backfill_channel_organization.py` applies this to older uploads,
 loads `.env` itself, and stops cleanly on a quota error rather than
-failing every remaining song (HISTORY 2026-09-17).
+failing every remaining song (HISTORY 9-17).
 
 This feature is complete and tested; the interactive OAuth `connect()` flow
 and live comment/engagement-comment posting have since been exercised
-end-to-end against the real connected channel (HISTORY 2026-09-18).
+end-to-end against the real connected channel (HISTORY 9-18).
 `load_credentials()` returns `None` ("not connected") for a stored token
 that's expired with no refresh token. Approving a pending engagement comment
 checks `is_video_public()` first, same as the comment-reading path (HISTORY

@@ -128,6 +128,33 @@ class PreparedAlignment:
     audio_seconds: float
 
 
+_FRAME_HOP = 320                 # samples per model frame (20 ms at 16 kHz); wav2vec2's receptive field is 400 samples
+
+
+def _emission_in_pieces(model, waveform, piece_seconds: float = 75.0, pad_seconds: float = 4.0, sample_rate: int = 16000):
+    """The model's frame-by-frame output for `waveform` (1, samples), computed one piece at a time.
+
+    Feeding a whole 7-9 minute song through wav2vec2 at once needed over 10 GB of memory (the owner's redo of 'Tuesday's
+    Gone' was killed by earlyoom at 10.3 GB; 20+ minute tracks always died). Each piece is run with `pad_seconds` of extra
+    audio either side so its edge frames have context, the padding's frames are dropped, and the pieces are joined. Piece
+    edges are multiples of the frame hop, so frame k of the result is frame k of a single pass: the count and the timing
+    are unchanged. Measured on real audio (Night Moves, 150 s): with 75 s pieces and 4 s padding no word's timing moved by
+    more than 0.26 s and 94% moved by under 40 ms; 30 s pieces moved a hummed 'Mm-mm' by 3 s, so keep pieces long. A song no
+    longer than one padded piece is simply run in one pass, as before."""
+    samples = waveform.shape[1]
+    piece = int(piece_seconds * sample_rate) // _FRAME_HOP * _FRAME_HOP
+    pad = int(pad_seconds * sample_rate) // _FRAME_HOP * _FRAME_HOP
+    if samples <= piece + 2 * pad:
+        return model(waveform)[0]
+    kept = []
+    for start in range(0, samples, piece):
+        first_sample = max(0, start - pad)
+        frames, _ = model(waveform[:, first_sample:min(samples, start + piece + pad)])
+        skip = (start - first_sample) // _FRAME_HOP
+        kept.append(frames[:, skip:skip + piece // _FRAME_HOP])
+    return torch.cat(kept, dim=1)
+
+
 def prepare_alignment(vocals_wav_path: Path, bundle=None) -> PreparedAlignment:
     bundle = bundle or torchaudio.pipelines.MMS_FA
     model = bundle.get_model()
@@ -138,7 +165,7 @@ def prepare_alignment(vocals_wav_path: Path, bundle=None) -> PreparedAlignment:
     waveform = waveform.mean(dim=0, keepdim=True)
 
     with torch.inference_mode():
-        emission, _ = model(waveform)
+        emission = _emission_in_pieces(model, waveform, sample_rate=bundle.sample_rate)
 
     num_frames = emission.shape[1]
     seconds_per_frame = waveform.shape[1] / num_frames / bundle.sample_rate
