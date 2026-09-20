@@ -1279,6 +1279,27 @@ def test_lines_stamped_before_anyone_sings_are_dropped_as_credits(tmp_path, monk
     assert "By. Someone" in capsys.readouterr().out                    # the log says what was removed
 
 
+def test_credits_stamped_after_the_singing_ends_are_dropped_from_the_end(tmp_path, monkeypatch, capsys):
+    """Real (Desperado, 2026-09-20): 'Lead Vocals : Don Henley' ... 'Strings : London Philharmonic Orchestra' were stamped
+    205-212 s, after the singing ended at 194 s, and were timed inside a guitar solo."""
+    _patch_common(monkeypatch, tmp_path)
+
+    def fetch(*args, **kwargs):
+        kwargs["times_out"]["line_times"] = [5.0, 8.0, 30.0, 31.0]
+        return ["hello there", "my friend", "Lead Vocals : Someone", "Strings : An Orchestra"], "netease", ""
+
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", fetch)
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: [{"word": "friend", "start": 8.1, "end": 9.0}])
+    monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: [0.0] * 8 + [1.0] * 12 + [0.0] * 100)     # sung 4-10 s
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    data = json.loads((work_dir / "lyric_lines.json").read_text())
+    assert data["lines"] == ["hello there", "my friend"] and data["line_times"] == [5.0, 8.0]
+    assert "Strings : An Orchestra" in capsys.readouterr().out
+
+
 def test_nothing_is_dropped_when_the_audio_evidence_is_unavailable(tmp_path, monkeypatch):
     _patch_common(monkeypatch, tmp_path)
     monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", _credit_fetch([0.5, 1.0, 5.0, 8.0]))

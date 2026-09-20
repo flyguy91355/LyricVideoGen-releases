@@ -3246,3 +3246,8 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
 - `precision.blend` bug (Respect redo failed with `AlignmentSanityError`): mixing lines from two valid alignments could leave a word
   ending after the next one starts (58.53 s vs 58.27 s), which `combine.py` refuses. The blend now cuts the earlier word where
   the next begins; a property test covers it.
+- Credits at the END too (Desperado redo, 2026-09-20): eight "Lead Vocals : Don Henley" ... "Strings : London Philharmonic Orchestra" lines
+  were stamped 205-212 s, after the last lyric (188 s) and after Whisper's last heard word (194 s); the precision check found them
+  in silence and set the song aside. `lyric_audio_match.drop_unsung_trailing_lines()` mirrors the leading rule: a trailing line
+  stamped more than 3 s after the last heard/sung moment is dropped (trailing run only, at most 12, one line always remains).
+  A scan of every stored song found only Desperado affected.

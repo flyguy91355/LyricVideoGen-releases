@@ -24,7 +24,7 @@ from .identify import extract_metadata
 from .imagery import get_or_generate_image, is_fallback_image, substitute_fallback_images, summarize_song_gist
 from .layout import instrumental_image_captions
 from .lyric_arbiter import arbitrate
-from .lyric_audio_match import drop_unsung_leading_lines, score_lyrics_against_transcript
+from .lyric_audio_match import drop_unsung_leading_lines, drop_unsung_trailing_lines, score_lyrics_against_transcript
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .owner_lyrics import owner_lyrics_lines
 from .redo_log import note_redo_finished, note_redo_started
@@ -519,9 +519,14 @@ def run_pipeline(
             # Credits arrive as fake lyric lines stamped near 0:00; "if its not part of the audio, its a credit"
             try:
                 heard_words = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
+                loudness_now = vocal_loudness(vocals_path)
                 lines_text, times_out["line_times"], dropped_lines = drop_unsung_leading_lines(
-                    lines_text, times_out["line_times"], heard_words, vocal_loudness(vocals_path), hop=0.5,
+                    lines_text, times_out["line_times"], heard_words, loudness_now, hop=0.5,
                 )
+                lines_text, times_out["line_times"], dropped_tail = drop_unsung_trailing_lines(
+                    lines_text, times_out["line_times"], heard_words, loudness_now, hop=0.5,
+                )
+                dropped_lines = dropped_lines + dropped_tail
                 if dropped_lines:
                     print("Removed lines that are not part of the song's audio (credits): " + "; ".join(dropped_lines))
             except Exception:

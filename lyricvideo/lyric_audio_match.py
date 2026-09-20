@@ -336,3 +336,29 @@ def drop_unsung_leading_lines(lines, times, heard, loudness, hop):
            and times[dropped] < first_sung - CREDIT_SILENT_LEAD):
         dropped += 1
     return lines[dropped:], times[dropped:], lines[:dropped]
+
+
+CREDIT_TRAILING_GAP = 3.0       # a line stamped this long after the last singing ended is metadata, not a lyric
+MAX_TRAILING_CREDITS = 12
+
+
+def drop_unsung_trailing_lines(lines, times, heard, loudness, hop):
+    """The mirror of drop_unsung_leading_lines: credits at the END ('Lead Vocals : Don Henley', 'Strings : London
+    Philharmonic Orchestra' -- Desperado, 2026-09-20, eight of them stamped 205-212 s after the singing ended at 194 s).
+    A trailing line stamped more than CREDIT_TRAILING_GAP after the last heard or sung moment is dropped; only a trailing
+    run, at most MAX_TRAILING_CREDITS, and one real line always remains. Returns (lines, times, dropped)."""
+    if not times or len(times) != len(lines) or not (heard or loudness):
+        return lines, times, []
+    last_sung = [h.end for h in heard]
+    if loudness:
+        reference = sorted(loudness)[min(len(loudness) - 1, int(0.99 * len(loudness)))]
+        voiced = [i for i, level in enumerate(loudness) if reference > 0 and level >= _LOUD_HOP_FRACTION * reference]
+        if voiced:
+            last_sung.append((voiced[-1] + 1) * hop)
+    if not last_sung:
+        return lines, times, []
+    limit = max(last_sung) + CREDIT_TRAILING_GAP
+    keep = len(lines)
+    while keep > 1 and len(lines) - keep < MAX_TRAILING_CREDITS and times[keep - 1] > limit:
+        keep -= 1
+    return lines[:keep], times[:keep], lines[keep:]
