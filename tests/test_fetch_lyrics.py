@@ -583,6 +583,17 @@ def test_a_line_with_no_words_in_it_is_not_a_lyric():
     assert _hit_to_lines((synced, True, 0.0), 300.0) == ["Strike a pose", "La la ♪"]
 
 
+def test_a_by_credit_at_the_start_is_dropped_but_a_lyric_that_starts_with_by_is_kept():
+    """Real: Girls Just Want to Have Fun began with 'By. DanChu' (the contributor's name), shown as the first lyric."""
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    synced = "[00:00.50]By. DanChu\n[00:17.00]I come home in the morning light\n[00:30.00]By the river we sat\n[00:40.00]By: the end of the night\n"
+
+    assert _hit_to_lines((synced, True, 0.0), 300.0) == [
+        "I come home in the morning light", "By the river we sat", "By: the end of the night",
+    ]
+
+
 def test_a_title_and_artist_header_line_is_dropped_from_the_start():
     """Real: Wild Horses began with 'Rolling Stones - Wild Horses', shown as the first lyric."""
     from lyricvideo.fetch_lyrics import _drop_header_lines

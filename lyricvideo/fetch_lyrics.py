@@ -424,6 +424,9 @@ _CREDIT_LINE_RE = re.compile(
 )
 
 
+# "By. DanChu" -- a contributor's name opening the file (Girls Just Want to Have Fun). Only the first three rows are
+# considered, so a real lyric such as "By: the end of the night" later on stays.
+_BY_CREDIT_RE = re.compile(r"^\s*by\s*[.:：]\s*\S", re.IGNORECASE)
 _MISSING_SPACE_RE = re.compile(r"([,!?;])(?=[A-Za-z])")
 
 
@@ -434,8 +437,8 @@ def _clean_timed_rows(rows: list[tuple[str, float]]) -> tuple[list[str], list[fl
     row's time (0.0 when there is none) stays attached to the line it belongs to."""
     lines: list[str] = []
     times: list[float] = []
-    for row, when in rows:
-        if _CREDIT_LINE_RE.match(row):
+    for position, (row, when) in enumerate(rows):
+        if _CREDIT_LINE_RE.match(row) or (position < 3 and _BY_CREDIT_RE.match(row)):
             continue
         row = unicodedata.normalize("NFKC", row).strip()
         row = _MISSING_SPACE_RE.sub(r"\1 ", row)      # "Oh,when" -> "Oh, when" (NetEase); "1,000" is left alone

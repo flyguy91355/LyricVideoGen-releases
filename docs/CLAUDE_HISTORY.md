@@ -3237,3 +3237,9 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   a trailing "Recorded at Island Studios in London" (now filtered: recorded/mixed/mastered at); Vogue had "♪" lines (a line with
   no word characters is dropped); Wild Horses opened with "Rolling Stones - Wild Horses" (`_drop_header_lines`: title + artist
   only, first three lines). Older songs keep the stored lines until redone.
+- Credits at the START of songs, second pass (owner: "if its not part of the audio, its a credit, right?"): a pattern list cannot
+  keep up (Girls opened with "By. DanChu"), so `lyric_audio_match.drop_unsung_leading_lines()` drops any leading line (at most 4,
+  never the last) that its own source stamped within the first 3 s while nothing is heard or sung until 3+ s later. Needs the
+  source's line times (NetEase/lrclib); applied in the fetch stage, logged ("Removed lines that are not part of the song's audio").
+  The pattern filters stay for plain-text sources: `_BY_CREDIT_RE` (first 3 rows only), "Recorded/Mixed/Mastered at", symbol-only
+  lines, and title/artist header lines.

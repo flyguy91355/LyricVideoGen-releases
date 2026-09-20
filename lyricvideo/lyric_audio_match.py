@@ -307,3 +307,32 @@ def audio_match_badness(match: AudioMatch) -> float:
         + max(0, match.worst_run - MAX_UNSUPPORTED_RUN) / MAX_UNSUPPORTED_RUN
         + max(0, match.worst_heard_gap - MAX_UNEXPLAINED_SUNG_WORDS) / MAX_UNEXPLAINED_SUNG_WORDS
     )
+
+
+CREDIT_STAMP_SECONDS = 3.0      # a provider stamps credits within the first seconds of the file...
+CREDIT_SILENT_LEAD = 3.0        # ...and a real first line is never stamped this much before the first singing
+MAX_LEADING_CREDITS = 4
+_LOUD_HOP_FRACTION = 0.10       # a hop of the vocal track counts as singing at this share of the song's loud level
+
+
+def drop_unsung_leading_lines(lines, times, heard, loudness, hop):
+    """Leading lines that are not part of the audio: (lines, times, dropped). A lyrics provider's credits (composer,
+    contributor, producer...) arrive as fake lyric lines stamped near 0:00, well before the first singing, with nothing
+    heard near them. Any wording qualifies -- owner, 2026-09-20: "if its not part of the audio, its a credit". Needs the
+    source's own line times and audio evidence; only a leading run is considered, at most MAX_LEADING_CREDITS, and one
+    real line always remains."""
+    if not times or len(times) != len(lines) or not (heard or loudness):
+        return lines, times, []
+    onsets = [h.start for h in heard]
+    if loudness:
+        ordered = sorted(loudness)
+        reference = ordered[min(len(ordered) - 1, int(0.99 * len(ordered)))]
+        onsets += [i * hop for i, level in enumerate(loudness) if reference > 0 and level >= _LOUD_HOP_FRACTION * reference][:1]
+    if not onsets:
+        return lines, times, []
+    first_sung = min(onsets)
+    dropped = 0
+    while (dropped < min(MAX_LEADING_CREDITS, len(lines) - 1) and times[dropped] <= CREDIT_STAMP_SECONDS
+           and times[dropped] < first_sung - CREDIT_SILENT_LEAD):
+        dropped += 1
+    return lines[dropped:], times[dropped:], lines[:dropped]

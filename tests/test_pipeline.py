@@ -1256,6 +1256,41 @@ def test_a_song_whose_lines_are_close_but_not_precise_is_set_aside_naming_the_li
     assert "half a second" in concern and "lines 1, 2" in concern and "review" in concern.lower()
 
 
+def _credit_fetch(times):
+    def fetch(*args, **kwargs):
+        kwargs["times_out"]["line_times"] = times
+        return ["By. Someone", "Composer 2", "hello there", "my friend"], "netease", ""
+    return fetch
+
+
+def test_lines_stamped_before_anyone_sings_are_dropped_as_credits(tmp_path, monkeypatch, capsys):
+    """Owner, 2026-09-20: 'if its not part of the audio, its a credit'. Real: 'By. DanChu' opened Girls Just Want to Have
+    Fun and '作词 : David Bowie' opened Space Oddity, stamped at 0:00 with the first singing 17-30 s later."""
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", _credit_fetch([0.5, 1.0, 5.0, 8.0]))
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: [{"word": "hello", "start": 5.1, "end": 5.4}])
+    monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: [0.0] * 10 + [1.0] * 100)
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    data = json.loads((work_dir / "lyric_lines.json").read_text())
+    assert data["lines"] == ["hello there", "my friend"] and data["line_times"] == [5.0, 8.0]
+    assert "By. Someone" in capsys.readouterr().out                    # the log says what was removed
+
+
+def test_nothing_is_dropped_when_the_audio_evidence_is_unavailable(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", _credit_fetch([0.5, 1.0, 5.0, 8.0]))
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: [])
+    monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: (_ for _ in ()).throw(RuntimeError("unreadable")))
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert json.loads((work_dir / "lyric_lines.json").read_text())["lines"] == ["By. Someone", "Composer 2", "hello there", "my friend"]
+
+
 # --- the owner's own edited lyrics (2026-09-19) ---------------------------------------------------
 
 def test_the_owners_edited_lyrics_are_used_instead_of_any_online_source(tmp_path, monkeypatch, capsys):
