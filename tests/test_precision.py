@@ -4,7 +4,7 @@ Song text is invented."""
 
 from lyricvideo.anchors import HeardWord
 from lyricvideo.precision import (
-    MIN_MATCHED_WORDS, Precision, blend, choose_alignment, match_words, measure,
+    MIN_MATCHED_WORDS, Precision, blend, choose_alignment, match_words, measure, silent_lines,
 )
 
 LINES = [
@@ -219,3 +219,108 @@ def test_a_candidate_with_words_out_of_order_is_never_chosen_over_a_valid_one():
     choice = choose_alignment({"whole-song": backwards, "anchored": pairs(shifted(TRUE, 30.0))}, LINE_OF, evidence, len(LINES))
 
     assert choice.method == "anchored"
+
+
+# --- repeated lines: only pair a lyric word with a heard word that is plausibly the SAME occurrence -----------------
+
+def test_a_word_is_never_paired_with_a_far_away_copy_of_a_repeated_line():
+    """Real (I Want to Hold Your Hand, Back in the Saddle): a chorus sung 6 times but heard only twice made the in-order
+    match pair later copies with the earlier ones, giving fake errors of 40 s and wrongly flagging a good alignment."""
+    words = ["hold", "your", "hand"] * 6
+    starts = [10.0 + 8.0 * (k // 3) + 0.5 * (k % 3) for k in range(18)]         # six copies, 8 s apart
+    heard = [HeardWord(w, starts[k], starts[k] + 0.4) for k, w in enumerate(words) if k // 3 in (0, 5)]   # copies 1 and 6 only
+
+    evidence = match_words(words, heard, near=[starts])
+
+    assert set(evidence) == {0, 1, 2, 15, 16, 17}                               # copies 2-5 have no evidence, not wrong evidence
+    assert all(abs(evidence[k] - starts[k]) < 1e-9 for k in evidence)
+
+
+def test_a_word_sung_a_little_off_its_aligned_time_is_still_paired():
+    words = ["hold", "your", "hand"]
+    heard = [HeardWord(w, 20.0 + 0.5 * k + 1.7, 20.4 + 0.5 * k + 1.7) for k, w in enumerate(words)]
+
+    evidence = match_words(words, heard, near=[[20.0, 20.5, 21.0]])
+
+    assert len(evidence) == 3
+
+
+def test_either_candidates_time_makes_a_heard_word_a_plausible_partner():
+    """A drifted whole-song pass must still be scored against where the anchored pass says the word is."""
+    words = ["hold", "your", "hand"]
+    heard = [HeardWord(w, 60.0 + 0.5 * k, 60.4 + 0.5 * k) for k, w in enumerate(words)]
+
+    evidence = match_words(words, heard, near=[[10.0, 10.5, 11.0], [60.0, 60.5, 61.0]])   # whole drifted, anchored right
+
+    assert len(evidence) == 3
+
+
+def test_without_a_time_hint_matching_is_purely_in_order_as_before():
+    assert match_words(["go", "go"], [HeardWord("go", 1.0, 1.2), HeardWord("go", 90.0, 90.2)]) == {0: 1.0, 1: 90.0}
+
+
+# --- lines placed where nobody is singing ----------------------------------------------------------------------------
+
+def loud_everywhere():
+    return [1.0] * 200                                    # 0.5 s hops, 100 s of steady vocals
+
+
+def test_a_line_placed_in_a_stretch_with_no_vocals_is_reported():
+    """Real (Go Your Own Way): lines 27 and 34 were timed at 117 s and 174 s, in guitar solos where the vocal track is
+    silent -- the file lists lines that are not sung there, which Whisper cannot see because it heard nothing near."""
+    loudness = [1.0] * 40 + [0.0] * 60 + [1.0] * 100                 # silent from 20 s to 50 s
+    starts = [10.0, 30.0, 60.0]
+    times = [(s, s + 3.0) for s in starts]
+
+    assert silent_lines(times, [0, 1, 2], loudness, hop=0.5) == {1}
+
+
+def test_quiet_but_present_singing_is_not_silence():
+    """Real: hums, 'mm-mm' and backing vocals sit at 33-47% voiced in songs the owner called spot on."""
+    loudness = ([1.0, 0.0, 0.0] * 34)[:200]                          # a third of the frames voiced
+    times = [(10.0, 20.0)]
+
+    assert silent_lines(times, [0], loudness, hop=0.5) == set()
+
+
+def test_a_song_with_no_loudness_information_has_no_silent_lines():
+    assert silent_lines([(10.0, 12.0)], [0], [], hop=0.5) == set()
+
+
+def test_a_line_in_silence_counts_as_off_and_is_named_even_when_whisper_heard_nothing_near_it():
+    lines = ["the river runs beside the old stone mill"] * 4
+    words = [w for line in lines for w in line.split()]
+    line_of = [i for i, line in enumerate(lines) for _ in line.split()]
+    true = [10.0 + 8.0 * li + 0.4 * k for li, line in enumerate(lines) for k in range(len(line.split()))]
+    heard = [HeardWord(w, t, t + 0.3) for k, (w, t) in enumerate(zip(words, true)) if line_of[k] != 2]      # line 3 never heard
+    loudness = [1.0] * 40 + [0.0] * 20 + [1.0] * 100                  # silent 20-30 s ... line 3 (26 s) sits in it
+    evidence = match_words(words, heard, near=[true])
+
+    choice = choose_alignment({"whole-song": pairs(true)}, line_of, evidence, len(lines), loudness=loudness, hop=0.5)
+
+    assert 3 in choice.precision.off_line_numbers
+
+
+def test_a_single_line_timed_in_silence_sets_the_song_aside_even_when_everything_else_is_precise():
+    """A line highlighted while nobody sings is definitely wrong; 15% tolerance is for shaky evidence, not for that."""
+    lines = [f"the lantern number {n} swings above the wooden door" for n in range(20)]
+    words = [w for line in lines for w in line.split()]
+    line_of = [i for i, line in enumerate(lines) for _ in line.split()]
+    true = [5.0 + 5.0 * li + 0.4 * k for li, line in enumerate(lines) for k in range(len(line.split()))]
+    heard = [HeardWord(w, t, t + 0.3) for w, t in zip(words, true)]
+    loudness = [1.0] * 68 + [0.0] * 12 + [1.0] * 400                  # silent 34-40 s: all of line 7 (35-38.6 s) is in it
+    evidence = match_words(words, heard, near=[true])
+
+    choice = choose_alignment({"whole-song": pairs(true)}, line_of, evidence, len(lines), loudness=loudness, hop=0.5)
+
+    assert choice.precision.share == 1.0
+    assert not choice.ok and "nobody is singing" in choice.concern and "7" in choice.concern
+
+
+def test_a_line_stretched_across_a_solo_is_not_silent_when_its_words_are_sung():
+    """Real (Life in the Fast Lane, Purple Rain): one line's last word was timed 39 s after its first, across a guitar
+    solo. The words themselves sit in singing, so that is not a line placed in silence."""
+    loudness = [1.0] * 20 + [0.0] * 180 + [1.0] * 100                # sung 0-10 s, a 90 s solo, sung again from 100 s
+    times = [(5.0, 5.4), (5.5, 5.9), (101.0, 101.4), (101.5, 101.9)]   # the line's span is only ~7% voiced, its words 100%
+
+    assert silent_lines(times, [0, 0, 0, 0], loudness, hop=0.5) == set()

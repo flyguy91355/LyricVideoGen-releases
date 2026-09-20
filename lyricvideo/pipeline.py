@@ -293,8 +293,10 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
     timing still cannot be trusted comes back with a non-empty concern so it is set aside for the owner's review.
     Without word timings (Whisper unavailable) this is exactly the original single whole-song alignment."""
     heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
+    loudness: list[float] = []
     try:  # Whisper hallucinates words in silence; they must not anchor a line (a read failure just keeps them)
-        heard = drop_words_in_silence(heard, vocal_loudness(vocals_path), hop=0.5)
+        loudness = vocal_loudness(vocals_path)
+        heard = drop_words_in_silence(heard, loudness, hop=0.5)
     except Exception:
         pass
     line_texts = [" ".join(w.word for w in line.words) for line in parsed_lines]
@@ -319,8 +321,12 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
     # Per-WORD precision against what Whisper heard decides first (the owner sees half a second); the line-level check
     # below only judges a song too few of whose words were heard for that.
     line_of_word = [li for li, line in enumerate(parsed_lines) for _ in line.words]
-    evidence = match_words([w.word for line in parsed_lines for w in line.words], heard)
-    choice = choose_alignment({"whole-song": whole, "anchored": anchored}, line_of_word, evidence, len(parsed_lines))
+    evidence = match_words(
+        [w.word for line in parsed_lines for w in line.words], heard, near=[[a for a, _ in whole], [a for a, _ in anchored]],
+    )
+    choice = choose_alignment(
+        {"whole-song": whole, "anchored": anchored}, line_of_word, evidence, len(parsed_lines), loudness=loudness, hop=0.5,
+    )
     if choice is not None:
         print(
             f"Timing check: {choice.precision.share:.0%} of {choice.precision.matched} heard words start within half a "

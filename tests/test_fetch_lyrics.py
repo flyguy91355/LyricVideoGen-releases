@@ -553,6 +553,63 @@ def test_a_real_lyric_line_that_merely_contains_a_credit_word_is_kept():
     ]
 
 
+def test_a_recording_credit_without_a_label_is_not_a_lyric():
+    """Real: 'Desperado' ended with 'Producer : Glyn Johns' and 'Recorded at Island Studios in London', which was
+    timed and shown as the last lyric line."""
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    plain = "Desperado, why don't you come to your senses\nProducer : Glyn Johns\nRecorded at Island Studios in London\nMixed at Sunset Sound\n"
+
+    assert _hit_to_lines((plain, False, 0.0), 300.0) == ["Desperado, why don't you come to your senses"]
+
+
+def test_a_lyric_that_merely_says_recorded_or_mixed_is_kept():
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    lines = "I recorded your voice on the radio\nMixed up feelings in my head\nStudios full of ghosts tonight\n"
+
+    assert _hit_to_lines((lines, False, 0.0), 300.0) == [
+        "I recorded your voice on the radio", "Mixed up feelings in my head", "Studios full of ghosts tonight",
+    ]
+
+
+def test_a_line_with_no_words_in_it_is_not_a_lyric():
+    """Real: Vogue's NetEase lyrics had lines that were just a musical note; each was timed as a lyric for the whole
+    intro (34 s and 18 s) and drawn on screen."""
+    from lyricvideo.fetch_lyrics import _hit_to_lines
+
+    synced = "[00:00.00]♪\n[00:01.50]♪\n[00:35.00]♪\n[00:53.00]Strike a pose\n[00:56.00]...\n[00:58.00]La la ♪\n"
+
+    assert _hit_to_lines((synced, True, 0.0), 300.0) == ["Strike a pose", "La la ♪"]
+
+
+def test_a_title_and_artist_header_line_is_dropped_from_the_start():
+    """Real: Wild Horses began with 'Rolling Stones - Wild Horses', shown as the first lyric."""
+    from lyricvideo.fetch_lyrics import _drop_header_lines
+
+    lines, times = _drop_header_lines(
+        ["Rolling Stones - Wild Horses", "Childhood living", "Is easy to do"], [1.2, 6.0, 9.0], "Wild Horses", "The Rolling Stones",
+    )
+
+    assert lines == ["Childhood living", "Is easy to do"] and times == [6.0, 9.0]
+
+
+def test_a_header_line_works_in_either_order_and_without_times():
+    from lyricvideo.fetch_lyrics import _drop_header_lines
+
+    assert _drop_header_lines(["Wild Horses - The Rolling Stones", "Childhood living"], None, "Wild Horses", "The Rolling Stones") == (
+        ["Childhood living"], None)
+
+
+def test_a_real_lyric_that_is_just_the_title_or_appears_later_is_kept():
+    from lyricvideo.fetch_lyrics import _drop_header_lines
+
+    lines = ["Wild horses", "Couldn't drag me away", "Wild horses - Rolling Stones", "Wild horses"]
+
+    assert _drop_header_lines(lines[:2] + ["x"] * 2 + lines[2:], None, "Wild Horses", "The Rolling Stones")[0] == \
+        ["Wild horses", "Couldn't drag me away", "x", "x", "Wild horses - Rolling Stones", "Wild horses"]
+
+
 def test_full_width_punctuation_is_normalised_and_a_stray_trailing_bracket_is_dropped():
     """Real: 'And points all her own sitting way up high（' rendered a box at the end of the line."""
     from lyricvideo.fetch_lyrics import _hit_to_lines

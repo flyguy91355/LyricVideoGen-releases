@@ -3219,3 +3219,21 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
 - Known limit: `match_words` pairs lyric words with heard words by in-order text matching, so a repeated phrase can be paired with
   the wrong copy (Back in the Saddle: "I'm back in the saddle again" x6 gives fake errors of 40-60 s). That over-flags (a song is
   set aside for the owner to watch, never silently accepted). A time-aware match (using lrclib line times) would fix it.
+
+## 2026-09-20: the precision measure over-flagged; corrected (owner deleted three good videos on my numbers)
+
+- The first version of `precision.match_words` paired lyric words with heard words purely in order, so a line sung six times
+  but heard twice paired later copies with earlier ones (fake 40 s "errors"). It flagged 48 of 139 songs; the owner deleted
+  I Want to Hold Your Hand, Come Together and Girls from YouTube on those numbers. Rescored with the fix, I Want to Hold Your
+  Hand is 79% (2/37 lines off), Come Together 90% (1/32), Faith 80% (5/46); only Girls (38%) is really loose.
+- `match_words(..., near=[candidate start times])`: a word only pairs with a heard word within 4 s of where SOME candidate put
+  it; words with no plausible partner have no evidence (not wrong evidence). The pipeline passes both candidates' times.
+- Consequence: a line placed where Whisper heard nothing near it is invisible to word evidence (Go Your Own Way's lines 27 and
+  34 sat in guitar solos). `silent_lines()` checks the vocal stem instead, per WORD (a line stretched across a solo whose
+  words are sung is not silent; quiet hums/backing sit at 33-47% voiced and are fine). Any line with <15% of its words in
+  singing sets the song aside, whatever its share.
+- Result on the 139 uploaded/waiting songs: 32 imprecise (was 48); 25 holds released, 10 newly held.
+- Credit/metadata lines seen at the START of songs: Desperado and Space Oddity kept NetEase's "作词/作曲/制作人" lines and Desperado
+  a trailing "Recorded at Island Studios in London" (now filtered: recorded/mixed/mastered at); Vogue had "♪" lines (a line with
+  no word characters is dropped); Wild Horses opened with "Rolling Stones - Wild Horses" (`_drop_header_lines`: title + artist
+  only, first three lines). Older songs keep the stored lines until redone.

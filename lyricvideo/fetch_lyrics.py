@@ -415,10 +415,11 @@ _ACCURACY_CHECK_SOURCES = ["sidecar", "lrclib", "Musixmatch", "NetEase", "Megalo
 # "作曲 : Bob Seger", "Composer: X", "Lyrics by：X" -- a provider's credit line, not a sung line. Needs the
 # colon (ASCII or full-width) so a real lyric like "Written by the wind" or "Producer, I'm so tired" stays.
 _CREDIT_LINE_RE = re.compile(
-    r"^\s*(?:作曲|作词|作詞|词|曲|编曲|編曲|制作人|製作人|演唱|歌手|专辑|專輯|录音|錄音|混音|"
+    r"^\s*(?:(?:作曲|作词|作詞|词|曲|编曲|編曲|制作人|製作人|演唱|歌手|专辑|專輯|录音|錄音|混音|"
     r"composers?|composed\s+by|lyricists?|lyrics(?:\s+by)?|music(?:\s+by)?|words(?:\s+by)?|written\s+by|"
     r"produced\s+by|producers?|arranged\s+by|arranger|mixed\s+by|mastered\s+by|recorded\s+by|"
-    r"published\s+by|publisher|vocals?|artist|album|title)\s*[:：]",
+    r"published\s+by|publisher|vocals?|artist|album|title)\s*[:：]|"
+    r"(?:recorded|mixed|mastered)\s+at\s+\S)",         # "Recorded at Island Studios in London" (Desperado): no label to key on
     re.IGNORECASE,
 )
 
@@ -440,10 +441,33 @@ def _clean_timed_rows(rows: list[tuple[str, float]]) -> tuple[list[str], list[fl
         row = _MISSING_SPACE_RE.sub(r"\1 ", row)      # "Oh,when" -> "Oh, when" (NetEase); "1,000" is left alone
         if row.endswith("(") and row.count("(") > row.count(")"):
             row = row[:-1].rstrip()
-        if row:
+        if row and re.search(r"\w", row):              # a line of only symbols ("♪", "...") is not a lyric
             lines.append(row)
             times.append(when)
     return lines, times
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", text).lower())
+
+
+def _drop_header_lines(
+    lines: list[str], times: list[float] | None, title: str, artist: str,
+) -> tuple[list[str], list[float] | None]:
+    """A provider's opening 'Rolling Stones - Wild Horses' is a header, not a lyric (real: Wild Horses). Only the first
+    three lines are considered, and only a line made of nothing but the title and the artist (either order); a real
+    lyric that is just the title, or that mentions it later, stays."""
+    wanted = [_plain(title), re.sub(r"^the", "", _plain(artist))]
+    keep = list(range(len(lines)))
+    if all(wanted):
+        for i in range(min(3, len(lines))):
+            leftover = _plain(lines[i])
+            if all(w in leftover for w in wanted):
+                for w in wanted:
+                    leftover = leftover.replace(w, "", 1)
+                if leftover in ("", "the"):                 # "Wild Horses - The Rolling Stones"
+                    keep.remove(i)
+    return [lines[i] for i in keep], ([times[i] for i in keep] if times is not None else None)
 
 
 def _clean_lyric_lines(rows: list[str]) -> list[str]:
@@ -530,6 +554,7 @@ def fetch_lyric_lines_verified(
         if hit is None:
             continue
         lines, times = _hit_to_lines_and_times(hit, duration)
+        lines, times = _drop_header_lines(lines, times, title, artist)
         if not lines:
             continue
         if audio_check is not None:
