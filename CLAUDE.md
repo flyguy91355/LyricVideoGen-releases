@@ -48,8 +48,8 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   interrupted item whose Demucs stems already exist resumes at
   `BatchItem.resume_stage="fetch_lyrics"` instead of redoing the slowest
   stage from scratch (HISTORY 9-18). `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
-  after every song, success or failure -- RSS climbs across a long Batch
-  run without it, even with no real leak (HISTORY 9-18). The chosen folder path is never `.strip()`'d; `resolve_existing_folder()` recovers a trailing-space name the picker dropped (HISTORY 9-10). The batch folder field
+  after every song, success or failure -- RSS climbs over a long Batch
+  without it (HISTORY 9-18). The chosen folder path is never `.strip()`'d; `resolve_existing_folder()` recovers a trailing-space name the picker dropped (HISTORY 9-10). The batch folder field
   also remembers the last folder used (`load_last_batch_folder`/
   `save_last_batch_folder` in `lyricvideo/batch.py`, a separate JSON file --
   not a `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
@@ -70,8 +70,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   its own `SettingsPanel(...)` construction in `self._suppress_settings_save = True`
   (reset to `False` right after): SettingsPanel's `load_from()` fires `on_change`
   before that assignment completes, and `_on_settings_changed` would hit a
-  not-yet-assigned attribute (real 2026-09-11 bug, silently swallowed by
-  Tkinter; HISTORY). Startup uses the identical guard; it resets the flag only
+  not-yet-assigned attribute (2026-09-11 bug; HISTORY). Startup uses the identical guard; it resets the flag only
   once, so a later construction needs its own re-arm. The scrollable Settings panel
   (`lyricvideo/settings_panel.py`) is bound to a `Settings` object
   (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
@@ -128,7 +127,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `.lrc`/`.txt` beside `work_dir`'s audio copy, 9-15; lrclib.net edition-consensus
    voting, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes,
    into `lyric_lines.json`/`Song`. Passing = matching what faster-whisper HEARS in the
-   vocal stem (medium, VAD off): >=70% in-order word coverage, no run of >3 unmatched lines
+   vocal stem (large-v3, VAD off): >=70% in-order word coverage, no run of >3 unmatched lines
    or >12 sung words the lyrics lack (backing vocals ignored; unsung lead/tail lines dropped). None passing keeps the least-bad match flagged: no auto-upload, listed in "Flagged for Lyrics Review". Claude then
    JUDGES unmatched stretches (`lyric_arbiter.py`: all recognizer failures -> accepted);
    its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. `python -m
@@ -140,7 +139,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
    choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
    against lrclib's line timestamps (`combine_anchors`) bound each line to its own
-   window (`align_words_anchored`); `precision.py` scores each word against Whisper's (+silence), takes the best per-line mix of whole-song/anchored, else sets the song aside (`sync.py`: fallback). MMS_FA knows
+   window (`align_words_anchored`); `precision.py`/`sync.py` pre-check; `timing_gate.py` decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's singing) -- best of whole-song/anchored/blended else set aside; pending/flagged lists hold failing older songs, the Upload list (`list_uploadable_songs`) shows only passing; `python -m lyricvideo.timing_gate` reports. MMS_FA knows
    only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
    "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
    token (issue #3). Display text never changes.
@@ -148,8 +147,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC) analyzes
    Demucs's `no_vocals.wav`; its 602-class vocabulary collapses to this
    app's 5 qualities via `_simplify_chord_label()` (every pumpp `3567s`
-   quality mapped explicitly, `minmaj7` included -- the `.get()` default is
-   `maj`, wrong for any minor-third chord). Replaced CQT-chroma
+   quality mapped explicitly, `minmaj7` included -- the `.get()` default `maj` is wrong for minor thirds). Replaced CQT-chroma
    template matching 9-13 (HISTORY). Needs old TF/Keras/sklearn, no 3.12
    wheels — **`.venv` runs on Python 3.11**; see
    `requirements.txt` pins first. Only chord source, no tab/sheet.

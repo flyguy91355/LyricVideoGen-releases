@@ -40,6 +40,7 @@ from .pipeline import (
     list_redoable_songs,
     list_pending_uploads,
     list_rendered_songs,
+    list_uploadable_songs,
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
@@ -47,6 +48,7 @@ from .pipeline import (
 )
 from .models import load_song
 from .settings import Settings
+from .timing_gate import hidden_note, use_pass_share_from
 from .settings_panel import SettingsPanel
 from .settings_preview import SettingsPreviewFrame
 from .update.apply import (
@@ -361,6 +363,7 @@ class LyricVideoGUI:
         self._suppress_settings_save = True  # True while load_from() is populating widgets on launch
 
         self.settings = Settings.load()
+        self._use_settings_pass_mark()
 
         self.title_var = tk.StringVar()
         self.audio_var = tk.StringVar()
@@ -492,7 +495,7 @@ class LyricVideoGUI:
             # section, never automatically at launch, so there's no "blank
             # dropdown at startup" state left to preserve here.
             self._populate_song_radio_list(
-                self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
+                self.retry_upload_list_frame, "upload", self._uploadable_songs(),
                 self.retry_upload_song_var, auto_select_first=True,
             )
 
@@ -501,6 +504,8 @@ class LyricVideoGUI:
         )
         self.retry_upload_list_frame = ctk.CTkScrollableFrame(upload_content, height=SONG_LIST_HEIGHT)
         self.retry_upload_list_frame.pack(fill="x", padx=8, pady=(0, 4))
+        self.upload_hidden_label = ctk.CTkLabel(upload_content, text="", anchor="w", text_color="gray60")
+        self.upload_hidden_label.pack(fill="x", padx=12, pady=(0, 4))
         retry_upload_controls = ctk.CTkFrame(upload_content, fg_color="transparent")
         retry_upload_controls.pack(fill="x", padx=8, pady=(0, 8))
         self.retry_upload_button = ctk.CTkButton(
@@ -726,6 +731,21 @@ class LyricVideoGUI:
 
         ctk.CTkButton(frame, text="Browse...", command=browse, width=90).grid(row=row, column=2, padx=4)
 
+    def _use_settings_pass_mark(self) -> None:
+        """Points the timing gate at the LIVE Settings (a function, not a copy), so a moved slider is used by the very next
+        check -- the Upload list, the Pending list, Flagged for Lyrics Review and the next render."""
+        use_pass_share_from(lambda: self.settings.timing_pass_percent / 100)
+
+    def _uploadable_songs(self) -> list[str]:
+        """The Upload to YouTube list (owner, 2026-09-20: only good videos): songs that pass the timing pass mark. A note
+        under the list says how many are hidden and below what."""
+        root = PROJECT_ROOT / "work"
+        songs = list_uploadable_songs(root)
+        label = getattr(self, "upload_hidden_label", None)
+        if label is not None:
+            label.configure(text=hidden_note(len(list_rendered_songs(root)) - len(songs), self.settings.timing_pass_percent))
+        return songs
+
     def _on_settings_changed(self) -> None:
         """SettingsPanel's on_change fires on every keystroke/slider-move/color-pick,
         live-updating the preview and the in-memory settings this session's own
@@ -738,8 +758,14 @@ class LyricVideoGUI:
         source of truth then)."""
         if self._suppress_settings_save:
             return
+        previous_pass_mark = self.settings.timing_pass_percent
         self.settings = self.settings_panel.collect()
         self.settings_preview.update_preview(self.settings)
+        if self.settings.timing_pass_percent != previous_pass_mark:
+            # what counts as a good video just moved: the lists built from it are stale (rebuilt when next opened)
+            self._invalidate_upload_list()
+            self._invalidate_pending_list()
+            self._invalidate_flagged_list()
 
     def _on_title_changed(self, *_args) -> None:
         if not self._running:
@@ -1480,7 +1506,7 @@ class LyricVideoGUI:
             )
         elif list_name == "upload":
             self._populate_song_radio_list(
-                self.retry_upload_list_frame, "upload", list_rendered_songs(PROJECT_ROOT / "work"),
+                self.retry_upload_list_frame, "upload", self._uploadable_songs(),
                 self.retry_upload_song_var, auto_select_first=True,
             )
         elif list_name == "pending":

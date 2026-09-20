@@ -89,6 +89,11 @@ class Settings:
     include_seventh_chords: bool = False
     min_chord_seconds: float = 0.5
 
+    # --- Quality check (timing_gate.py) -----------------------------------
+    timing_pass_percent: int = 90            # a video is "good" when at least this share of its lyric lines start
+                                              # within half a second of the singing; only good ones are offered for
+                                              # upload (owner, 2026-09-20; raise it as the aligner improves)
+
     # --- YouTube (youtube_schedule.py / gui.py) --------------------------
     youtube_auto_upload: bool = False
     youtube_client_secrets_path: str = ""

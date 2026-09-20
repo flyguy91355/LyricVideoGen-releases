@@ -33,7 +33,7 @@ def _parse_clamped_float(text: str, lo: float, hi: float) -> float:
 _INT_FIELDS = {
     "fps", "crf", "countdown_beats", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
     "chord_legend_size", "chord_diagram_panel_alpha", "youtube_uploads_per_day",
-    "youtube_max_uploads_per_day", "youtube_quota_retry_hours", "support_overlay_size",
+    "youtube_max_uploads_per_day", "youtube_quota_retry_hours", "support_overlay_size", "timing_pass_percent",
 }
 
 _YOUTUBE_CATEGORY_IDS = {"Howto & Style": "26", "Education": "27", "Music": "10"}
@@ -393,6 +393,9 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._check("prefer_flats", "Use flats in flat keys (Bb instead of A#)")
         self._check("include_seventh_chords", "Detect 7th chords (7, m7, maj7)")
         self._slider("min_chord_seconds", "Minimum chord length", 0.2, 2.0, 18, lambda v: f"{v:.1f}s")
+
+        self._section("Quality check")
+        self._slider("timing_pass_percent", "Timing pass mark", 50, 100, 50, lambda v: f"{int(v)}%")
 
         self._section("YouTube")
         self.vars["youtube_client_secrets_path"] = tk.StringVar()

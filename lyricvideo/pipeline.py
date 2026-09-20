@@ -31,9 +31,10 @@ from .cleared_log import record_cleared, record_removed
 from .redo_log import note_redo_finished, note_redo_started
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals, stems_look_complete
-from .precision import choose_alignment, match_words
+from .precision import blend, choose_alignment, match_words
 from .sync import decide_alignment, sync_agreement
 from .settings import Settings
+from .timing_gate import check_saved_song, hold_if_timing_fails, is_gate_concern, settle_alignment
 from .transcribe import load_transcript_segments, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
@@ -127,6 +128,25 @@ def list_rendered_songs(work_root: Path) -> list[str]:
     )
 
 
+def list_uploadable_songs(work_root: Path) -> list[str]:
+    """The Upload to YouTube list (owner, 2026-09-20: only good videos): rendered songs, uploaded or not, that positively
+    PASS the timing check at the current pass mark and carry no other concern. A song that fails, or cannot be checked
+    (no transcript), is left out. Read-only: a live video is never written to here."""
+    root = Path(work_root)
+    return [name for name in list_rendered_songs(root) if _passes_for_upload(root / name)]
+
+
+def _passes_for_upload(song_dir: Path) -> bool:
+    try:
+        concern = load_song(song_dir / "lyrics_timed.json").lyrics_accuracy_concern
+    except Exception:
+        return False
+    if concern and not is_gate_concern(concern):
+        return False
+    report = check_saved_song(song_dir)
+    return report is not None and report.passes
+
+
 def list_pending_uploads(work_root: Path) -> list[str]:
     """Names of work_root's immediate subdirectories that have a rendered
     video but no recorded YouTube upload yet -- backs the GUI's retry-upload
@@ -156,9 +176,12 @@ def _held_for_review(song_dir: Path) -> bool:
     if not timed_path.exists():
         return False
     try:
-        return bool(load_song(timed_path).lyrics_accuracy_concern)
+        concern = load_song(timed_path).lyrics_accuracy_concern
     except Exception:
         return False
+    if concern and not is_gate_concern(concern):
+        return True
+    return bool(hold_if_timing_fails(song_dir))     # keeps the timing hold in step with the bar (holds, or releases)
 
 
 def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[str]:
@@ -186,7 +209,8 @@ def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[
             song = load_song(timed_path)
         except Exception:
             continue
-        if song.lyrics_accuracy_concern:
+        concern = song.lyrics_accuracy_concern
+        if (concern and not is_gate_concern(concern)) or hold_if_timing_fails(entry):
             flagged.append(entry.name)
     return flagged
 
@@ -300,13 +324,31 @@ def _build_arbiter(work_dir: Path, anthropic_client):
     return judge
 
 
-def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=None):
+def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=None, needed=None):
     """(per-word times, timing concern). Uses Whisper's word times (when a transcript exists) to CHECK where the
     whole-song alignment put each line and, if it drifted, to redo the alignment one bounded window at a time
     (align.align_words_anchored). Both are computed from one model pass; sync.decide_alignment picks. A song whose
     timing still cannot be trusted comes back with a non-empty concern so it is set aside for the owner's review.
     Without word timings (Whisper unavailable) this is exactly the original single whole-song alignment."""
     heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
+    sung = list(heard)      # everything the recognizer heard: what the sync check (timing_gate) compares each line with
+    line_words = [[w.word for w in line.words] for line in parsed_lines]
+
+    def settled(candidates, preferred, earlier_concern=""):
+        """The timing_gate verdict (owner, 2026-09-20: at least 90% of lines within half a second of the singing) has the
+        final say on which alignment is used and whether the song is set aside."""
+        result = settle_alignment(candidates, line_words, sung, preferred, earlier_concern, needed)
+        if result.report.share is None:
+            print("Sync check: too little of the singing was recognized to compare the lines with.")
+        else:
+            print(
+                f"Sync check: {result.report.share:.0%} of {result.report.judged_lines} lines start within half a second "
+                f"of where they are sung. Using the {result.method} alignment."
+            )
+        if result.concern:
+            print(f"WARNING: {result.concern}", file=sys.stderr)
+        return [(min(a, audio_duration), min(b, audio_duration)) for a, b in result.times], result.concern
+
     loudness: list[float] = []
     try:  # Whisper hallucinates words in silence; they must not anchor a line (a read failure just keeps them)
         loudness = vocal_loudness(vocals_path)
@@ -318,7 +360,7 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
     # lrclib's own timestamps settle which copy of a repeated chorus Whisper heard (see combine_anchors)
     anchors = combine_anchors(anchors, line_times, [len(line.words) for line in parsed_lines])
     if not anchors:
-        return align_words(vocals_path, flat_words), ""
+        return settled({"whole-song": align_words(vocals_path, flat_words)}, "whole-song")
 
     def line_starts(times):
         starts, i = [], 0
@@ -347,9 +389,11 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
             f"second of where they were sung; {choice.precision.off_lines} of {choice.precision.lines} lines are clearly "
             f"off. Using the {choice.method} alignment."
         )
-        if choice.concern:
-            print(f"WARNING: {choice.concern}", file=sys.stderr)
-        return [(min(a, audio_duration), min(b, audio_duration)) for a, b in choice.times], choice.concern
+        candidates = {"whole-song": whole, "anchored": anchored}
+        mixed = blend(whole, anchored, line_of_word, evidence, len(parsed_lines))
+        if mixed is not None and mixed not in (whole, anchored):
+            candidates["blended"] = mixed
+        return settled(candidates, choice.method, choice.concern)
     decision = decide_alignment(line_starts(whole), line_starts(anchored), anchors, source_times=line_times)
     whole_report = sync_agreement(line_starts(whole), anchors)
     print(
@@ -357,10 +401,7 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
         f"heard; the whole-song alignment agrees on {whole_report.agreement:.0%}. Using the {decision.method} "
         f"alignment ({decision.report.agreement:.0%} agree)."
     )
-    if decision.concern:
-        print(f"WARNING: {decision.concern}", file=sys.stderr)
-    chosen = whole if decision.method == "whole-song" else anchored
-    return [(min(a, audio_duration), min(b, audio_duration)) for a, b in chosen], decision.concern
+    return settled({"whole-song": whole, "anchored": anchored}, decision.method, decision.concern)
 
 
 def run_pipeline(
@@ -583,6 +624,7 @@ def run_pipeline(
         line_times = lyrics_data.get("line_times") if isinstance(lyrics_data, dict) else None
         word_times, timing_concern = _align_lyrics(
             vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=line_times,
+            needed=settings.timing_pass_percent / 100 if settings is not None else None,
         )
         if timing_concern:
             lyrics_concern = f"{lyrics_concern} {timing_concern}".strip()

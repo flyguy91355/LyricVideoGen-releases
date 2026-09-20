@@ -236,3 +236,10 @@ def test_default_publish_times_match_the_default_maximum_publish_per_day():
     assert defaults.youtube_upload_times == format_upload_times(
         evenly_spaced_upload_times(defaults.youtube_uploads_per_day)
     )
+
+
+def test_the_timing_pass_mark_defaults_to_ninety_percent_and_survives_a_save_and_load(tmp_path):
+    assert Settings().timing_pass_percent == 90
+    Settings(timing_pass_percent=95).save(tmp_path / "s.json")
+
+    assert Settings.load(tmp_path / "s.json").timing_pass_percent == 95

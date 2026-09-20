@@ -1506,12 +1506,12 @@ def test_refresh_song_list_redo_repopulates_the_redo_list(monkeypatch):
 
 
 def test_refresh_song_list_upload_repopulates_the_upload_list(monkeypatch):
-    monkeypatch.setattr("lyricvideo.gui.list_rendered_songs", lambda work_root: ["angie"])
     calls = []
 
     stub = _gui_stub(
         retry_upload_list_frame="upload-frame", retry_upload_song_var="upload-var",
         _populate_song_radio_list=lambda *a, **kw: calls.append((a, kw)),
+        _uploadable_songs=lambda: ["angie"],
     )
     LyricVideoGUI._refresh_song_list(stub, "upload")
 
@@ -1703,3 +1703,54 @@ def test_saving_empty_lyrics_from_the_editor_is_refused_with_a_message(tmp_path,
 
     assert ok is False and len(shown) == 1
     assert not (tmp_path / "work" / "angie" / "lyrics_owner.txt").exists()
+
+
+def test_the_upload_section_lists_only_passing_videos_and_says_how_many_are_hidden(monkeypatch):
+    texts = []
+    monkeypatch.setattr("lyricvideo.gui.list_uploadable_songs", lambda work_root: ["a"])
+    monkeypatch.setattr("lyricvideo.gui.list_rendered_songs", lambda work_root: ["a", "b", "c"])
+    stub = _gui_stub(settings=Settings(timing_pass_percent=95),
+                     upload_hidden_label=SimpleNamespace(configure=lambda **kw: texts.append(kw["text"])))
+
+    assert LyricVideoGUI._uploadable_songs(stub) == ["a"]
+    assert texts == ["2 videos hidden: below 95%"]
+
+
+def test_the_gate_reads_the_live_pass_mark_so_a_moved_slider_takes_effect_at_once():
+    from lyricvideo.timing_gate import pass_share, use_pass_share_from
+    stub = _gui_stub(settings=Settings(timing_pass_percent=90))
+    try:
+        LyricVideoGUI._use_settings_pass_mark(stub)
+        assert pass_share() == 0.90
+        stub.settings = Settings(timing_pass_percent=95)
+        assert pass_share() == 0.95
+    finally:
+        use_pass_share_from(None)
+
+
+def _settings_change_stub(new_percent, invalidated):
+    return _gui_stub(
+        _suppress_settings_save=False, settings=Settings(timing_pass_percent=90),
+        settings_panel=SimpleNamespace(collect=lambda: Settings(timing_pass_percent=new_percent)),
+        settings_preview=SimpleNamespace(update_preview=lambda settings: None),
+        _invalidate_upload_list=lambda: invalidated.append("upload"),
+        _invalidate_pending_list=lambda: invalidated.append("pending"),
+        _invalidate_flagged_list=lambda: invalidated.append("flagged"),
+    )
+
+
+def test_moving_the_pass_mark_refreshes_the_upload_pending_and_flagged_lists():
+    invalidated = []
+    stub = _settings_change_stub(95, invalidated)
+
+    LyricVideoGUI._on_settings_changed(stub)
+
+    assert stub.settings.timing_pass_percent == 95 and sorted(invalidated) == ["flagged", "pending", "upload"]
+
+
+def test_changing_some_other_setting_leaves_the_song_lists_alone():
+    invalidated = []
+
+    LyricVideoGUI._on_settings_changed(_settings_change_stub(90, invalidated))
+
+    assert invalidated == []

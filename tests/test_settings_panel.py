@@ -41,6 +41,7 @@ def _raw_defaults() -> dict:
         "youtube_upload_times": "09:00,12:00,15:00,18:00,21:00",
         "youtube_max_uploads_per_day": 7.0,
         "youtube_quota_retry_hours": 24.0,
+        "timing_pass_percent": 90.0,
     }
 
 
@@ -133,3 +134,12 @@ def test_parse_clamped_float_clamps_below_the_range():
 def test_parse_clamped_float_falls_back_to_lo_on_unparseable_text():
     assert _parse_clamped_float("abc", lo=2.0, hi=100.0) == 2.0
     assert _parse_clamped_float("", lo=2.0, hi=100.0) == 2.0
+
+
+def test_values_to_settings_makes_the_timing_pass_mark_a_whole_number():
+    raw = _raw_defaults()
+    raw["timing_pass_percent"] = 95.0
+
+    settings = values_to_settings(raw)
+
+    assert settings.timing_pass_percent == 95 and isinstance(settings.timing_pass_percent, int)

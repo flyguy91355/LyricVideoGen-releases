@@ -42,6 +42,15 @@ def _patch_common(monkeypatch, tmp_path):
     monkeypatch.setattr("lyricvideo.pipeline.align_words", lambda vocals_path, words: [
         (float(i), float(i) + 0.4) for i in range(len(words))
     ])
+    # The sync gate has its own tests (test_timing_gate.py, incl. a real _align_lyrics render); these fixtures are
+    # two-line songs it rightly cannot check, so here it just accepts the alignment the earlier checks chose.
+    from lyricvideo.timing_gate import Settled, SyncReport
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.settle_alignment",
+        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None: Settled(
+            preferred, candidates[preferred], SyncReport(1.0, 0, 0, 0), earlier_concern,
+        ),
+    )
     monkeypatch.setattr(
         "lyricvideo.pipeline.detect_chords",
         lambda instrumental_stem_path, **kwargs: ChordTrack(

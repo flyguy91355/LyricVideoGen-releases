@@ -3277,3 +3277,64 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   reading the list first and giving each song `< /dev/null`. November Rain and Janie's Got a Gun had lost their source files from
   the batch folder; identical-length copies (same duration to 6 decimals) were found in the Plex folder and copied into each
   song's work dir, where redo looks first. All the Young Dudes and Wouldn't It Be Nice audio was not found anywhere.
+
+## 2026-09-20: automatic sync gate (`timing_gate.py`); "Like a Prayer" slipped through the old timing check
+
+- Incident: "Like a Prayer" was cleared by the app (82% precise, 9/73 lines off), uploaded, and went public -- the owner watched it and
+  found the middle half massively out of sync. Order-based line anchors showed the lyrics running 26 s ahead by line 41 and ~85 s by
+  line 57. Cause: `precision.match_words(near=starts)` pairs each word with the heard word nearest where WE placed it, so a line dropped
+  on the wrong repeat of a chorus looked precise; it also compared only 300 of 566 words. The 9-20 "false alarm" fix (37% -> 82%) had hidden
+  a real drift. My first replacement (an order-based drift scan) over-flagged repeated-chorus songs, and an OCR frame check on the mp4 read
+  garbage (86% "bad" on a spot-on song) -- both thrown out; each new measure was validated on songs the owner had judged before use.
+- Owner's standard: a line is in sync when its words start within 0.5 s of where they are sung; a song passes at >=90% of judged lines.
+  Measured per line (median of its words' offsets) with the search for the sung word limited to +-2.5 s (a search radius, not a tolerance --
+  nothing sung elsewhere can excuse a line). Lines the recognizer barely heard are unjudged; under 8 judged lines the song cannot be
+  checked. Validation: spot-on songs 94-98% (Night Moves, Desperado, Tiny Dancer, With or Without You, Eleanor Rigby, Cracklin' Rosie);
+  Like a Prayer 51%, Billie Jean 30%, You Can't Always 64%, Girls 68%, The Chain 60%, Go Your Own Way 75%. Whisper word starts are
+  themselves ~0.2-0.3 s uncertain, so no bar above ~90% is sensible (Night Moves sits right on it).
+- Wiring: `_align_lyrics` scores whole-song/anchored/blended with `settle_alignment` and keeps the best (the old precision/sync checks
+  still run first; their concern survives a passing gate, a failing gate's reason replaces it); no transcript / too few judged lines =
+  set aside as "could not be checked". `list_pending_uploads`/`list_flagged_songs` call `hold_if_timing_fails` so an older song whose saved
+  timing fails is held (concern written into lyrics_timed.json, recorded removed in cleared_log) before any upload path can send it; an older
+  song with no transcript is NOT held there (only a fresh render holds on "could not be checked"). Upload Anyway goes through
+  `_retry_pending_uploads` and is deliberately not guarded. `python -m lyricvideo.timing_gate [--hold]` reports every song (live videos are
+  only reported). Not done: a better aligner (MMS_FA is the weak link; see TODO.md) -- expect many new songs to be set aside until then.
+- Real run over `work/`: 80 of 139 songs pass, 59 fail. Uploads were turned OFF by the owner until this is resolved (memory note).
+
+## 2026-09-20 (later): the pass mark is a setting; the Upload list shows only passing videos
+
+- Owner: "i want only videos that pass 90% to be available in the upload to youtube section ... this 90% should be in a setting because i
+  may want to change that later to like 95% with better code." He also confirmed the Flagged panel's **Upload Anyway** stays (a deliberate
+  override; untouched).
+- `Settings.timing_pass_percent` (int, default 90; "Quality check" section, slider 50-100). The gate reads it from ONE place:
+  `timing_gate.use_pass_share_from(fn)` -- the GUI registers `lambda: self.settings.timing_pass_percent / 100` (the LIVE settings, so a moved
+  slider applies at once; `_on_settings_changed` also invalidates the Upload/Pending/Flagged lists when it moves); a fresh render gets it
+  explicitly (`run_pipeline` -> `_align_lyrics(needed=...)`); `python -m lyricvideo.timing_gate --percent N` (default: the saved setting).
+  `SyncReport.needed` carries the bar it was judged against, so the reason text says "95% are needed".
+- A moving bar means a written hold can go stale, so `hold_if_timing_fails` now keeps the hold in step: it holds a failing song, RELEASES a
+  song this check held that now passes (cleared_log records it), and never touches a concern from another check (`is_gate_concern`: the whole
+  text must start with the gate's own words -- a lyric-text concern, alone or combined with a timing one, is left alone). An older song
+  with no transcript keeps whatever it had.
+- Upload to YouTube list = `list_uploadable_songs()`: rendered songs (uploaded or not) that POSITIVELY pass the current bar with no other
+  concern; a song that fails or cannot be checked is left out and the section shows "N videos hidden: below X%". Read-only (never writes to
+  a live video). Measured on the real folder: 73 of 140 offered at 90%, 0.5 s to build.
+- Also this session (owner, evening): deleted from YouTube the 8 videos that scored under 80% on the prototype numbers (08-anyhow, Lucy in
+  the Sky, Good Vibrations, Rock and Roll Never Forgets, Ready for Love, Brown Sugar [was scheduled], Where the Streets Have No Name, I'm
+  Eighteen -- all still fail the FINAL gate, though Ready for Love/Where the Streets score 83%/86% there, the prototype counted "oh oh"
+  filler-only lines as wrong). Their local songs are held; state files renamed `youtube_state.deleted-on-youtube.json`. 9 live videos still
+  fail 90% (Back in the Saddle, Come as You Are, Here Comes the Sun, Crazy, Big Ten Inch Record, Yesterday, Born to Run, Alone, Dreams
+  [scheduled]) -- owner: leave them alone for now.
+
+## 2026-09-20 (night): Whisper default is now large-v3
+
+- Owner: "im good with a slower build if its more accurate ... just do the large one, dont need to test. can always revert back."
+  `transcribe._DEFAULT_MODEL` medium -> `large-v3` (faster-whisper 1.2.1 can fetch it; ~3 GB, pre-downloaded). Measured medium on this 4-core
+  CPU: 45 s per 120 s of vocals (0.38x real time; ~1.5 min for a 4-minute song); OpenAI's table lists medium ~2x large's speed, so large is
+  ~3 min for a 4-minute song (an estimate; not measured). Not benchmarked for accuracy on singing -- Whisper is speech-trained, so more lines
+  heard is expected, not proven. **The download is blocked from this network:** the 3 GB weights come from `us.aws.cdn.hf.co` (DNS resolves,
+  connections fail, like github.com) and the xet transfer sat at 0 bytes, so `_effective_model_name()` uses `medium` (with a printed warning and
+  the one-line download command) until large-v3 is on disk, then switches by itself; an explicit LYRICVIDEO_WHISPER_MODEL is never swapped,
+  and transcript.json records the model that really ran. Revert with LYRICVIDEO_WHISPER_MODEL=medium in .env (no code change). The cache check compares the model
+  name, so every saved transcript.json (medium) is redone the next time a Redo/Batch/verify_lyrics run needs it; the timing gate only READS
+  transcript.json and keeps working on the old ones. Context: failing songs are mostly a lyric-TEXT problem (choruses; text not matching
+  the vocals), so a bigger recognizer helps hear/anchor more lines but is not the whole fix -- see the memory note on why songs fail the gate.
