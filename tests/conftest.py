@@ -27,3 +27,4 @@ def test_font_path():
 def _isolate_redo_log(tmp_path_factory, monkeypatch):
     """Tests that redo songs must never write into the owner's real ~/.playalongvideoproduction/redone_songs.json."""
     monkeypatch.setattr("lyricvideo.redo_log.LOG_FILE", tmp_path_factory.mktemp("redolog") / "redone_songs.json")
+    monkeypatch.setattr("lyricvideo.cleared_log.LOG_FILE", tmp_path_factory.mktemp("clearedlog") / "cleared_songs.json")

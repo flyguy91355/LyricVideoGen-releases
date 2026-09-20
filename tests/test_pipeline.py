@@ -1421,3 +1421,43 @@ def test_a_first_run_of_a_new_song_leaves_no_redo_record(tmp_path, monkeypatch):
     run_pipeline(Path("audio.mp3"), tmp_path / "work")
 
     assert redone_songs() == []
+
+
+# --- only cleared songs are pending; every run records cleared / removed (2026-09-20) ------------------------------
+
+def test_list_pending_uploads_leaves_out_a_song_held_for_review(tmp_path):
+    """Owner, 2026-09-20: 'if there bad remove them'. A held song (any concern) must not be a checkbox that Select All
+    + Upload Selected could send to YouTube; it lives in Flagged for Lyrics Review, where Upload Anyway is deliberate."""
+    work_root = tmp_path / "work"
+    for name, concern in (("good-song", ""), ("bad-song", "SET ASIDE FOR REVIEW -- the lyric timing is not precise enough")):
+        song_dir = work_root / name
+        song_dir.mkdir(parents=True)
+        save_song(Song(title=name, audio_path="a.mp3", lyrics_accuracy_concern=concern), song_dir / "lyrics_timed.json")
+        (song_dir / f"{name}.mp4").write_bytes(b"video")
+
+    assert list_pending_uploads(work_root) == ["good-song"]
+
+
+def test_a_finished_run_with_no_concern_is_recorded_as_cleared(tmp_path, monkeypatch):
+    from lyricvideo.cleared_log import cleared_songs
+
+    _patch_common(monkeypatch, tmp_path)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert [e["slug"] for e in cleared_songs()] == ["work"]
+
+
+def test_a_finished_run_with_a_concern_is_recorded_as_removed_with_the_reason(tmp_path, monkeypatch):
+    from lyricvideo.cleared_log import cleared_songs, history
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: (["hello there", "my friend"], "lrclib", "Only 60% of these lyrics match what is sung."),
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert cleared_songs() == []
+    assert history()[-1]["status"] == "removed" and "60%" in history()[-1]["note"]

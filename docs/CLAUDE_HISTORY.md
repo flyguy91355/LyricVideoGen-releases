@@ -3251,3 +3251,14 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   in silence and set the song aside. `lyric_audio_match.drop_unsung_trailing_lines()` mirrors the leading rule: a trailing line
   stamped more than 3 s after the last heard/sung moment is dropped (trailing run only, at most 12, one line always remains).
   A scan of every stored song found only Desperado affected.
+
+## 2026-09-20: cleared-for-upload record; held songs are no longer pending checkboxes
+
+- Owner: "keep track of all the videos that have been cleared for upload, including all on the pending upload list, if there bad
+  remove them ... they can be redone". `cleared_log.py` keeps an append-only history in `~/.playalongvideoproduction/cleared_songs.json`
+  (latest entry decides): `run_pipeline()` records every finished run as cleared (no concern) or removed (with the reason), so a
+  redo that fixes a song clears it again by itself.
+- Gap found: the Pending YouTube Uploads checklist listed held songs too, so Select All + Upload Selected could send a bad video
+  (the auto-retry path already skipped them). `list_pending_uploads()` now leaves out any song with a concern; held songs stay in
+  Flagged for Lyrics Review, where Upload Anyway is a deliberate override.
+- Backfill on 2026-09-20: 102 cleared (33 waiting to upload, 69 on YouTube), 38 not cleared.

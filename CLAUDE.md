@@ -474,7 +474,7 @@ never called from the GUI thread). "Upload to YouTube" (below Redo) is the
 sole manual-upload UI: a `list_rendered_songs()` single-select list (any
 song, uploaded or not) + Upload -- confirms first if that song has a
 `youtube_state.json` -- plus a "Pending YouTube Uploads" checklist below,
-live from `list_pending_uploads()` (never-uploaded only;
+live from `list_pending_uploads()` (never-uploaded, cleared;
 `list_flagged_songs()` backs a review list too, HISTORY 2026-09-18), with
 "Select All" and an "Upload Selected" button; both share
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring

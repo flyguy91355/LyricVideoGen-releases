@@ -27,6 +27,7 @@ from .lyric_arbiter import arbitrate
 from .lyric_audio_match import drop_unsung_leading_lines, drop_unsung_trailing_lines, score_lyrics_against_transcript
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .owner_lyrics import owner_lyrics_lines
+from .cleared_log import record_cleared, record_removed
 from .redo_log import note_redo_finished, note_redo_started
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals, stems_look_complete
@@ -144,7 +145,20 @@ def list_pending_uploads(work_root: Path) -> list[str]:
         if entry.is_dir()
         and not (entry / STATE_FILENAME).exists()
         and song_video_path(entry) is not None
+        and not _held_for_review(entry)
     )
+
+
+def _held_for_review(song_dir: Path) -> bool:
+    """A song with any lyrics/timing concern is not CLEARED (cleared_log.py): it is offered in Flagged for Lyrics
+    Review, never as a pending-upload checkbox that Select All + Upload Selected could send out."""
+    timed_path = song_dir / "lyrics_timed.json"
+    if not timed_path.exists():
+        return False
+    try:
+        return bool(load_song(timed_path).lyrics_accuracy_concern)
+    except Exception:
+        return False
 
 
 def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[str]:
@@ -658,6 +672,13 @@ def run_pipeline(
 
     try:  # completes the redo record started by backup_song_outputs (a no-op for a brand-new song)
         note_redo_finished(work_dir, concern=song.lyrics_accuracy_concern)
+        try:  # the running list of cleared / removed songs (cleared_log.py)
+            if song.lyrics_accuracy_concern:
+                record_removed(work_dir.name, song.lyrics_accuracy_concern[:300])
+            else:
+                record_cleared(work_dir.name, "passed the lyric and timing checks")
+        except Exception as e:
+            print(f"WARNING: could not update the cleared-songs record ({type(e).__name__}: {e})", file=sys.stderr)
     except Exception as e:
         print(f"WARNING: could not record this redo: {type(e).__name__}: {e}", file=sys.stderr)
     report("done")
