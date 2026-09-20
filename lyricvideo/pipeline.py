@@ -30,6 +30,7 @@ from .owner_lyrics import owner_lyrics_lines
 from .redo_log import note_redo_finished, note_redo_started
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from .separate import separate_vocals, stems_look_complete
+from .precision import choose_alignment, match_words
 from .sync import decide_alignment, sync_agreement
 from .settings import Settings
 from .transcribe import load_transcript_segments, load_transcript_words, transcribe_vocals
@@ -315,6 +316,20 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
     anchored, _ = align_words_anchored(
         vocals_path, [[w.word for w in line.words] for line in parsed_lines], anchors, prepared=prepared,
     )
+    # Per-WORD precision against what Whisper heard decides first (the owner sees half a second); the line-level check
+    # below only judges a song too few of whose words were heard for that.
+    line_of_word = [li for li, line in enumerate(parsed_lines) for _ in line.words]
+    evidence = match_words([w.word for line in parsed_lines for w in line.words], heard)
+    choice = choose_alignment({"whole-song": whole, "anchored": anchored}, line_of_word, evidence, len(parsed_lines))
+    if choice is not None:
+        print(
+            f"Timing check: {choice.precision.share:.0%} of {choice.precision.matched} heard words start within half a "
+            f"second of where they were sung; {choice.precision.off_lines} of {choice.precision.lines} lines are clearly "
+            f"off. Using the {choice.method} alignment."
+        )
+        if choice.concern:
+            print(f"WARNING: {choice.concern}", file=sys.stderr)
+        return [(min(a, audio_duration), min(b, audio_duration)) for a, b in choice.times], choice.concern
     decision = decide_alignment(line_starts(whole), line_starts(anchored), anchors, source_times=line_times)
     whole_report = sync_agreement(line_starts(whole), anchors)
     print(

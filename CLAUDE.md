@@ -23,7 +23,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   hardcodes the venv interpreter path -- `lyricvideo/venv.py`'s `venv_python()`
   resolves `.venv/bin/python` vs `.venv/Scripts/python.exe`; read every
   `.venv/bin/python` below that way.
-  `.gitattributes` keeps `*.sh`/`.githooks/*` LF and `*.bat` CRLF. (HISTORY 2026-09-14.)
+  `.gitattributes` keeps `*.sh`/`.githooks/*` LF and `*.bat` CRLF.
 - **GUI (normal use):** double-click the `PlayAlongVideoProduction` desktop icon, or
   run `./run_playalongvideoproduction.sh` from the repo root. Launchers call the
   venv's own `python` directly, never `source .venv/bin/activate` (stale baked-in
@@ -140,8 +140,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
    choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
    against lrclib's line timestamps (`combine_anchors`) bound each line to its own
-   window (`align_words_anchored`); `sync.py` keeps the whole-song result only if it
-   agrees, else the anchored one (if Whisper or the source's line times back it), else set aside. MMS_FA knows
+   window (`align_words_anchored`); `precision.py` scores each word against Whisper's, takes the best per-line mix of whole-song/anchored, else sets the song aside (`sync.py`: fallback). MMS_FA knows
    only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
    "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
    token (issue #3). Display text never changes.

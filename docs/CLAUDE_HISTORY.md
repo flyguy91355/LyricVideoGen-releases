@@ -3195,3 +3195,27 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   up to 32 s off, so the check separates good from bad timing on the songs available.
 - The 86 songs made before the anchored alignment have lyrics verified but NO word-timed transcript, so their timing has not been
   checked yet (only redone songs were).
+
+## 2026-09-19 (evening): per-word timing precision replaces the 2 s line check
+
+- Owner watched Go Your Own Way: lyrics right, but the green highlight was "close, but not exact", sometimes a line behind the
+  singer, and "in general the songs in the past seemed better". Other songs (Night Moves, Cracklin' Rosie) were "spot on".
+- Measured per WORD against Whisper's own word times (share of words starting within 0.5 s of where they were heard):
+  spot-on songs 86-96% (Night Moves 89, Cracklin' Rosie 88, With or Without You 86, Eleanor Rigby 96); the loose ones 32-69%
+  (Girls 34, The Chain 32-39, Go Your Own Way 41 after the redo / 69 before, Every Breath You Take 49, Money 53 / 62).
+  The old gate (`sync.py`) let all of them pass: a line "agreed" within 2 s plus up to 2.5 s of allowed bias, and Whisper's
+  first-word times are noisy on loud recordings.
+- Regression found: for Go Your Own Way and Money the redo REPLACED a better whole-song alignment with the anchored one
+  (anchored squeezed lines, e.g. two lines 0.08 s apart). Neither method wins everywhere.
+- `precision.py`: `match_words` (in-order match of lyric words to heard words), `measure`, `blend` (per line, the candidate
+  closer to what was heard; a dynamic-programming pass so the mix always stays in order), `choose_alignment` (best of
+  whole-song / blended / anchored; ties -> whole-song; out-of-order candidates skipped). Passes at >=70% of matched words within
+  0.5 s AND <=15% of lines clearly off (>1 s); otherwise the song is SET ASIDE and the reason names the lines (1-based).
+  Needs >=20 matched words, else the old `sync.decide_alignment` still applies (incl. its source-line-time rescue).
+- Result on the existing redos: Go Your Own Way blends to 79% and lines 1-26 land within 0.1 s; the 6 remaining bad lines
+  (27, 28, 30-33, 36) sit in guitar solos / the fade-out where the file lists lines that are not sung as written, which no
+  aligner can time -- so it is set aside with those lines named. The Chain (51%), Money (62%), Girls (34%), Every Breath
+  (49%) are set aside too. Also: the older ~41 waiting songs have only whole-song alignments and no word-timed transcript.
+- Known limit: `match_words` pairs lyric words with heard words by in-order text matching, so a repeated phrase can be paired with
+  the wrong copy (Back in the Saddle: "I'm back in the saddle again" x6 gives fake errors of 40-60 s). That over-flags (a song is
+  set aside for the owner to watch, never silently accepted). A time-aware match (using lrclib line times) would fix it.

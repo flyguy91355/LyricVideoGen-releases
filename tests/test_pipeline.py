@@ -1194,8 +1194,10 @@ def test_lrclib_line_times_repair_whisper_anchors_that_picked_the_wrong_chorus_c
 
 
 def _loud_song_setup(monkeypatch, tmp_path, source_times):
-    """Whisper hears lines 1-3 about 9 s late (a consistent run, so combine_anchors keeps it) -- only ~62% agree."""
+    """Whisper hears lines 1-3 about 9 s late (a consistent run, so combine_anchors keeps it) -- only ~62% agree.
+    Precision (lyricvideo/precision.py) needs plenty of heard words; with too few the line-level gate is used."""
     _sync_setup(monkeypatch, tmp_path, _TRUE_STARTS, _TRUE_STARTS)
+    monkeypatch.setattr("lyricvideo.precision.MIN_MATCHED_WORDS", 10**6)
     misheard = [s + 9.0 if i < 3 else s for i, s in enumerate(_TRUE_STARTS)]
     monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at(misheard))
     monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: [])
@@ -1224,6 +1226,34 @@ def test_the_same_song_is_set_aside_when_the_source_has_no_line_times(tmp_path, 
     run_pipeline(Path("audio.mp3"), work_dir)
 
     assert "review" in load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern.lower()
+
+
+def test_the_better_alignment_is_used_line_by_line_and_reported_as_blended(tmp_path, monkeypatch, capsys):
+    """Real (Go Your Own Way, Money, The Chain 2026-09-19): the whole-song pass was exact on some lines and 2 s late
+    on others, the anchored pass the reverse; neither alone was right."""
+    whole = [s if i < 4 else s + 2.0 for i, s in enumerate(_TRUE_STARTS)]
+    anchored = [s + 2.0 if i < 4 else s for i, s in enumerate(_TRUE_STARTS)]
+    _sync_setup(monkeypatch, tmp_path, whole, anchored)
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    song = load_song(work_dir / "lyrics_timed.json")
+    assert all(abs(line.words[0].start_time - s) < 0.01 for line, s in zip(song.lines, _TRUE_STARTS))
+    assert song.lyrics_accuracy_concern == ""
+    assert "blended" in capsys.readouterr().out
+
+
+def test_a_song_whose_lines_are_close_but_not_precise_is_set_aside_naming_the_lines(tmp_path, monkeypatch):
+    """The old line check tolerated ~2 s (+2.5 s of bias); on screen a line 1.9 s late means the singer is a line ahead."""
+    late = [s + 1.9 for s in _TRUE_STARTS]
+    _sync_setup(monkeypatch, tmp_path, late, late)
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    concern = load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+    assert "half a second" in concern and "lines 1, 2" in concern and "review" in concern.lower()
 
 
 # --- the owner's own edited lyrics (2026-09-19) ---------------------------------------------------
