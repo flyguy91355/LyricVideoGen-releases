@@ -3367,3 +3367,15 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   timing or lyric text -- the owner looked at the whole video. Flagged rows (songs not on YouTube) get a green "Mark Verified" button with a
   confirm box that shows the automatic score ("83%, 90% needed"); Upload Anyway is unchanged. No "un-verify" button: redo the song.
 - Whisper stays on medium (large-v3 tested and reverted the same evening -- see the entry above); a model choice in Settings was deferred.
+
+## 2026-09-21: an Upload Anyway that the daily limit skips is remembered (it used to vanish)
+
+- Owner clicked Upload Anyway on Like a Prayer with today's upload count already 7/7: the app said "left pending ... they'll upload automatically
+  over the next few days", but nothing was recorded -- a held song is not in the Pending list and the auto-retry skips flagged songs, so it
+  would never have uploaded. Fix: in `_retry_pending_uploads`, a song the limit defers that `needs_review()` (held and not verified) is marked
+  verified (`_record_owner_verification`; only Upload Anyway can send a held song there, so the click IS the approval); results gain an
+  "approved" list only when non-empty (existing callers/tests compare the dict). It then shows in Pending YouTube Uploads with its place kept.
+  The result message no longer promises an automatic upload unless auto-upload is on ("they stay in Pending YouTube Uploads for you to
+  upload"). Same session: Like a Prayer's stale youtube_state.json (he deleted the video by hand; the Flagged row's "already on YouTube"
+  test is just that file existing, the app never re-checks YouTube) was renamed `youtube_state.deleted-on-youtube.json` so the row showed
+  Mark Verified / Upload Anyway. Billie Jean and You Can't Always Get What You Want (also deleted by hand) still have stale records -- asked.

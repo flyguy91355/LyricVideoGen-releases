@@ -532,3 +532,64 @@ def test_the_hold_command_leaves_a_song_the_owner_verified_alone(tmp_path):
 
     assert (tmp_path / "checked" / "lyrics_timed.json").read_text(encoding="utf-8") == before
     assert verification(tmp_path / "checked") is not None                       # and the verdict is still valid
+
+
+# --- Upload Anyway when today's upload limit is already used (2026-09-21) --------------------------------------------------
+
+def _upload_setup(monkeypatch, used_today):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui.load_uploads_today", lambda: used_today)
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no upload once the limit is reached")))
+
+
+def test_an_upload_anyway_the_daily_limit_skips_is_remembered_as_the_owners_approval_and_shows_in_pending(tmp_path, monkeypatch):
+    from lyricvideo.gui import _retry_pending_uploads
+    from lyricvideo.settings import Settings
+    _rendered(tmp_path, "hard-song", placed({1: 1.0, 6: -1.0}))                    # flagged: fails the bar
+    assert list_pending_uploads(tmp_path) == []
+    _upload_setup(monkeypatch, used_today=7)
+
+    results = _retry_pending_uploads(tmp_path, Settings(youtube_max_uploads_per_day=7), ["hard-song"], force=True)
+
+    assert results["deferred"] == ["hard-song"] and results["approved"] == ["hard-song"]
+    assert verification(tmp_path / "hard-song") is not None
+    assert list_pending_uploads(tmp_path) == ["hard-song"]                          # it kept its place
+
+
+def test_a_good_song_the_limit_skips_stays_an_ordinary_pending_song_and_is_not_marked_verified(tmp_path, monkeypatch):
+    from lyricvideo.gui import _retry_pending_uploads
+    from lyricvideo.settings import Settings
+    _rendered(tmp_path, "good-song", placed())
+    _upload_setup(monkeypatch, used_today=7)
+
+    results = _retry_pending_uploads(tmp_path, Settings(youtube_max_uploads_per_day=7), ["good-song"], force=True)
+
+    assert results == {"succeeded": [], "failed": [], "deferred": ["good-song"]}
+    assert verification(tmp_path / "good-song") is None
+
+
+def _done_message(monkeypatch, results, auto_upload):
+    from types import SimpleNamespace
+    from lyricvideo.gui import LyricVideoGUI
+    from lyricvideo.settings import Settings
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda title, message, **kw: shown.append(message))
+    stub = SimpleNamespace(settings=Settings(youtube_auto_upload=auto_upload), _refresh_retry_upload_options=lambda: None)
+    LyricVideoGUI._on_retry_upload_done(stub, {"succeeded": [], "failed": [], **results})
+    return shown[0]
+
+
+def test_the_message_says_an_approved_song_is_now_in_pending_and_does_not_promise_an_automatic_upload_that_will_not_happen(monkeypatch):
+    text = _done_message(monkeypatch, {"deferred": ["a"], "approved": ["a"]}, auto_upload=False)
+
+    assert "marked verified" in text and "Pending YouTube Uploads" in text and "automatically" not in text
+    assert "Auto-upload is off" in text                                     # says what the owner has to do next
+    assert "Auto-upload is off" not in _done_message(monkeypatch, {"deferred": ["a"], "approved": ["a"]}, auto_upload=True)
+
+
+def test_a_plain_deferred_song_is_only_promised_an_automatic_upload_when_auto_upload_is_on(monkeypatch):
+    assert "automatically" not in _done_message(monkeypatch, {"deferred": ["a"]}, auto_upload=False)
+    assert "automatically" in _done_message(monkeypatch, {"deferred": ["a"]}, auto_upload=True)

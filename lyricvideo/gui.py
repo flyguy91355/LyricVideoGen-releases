@@ -37,6 +37,7 @@ from .pipeline import (
     run_pipeline,
     slugify as _slugify,
     list_flagged_songs,
+    needs_review,
     list_redoable_songs,
     list_pending_uploads,
     list_rendered_songs,
@@ -213,6 +214,14 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
             print(f"WARNING: YouTube upload failed for {work_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
 
 
+def _record_owner_verification(work_dir: Path) -> None:
+    """Records the owner's approval of this version of the song, with the automatic score as it stands now."""
+    report = check_saved_song(work_dir)
+    mark_verified(
+        work_dir, automatic_share=None if report is None else report.share, needed=None if report is None else report.needed,
+    )
+
+
 def _retry_pending_uploads(
     work_root: Path, settings: Settings, slugs: list[str] | None = None, force: bool = False,
 ) -> dict:
@@ -253,6 +262,11 @@ def _retry_pending_uploads(
     for slug in slugs:
         if _uploads_remaining_today(settings) <= 0:
             results["deferred"].append(slug)
+            if needs_review(work_root / slug):
+                # Only Upload Anyway can send a held song here, so this click IS the owner's approval: remember it, or the
+                # song would sit in Flagged for Lyrics Review and never upload (the app used to promise it would).
+                _record_owner_verification(work_root / slug)
+                results.setdefault("approved", []).append(slug)
             continue
         try:
             schedule_upload(youtube_client, anthropic_client, work_root / slug, settings)
@@ -1466,11 +1480,20 @@ class LyricVideoGUI:
     def _on_retry_upload_done(self, results: dict) -> None:
         self._refresh_retry_upload_options()
         lines = [f"Uploaded {len(results['succeeded'])} song(s)."]
-        if results.get("deferred"):
+        approved = results.get("approved", [])
+        waiting = [slug for slug in results.get("deferred", []) if slug not in approved]
+        limit = f"today's upload limit ({self.settings.youtube_max_uploads_per_day}/day) is reached"
+        if approved:
             lines.append(
-                f"{len(results['deferred'])} left pending -- today's upload limit "
-                f"({self.settings.youtube_max_uploads_per_day}/day) is reached; they'll upload "
-                "automatically over the next few days."
+                f"{len(approved)} marked verified by you (that click is your approval) and waiting because {limit}: "
+                "they are now in Pending YouTube Uploads."
+                + ("" if self.settings.youtube_auto_upload else " Auto-upload is off, so upload them from there once the limit resets.")
+            )
+        if waiting:
+            lines.append(
+                f"{len(waiting)} left pending -- {limit}; "
+                + ("they'll upload automatically over the next few days."
+                   if self.settings.youtube_auto_upload else "they stay in Pending YouTube Uploads for you to upload.")
             )
         if results["failed"]:
             lines.append(f"{len(results['failed'])} failed:")
@@ -1928,10 +1951,7 @@ class LyricVideoGUI:
             "It will then be offered for upload. Redoing the song cancels this.",
         ):
             return
-        mark_verified(
-            work_dir, automatic_share=None if report is None else report.share,
-            needed=None if report is None else report.needed,
-        )
+        _record_owner_verification(work_dir)
         self._invalidate_flagged_list()
         self._invalidate_pending_list()
         self._invalidate_upload_list()

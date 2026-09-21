@@ -172,6 +172,12 @@ def list_pending_uploads(work_root: Path) -> list[str]:
     )
 
 
+def needs_review(song_dir: Path) -> bool:
+    """True when the song is held back from upload (a concern, or timing that fails the pass mark) and the owner has not
+    approved this version -- the songs Flagged for Lyrics Review lists."""
+    return _held_for_review(Path(song_dir))
+
+
 def _held_for_review(song_dir: Path) -> bool:
     """A song with any lyrics/timing concern is not CLEARED (cleared_log.py): it is offered in Flagged for Lyrics
     Review, never as a pending-upload checkbox that Select All + Upload Selected could send out."""
