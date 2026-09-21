@@ -3412,3 +3412,16 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   Measured his open window with xdotool: 1552x1000 (code was 1400x1000). Default is now 1600x1000. The review row's six buttons made one ~596 px
   row, so the row is now two: Watch/Edit Lyrics/Redo, then Render Anyway or Mark Verified + Upload Anyway, then Remove. A REAL-window test
   (hidden CTk root, first in the suite; skips without a display) builds the actual row and asserts no button row is wider than 480 px.
+
+## 2026-09-21 (afternoon): a 96% song was set aside by an older check's leftover rule -- one-line fix
+
+- Owner's batch log for "You Can't Hurry Love": "Sync check: 96% of 47 lines" (a pass) followed by "SET ASIDE FOR REVIEW ... only 94% of the words ...
+  lines 58 sit where nobody is singing". `settle_alignment` let the OLDER precision/sync check's concern (`earlier_concern`, here a cut-off last lyric
+  fragment timed in silence) survive a passing gate. Fix: `settle_alignment` returns only the gate's own concern, so a song is set aside only when
+  it is below the pass mark (owner: "all its doing is setting aside the videos [below] the setpoint ... that's all"). The older checks still only
+  suggest which alignment to prefer. One test replaced (an older concern no longer survives a pass). The log still prints the older "Timing check:"
+  line beside the "Sync check:" line (two different numbers) -- cosmetic, left as is.
+- A bigger rework (counting lines timed in silence inside the gate's percentage, a `Song.silent_lines` field, dropping the older log lines) was written
+  and tested, then SET ASIDE in `git stash` ("bigger sync-gate rework") because the owner wanted no large changes to a program that works well.
+- Process mistake: `cut_release.sh` ran after a BLOCKED commit (CLAUDE.md size/hook) and published v2.0.51 with the v2.0.50 code and notes for a change that
+  was not in it; the notes were corrected to say "No code changes... published by mistake". Release commands are now chained with && after commit+push.

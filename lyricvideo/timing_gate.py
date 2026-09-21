@@ -178,11 +178,11 @@ def settle_alignment(
     candidates: dict[str, list[tuple[float, float]]], line_words: list[list[str]], heard: list[HeardWord],
     preferred: str | None = None, earlier_concern: str = "", needed: float | None = None,
 ) -> Settled:
-    """The final say on a fresh render: take the alignment with the most lines in sync, and set the song aside unless that
-    one passes. A concern an earlier check raised (a line timed where nobody sings) survives a passing sync check; a failing
-    one is replaced by this reason, which already says what is wrong."""
+    """The final say on a fresh render: take the alignment with the most lines in sync, and set the song aside ONLY when that
+    one is below the pass mark (owner, 2026-09-21). A concern the older precision/sync checks raised (`earlier_concern`, e.g. a
+    line timed where nobody sings) no longer holds a song the gate passes: it once set aside a 96% song."""
     method, times, report = pick_by_sync(candidates, line_words, heard, preferred, needed)
-    return Settled(method, times, report, earlier_concern if report.passes else report.concern)
+    return Settled(method, times, report, report.concern)
 
 
 def check_saved_song(song_dir: Path, needed: float | None = None) -> SyncReport | None:

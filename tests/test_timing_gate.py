@@ -204,13 +204,12 @@ def test_a_fresh_render_that_no_alignment_gets_in_sync_is_set_aside_with_the_rea
     assert settled.concern.startswith("SET ASIDE FOR REVIEW") and "not precise enough" in settled.concern
 
 
-def test_an_earlier_concern_survives_when_the_sync_check_passes_but_is_replaced_when_it_fails():
-    earlier = "SET ASIDE FOR REVIEW -- a line sits where nobody sings."
+def test_an_older_checks_concern_does_not_hold_a_song_the_sync_check_passes_and_a_failing_one_shows_only_the_sync_reason():
+    older = "SET ASIDE FOR REVIEW -- lines 58 sit where nobody is singing."
 
-    assert settle_alignment({"whole-song": placed()}, WORDS, HEARD, "whole-song", earlier).concern == earlier
-    failing = settle_alignment({"whole-song": placed({1: 1.0, 6: -1.0})}, WORDS, HEARD, "whole-song", earlier).concern
-    assert "80%" in failing and earlier not in failing
-
+    assert settle_alignment({"whole-song": placed()}, WORDS, HEARD, "whole-song", older).concern == ""
+    failing = settle_alignment({"whole-song": placed({1: 1.0, 6: -1.0})}, WORDS, HEARD, "whole-song", older).concern
+    assert "80%" in failing and older not in failing
 
 def test_a_fresh_render_the_recognizer_heard_nothing_of_is_set_aside_as_unchecked():
     settled = settle_alignment({"whole-song": placed()}, WORDS, [], preferred="whole-song")
