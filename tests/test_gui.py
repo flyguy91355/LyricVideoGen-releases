@@ -1867,3 +1867,117 @@ def test_render_anyway_asks_first_then_resumes_at_the_chords_stage_with_the_save
     assert "Hard Song" in asked[0]
     assert started == [(worker, (audio, tmp_path / "work" / "hard-song", "Hard Song", "detect_chords"))]
     assert stub._last_work_dir == tmp_path / "work" / "hard-song"
+
+
+# --- Remove: take a song out of Flagged for Lyrics Review (hide only; nothing is deleted) (2026-09-21) --------------------------
+
+def test_songs_the_owner_removed_are_left_out_of_the_review_list(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("lyricvideo.gui.list_flagged_songs", lambda work_root, include_uploaded=False: ["a", "b", "c"])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: {"b"} if list_name == "flagged" else {"a"})
+
+    assert LyricVideoGUI._visible_flagged_songs(_gui_stub()) == ["a", "c"]
+
+
+def _remove_setup(tmp_path, monkeypatch, answer):
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    song_dir = tmp_path / "work" / "hard-song"
+    song_dir.mkdir(parents=True)
+    (song_dir / "lyrics_timed.json").write_text("{}", encoding="utf-8")
+    asked, hidden, refreshed = [], [], []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, message, **kw: asked.append(message) or answer)
+    monkeypatch.setattr("lyricvideo.gui.dismiss_song", lambda list_name, slug: hidden.append((list_name, slug)))
+    return _gui_stub(_invalidate_flagged_list=lambda: refreshed.append(True)), song_dir, asked, hidden, refreshed
+
+
+def test_remove_asks_first_hides_the_song_from_the_review_list_and_deletes_nothing(tmp_path, monkeypatch):
+    stub, song_dir, asked, hidden, refreshed = _remove_setup(tmp_path, monkeypatch, answer=True)
+
+    LyricVideoGUI._on_remove_flagged(stub, "hard-song")
+
+    assert "Nothing is deleted" in asked[0] and hidden == [("flagged", "hard-song")] and refreshed == [True]
+    assert (song_dir / "lyrics_timed.json").exists()
+
+
+def test_saying_no_to_the_remove_prompt_leaves_the_song_in_review(tmp_path, monkeypatch):
+    stub, song_dir, asked, hidden, refreshed = _remove_setup(tmp_path, monkeypatch, answer=False)
+
+    LyricVideoGUI._on_remove_flagged(stub, "hard-song")
+
+    assert hidden == [] and refreshed == []
+
+
+def test_redoing_a_removed_song_brings_it_back_to_review(monkeypatch):
+    brought_back = []
+    monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: brought_back.append((list_name, slug)))
+    monkeypatch.setattr("lyricvideo.gui.run_pipeline", lambda *a, **k: Path("work/a/a.mp4"))
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
+
+    LyricVideoGUI._run_worker(stub, Path("a.mp3"), Path("work/a"), "A", "fetch_lyrics")
+
+    assert brought_back == [("flagged", "a")]
+
+
+def test_a_batch_that_regenerates_a_removed_song_brings_it_back_to_review(monkeypatch):
+    brought_back = []
+    monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: brought_back.append((list_name, slug)))
+    monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
+    monkeypatch.setattr("lyricvideo.gui.run_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui.backup_song_outputs", lambda *a, **k: None)
+    items = [BatchItem(audio_path=Path("a.mp3"), title="A", work_dir=Path("work/a"), already_done=True)]
+
+    LyricVideoGUI._run_batch_worker(_gui_stub(_queue=queue.Queue(), settings=Settings()), items)
+
+    assert brought_back == [("flagged", "a")]
+
+
+# --- the review rows must never crop a button, however narrow the window (owner, 2026-09-21: "upload anyway is cropped out") ---
+
+def _widest_button_row(frame):
+    """Requested width of the widest frame that holds buttons directly (so a row that would not fit is caught)."""
+    import customtkinter as ctk
+    widest = 0
+    stack = [frame]
+    while stack:
+        widget = stack.pop()
+        children = widget.winfo_children()
+        buttons = [c for c in children if isinstance(c, ctk.CTkButton)]
+        if buttons:
+            widest = max(widest, sum(b.winfo_reqwidth() + 6 for b in buttons))
+        stack.extend(children)
+    return widest
+
+
+@pytest.mark.parametrize("has_video, on_youtube", [(True, False), (False, False), (True, True)])
+def test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show(tmp_path, monkeypatch, has_video, on_youtube):
+    import customtkinter as ctk
+    from lyricvideo.pipeline import HELD_MARKER
+    try:
+        root = ctk.CTk()
+    except Exception:
+        pytest.skip("no display available for a real window")
+    try:
+        root.withdraw()
+        monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+        song_dir = tmp_path / "work" / "hard-song"
+        song_dir.mkdir(parents=True)
+        from lyricvideo.models import Song, save_song
+        save_song(Song(title="Hard Song", audio_path="a.mp3", lyrics_accuracy_concern="x"), song_dir / "lyrics_timed.json")
+        if has_video:
+            (song_dir / "hard-song.mp4").write_bytes(b"video")
+        else:
+            (song_dir / HELD_MARKER).write_text("{}", encoding="utf-8")
+        if on_youtube:
+            save_youtube_state(song_dir, YoutubeState(video_id="abc", uploaded_at="2026-09-01T00:00:00+00:00", title="t"))
+        frame = ctk.CTkScrollableFrame(root)
+        frame.pack()
+        stub = SimpleNamespace(flagged_songs_frame=frame)
+
+        LyricVideoGUI._render_one_flagged_song(stub, "hard-song")
+        root.update_idletasks()
+
+        assert 0 < _widest_button_row(frame) <= 480
+    finally:
+        root.destroy()

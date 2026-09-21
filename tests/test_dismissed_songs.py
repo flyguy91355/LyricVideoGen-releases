@@ -1,4 +1,4 @@
-from lyricvideo.dismissed_songs import dismiss_song, load_dismissed
+from lyricvideo.dismissed_songs import dismiss_song, load_dismissed, undismiss_song
 
 
 def test_load_dismissed_missing_file_returns_empty(tmp_path):
@@ -54,3 +54,17 @@ def test_load_dismissed_corrupt_file_returns_empty(tmp_path):
     state_file.write_text("not json", encoding="utf-8")
 
     assert load_dismissed("pending", state_file) == set()
+
+
+def test_undismiss_brings_back_only_that_song_and_is_harmless_when_it_was_never_hidden(tmp_path):
+    state_file = tmp_path / "dismissed_songs.json"
+    dismiss_song("flagged", "song-a", state_file)
+    dismiss_song("flagged", "song-b", state_file)
+    dismiss_song("pending", "song-a", state_file)
+
+    undismiss_song("flagged", "song-a", state_file)
+    undismiss_song("flagged", "never-hidden", state_file)
+    undismiss_song("flagged", "song-a", tmp_path / "no_such_state.json")
+
+    assert load_dismissed("flagged", state_file) == {"song-b"}
+    assert load_dismissed("pending", state_file) == {"song-a"}                # other lists are untouched

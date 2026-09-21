@@ -301,3 +301,14 @@ def test_a_song_held_before_its_video_counts_as_already_processed_so_a_batch_doe
     items = resolve_batch_items([audio], work_root)
 
     assert items[0].already_done is True
+
+
+def test_a_song_the_owner_removed_from_review_counts_as_already_processed_so_a_batch_leaves_it_alone(tmp_path, monkeypatch):
+    audio = tmp_path / "some-song.mp3"
+    audio.write_bytes(b"")
+    work_root = tmp_path / "work"
+    (work_root / "some-song").mkdir(parents=True)                         # no video, no hold marker: only the owner's removal
+    monkeypatch.setattr("lyricvideo.batch.extract_metadata", lambda path: type("Info", (), {"title": "Some Song"})())
+    monkeypatch.setattr("lyricvideo.batch.load_dismissed", lambda list_name: {"some-song"} if list_name == "flagged" else set())
+
+    assert resolve_batch_items([audio], work_root)[0].already_done is True

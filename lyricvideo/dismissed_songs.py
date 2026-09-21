@@ -1,5 +1,5 @@
 """Tracks which songs the owner has removed from each of the GUI's per-song
-lists (Redo / Upload to YouTube / Pending Uploads) -- purely a display
+lists (Redo / Upload to YouTube / Pending Uploads / Flagged for Lyrics Review) -- purely a display
 filter, never touches a song's real files on disk. Scoped per list: a song
 removed from Pending Uploads can still be found via the separate Upload to
 YouTube list (owner request, 2026-09-15 -- "don't destroy the file, just
@@ -37,6 +37,23 @@ def dismiss_song(list_name: str, slug: str, path: Path = _STATE_FILE) -> None:
     data[list_name] = sorted(dismissed)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - disk issues
+        log.warning("Could not save dismissed song state: %s", exc)
+
+
+def undismiss_song(list_name: str, slug: str, path: Path = _STATE_FILE) -> None:
+    """Brings a hidden song back to the list (a Redo of a song removed from Flagged for Lyrics Review does this)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    dismissed = set(data.get(list_name, []))
+    if slug not in dismissed:
+        return
+    dismissed.discard(slug)
+    data[list_name] = sorted(dismissed)
+    try:
         path.write_text(json.dumps(data), encoding="utf-8")
     except OSError as exc:  # pragma: no cover - disk issues
         log.warning("Could not save dismissed song state: %s", exc)

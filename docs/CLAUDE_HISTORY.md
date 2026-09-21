@@ -3400,3 +3400,15 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   flagged for the owner to watch and Mark Verified. Redo (Edit Lyrics -> Redo) re-analyses from the lyrics and can now pass.
 - Also: the gate's message shows one decimal when the score is not whole ("only 89.7% ... 90% are needed"), so a fail can no longer read like
   a pass (Dreams looked like "90%" and failed).
+
+## 2026-09-21 (later): Remove from review (hide only), two-row review buttons, wider default window
+
+- Owner: some songs are too hard to fix and had no way out of Flagged for Lyrics Review. "remove not delete" / "dont delete anything".
+  A gray **✕ Remove** button on every review row -> confirm ("Nothing is deleted...") -> `dismissed_songs.dismiss_song("flagged", slug)`, the
+  same display-filter store the Redo/Upload/Pending lists' ✕ use (`_visible_flagged_songs`). Files untouched. `batch.resolve_batch_items` counts a
+  removed song as already processed (a Batch leaves it alone); a Redo (`_run_worker`) or a Batch regenerate calls the new `undismiss_song`, so a
+  song the owner redoes comes back to review (and stays there only if it fails again).
+- Owner: "the default gui size needs to be what i have it set at now ... upload anyway is cropped out", then "maybe even bigger" / "or 2 rows".
+  Measured his open window with xdotool: 1552x1000 (code was 1400x1000). Default is now 1600x1000. The review row's six buttons made one ~596 px
+  row, so the row is now two: Watch/Edit Lyrics/Redo, then Render Anyway or Mark Verified + Upload Anyway, then Remove. A REAL-window test
+  (hidden CTk root, first in the suite; skips without a display) builds the actual row and asserts no button row is wider than 480 px.

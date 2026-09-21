@@ -30,7 +30,7 @@ from .batch import (
     save_last_batch_folder,
 )
 from .identify import extract_metadata
-from .dismissed_songs import dismiss_song, load_dismissed
+from .dismissed_songs import dismiss_song, load_dismissed, undismiss_song
 from .owner_lyrics import load_editable_lyrics, save_owner_lyrics
 from .pipeline import (
     STAGES,
@@ -365,7 +365,7 @@ class LyricVideoGUI:
         self.root = root
         current_version = read_local_version(str(_VERSION_FILE_PATH)) or "v0.0.0"
         root.title(f"PlayAlongVideoProduction {current_version}")
-        root.geometry("1400x1000")
+        root.geometry("1600x1000")     # owner, 2026-09-21: the size he had resized it to (1552x1000), a little wider
         root.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         self._queue: "queue.Queue" = queue.Queue()
@@ -1159,6 +1159,7 @@ class LyricVideoGUI:
             for index, item in enumerate(items, start=1):
                 self._queue.put(("batch_file_start", (index, len(items), item.title)))
                 try:
+                    undismiss_song("flagged", item.work_dir.name)     # regenerating a removed song brings it back to review
                     if item.already_done:
                         backup_song_outputs(item.work_dir, _slugify(item.title))
                         run_pipeline(
@@ -1805,10 +1806,27 @@ class LyricVideoGUI:
         self.flagged_songs_frame = ctk.CTkScrollableFrame(content, height=SONG_LIST_HEIGHT)
         self.flagged_songs_frame.pack(fill="x", padx=8, pady=(0, 8))
 
+    def _visible_flagged_songs(self) -> list[str]:
+        """The songs Flagged for Lyrics Review lists: every flagged song except the ones the owner removed."""
+        removed = load_dismissed("flagged")
+        return [s for s in list_flagged_songs(PROJECT_ROOT / "work", include_uploaded=True) if s not in removed]
+
+    def _on_remove_flagged(self, slug: str) -> None:
+        """Takes a song out of Flagged for Lyrics Review (owner, 2026-09-21: "remove not delete" -- some songs are too hard to
+        fix). Only hides it: nothing on disk is touched, the Batch leaves it alone, and a Redo brings it back."""
+        if not messagebox.askyesno(
+            "Remove from review",
+            f'Remove "{slug}" from Flagged for Lyrics Review?\n\nNothing is deleted: the song\'s files stay where they are '
+            "and the Batch will skip it. Redo it from the Redo list to bring it back.",
+        ):
+            return
+        dismiss_song("flagged", slug)
+        self._invalidate_flagged_list()
+
     def _refresh_flagged_songs(self) -> None:
         for child in self.flagged_songs_frame.winfo_children():
             child.destroy()
-        slugs = list_flagged_songs(PROJECT_ROOT / "work", include_uploaded=True)
+        slugs = self._visible_flagged_songs()
         for slug in slugs:
             try:
                 self._render_one_flagged_song(slug)
@@ -1842,37 +1860,45 @@ class LyricVideoGUI:
                 row, text="Already on YouTube -- replacing it there is your call.", anchor="w",
                 text_color="gray60", wraplength=400, justify="left",
             ).pack(fill="x", padx=6, pady=(0, 4))
-        buttons = ctk.CTkFrame(row, fg_color="transparent")
-        buttons.pack(fill="x", padx=6, pady=(0, 6))
         has_video = song_video_path(PROJECT_ROOT / "work" / slug) is not None
+        if not has_video:
+            ctk.CTkLabel(row, text="Held before the video -- no video was made.", anchor="w", text_color="gray60").pack(
+                fill="x", padx=6, pady=(0, 4))
+        # Two rows of buttons, never one long row: with six buttons a single row was ~600 px and the last ones (Upload Anyway)
+        # were cropped off in a narrower window (owner, 2026-09-21).
+        buttons = ctk.CTkFrame(row, fg_color="transparent")
+        buttons.pack(fill="x", padx=6, pady=(0, 4))
         if has_video:
             ctk.CTkButton(
                 buttons, text="▶ Watch", width=70, fg_color="gray30", hover_color="gray20",
                 command=lambda: self._on_watch_song(slug),
             ).pack(side="left", padx=(0, 6))
-        else:
-            ctk.CTkLabel(row, text="Held before the video -- no video was made.", anchor="w", text_color="gray60").pack(
-                fill="x", padx=6, pady=(0, 4))
         ctk.CTkButton(
             buttons, text="✎ Edit Lyrics", width=100, command=lambda: self._on_edit_lyrics_flagged(slug),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             buttons, text="Redo", width=70, command=lambda: self._on_redo_flagged(slug),
         ).pack(side="left", padx=(0, 6))
+        decisions = ctk.CTkFrame(row, fg_color="transparent")
+        decisions.pack(fill="x", padx=6, pady=(0, 6))
         if not has_video:  # nothing to watch, verify or upload yet: the owner can still make the video
             ctk.CTkButton(
-                buttons, text="Render Anyway", width=110, fg_color="#2b7a3d", hover_color="#236232",
+                decisions, text="Render Anyway", width=110, fg_color="#2b7a3d", hover_color="#236232",
                 command=lambda: self._on_render_anyway_flagged(slug),
-            ).pack(side="left")
+            ).pack(side="left", padx=(0, 6))
         elif not uploaded:  # an uploaded song would be a duplicate video
             ctk.CTkButton(
-                buttons, text="✔ Mark Verified", width=120, fg_color="#2b7a3d", hover_color="#236232",
+                decisions, text="✔ Mark Verified", width=120, fg_color="#2b7a3d", hover_color="#236232",
                 command=lambda: self._on_mark_verified(slug),
             ).pack(side="left", padx=(0, 6))
             ctk.CTkButton(
-                buttons, text="Upload Anyway", width=110, fg_color="gray30", hover_color="gray20",
+                decisions, text="Upload Anyway", width=110, fg_color="gray30", hover_color="gray20",
                 command=lambda: self._on_upload_anyway_flagged(slug),
-            ).pack(side="left")
+            ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            decisions, text="✕ Remove", width=90, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_remove_flagged(slug),
+        ).pack(side="left")
 
     def _on_edit_lyrics_flagged(self, slug: str) -> None:
         self._open_lyrics_editor(slug)
@@ -2169,6 +2195,7 @@ class LyricVideoGUI:
         old_stdout, old_stderr = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = writer, writer
         try:
+            undismiss_song("flagged", work_dir.name)      # a Redo of a song removed from review brings it back
             out_path = run_pipeline(
                 audio_path,
                 work_dir,

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .identify import extract_metadata
+from .dismissed_songs import load_dismissed
 from .pipeline import held_before_video, slugify
 
 log = logging.getLogger("playalongvideoproduction")
@@ -114,7 +115,8 @@ def resolve_batch_items(files: list[Path], work_root: Path) -> list[BatchItem]:
         has_stems = (demucs_dir / "vocals.wav").exists() and (demucs_dir / "no_vocals.wav").exists()
         items.append(BatchItem(
             audio_path=audio_path, title=title, work_dir=work_dir,
-            already_done=final_video.exists() or held_before_video(work_dir),     # held before its video: also processed
+            # A held-before-video song, or one the owner removed from review, counts as processed: a Batch leaves it alone.
+            already_done=final_video.exists() or held_before_video(work_dir) or work_dir.name in load_dismissed("flagged"),
             resume_stage="fetch_lyrics" if has_stems else "identify",
         ))
     return items
