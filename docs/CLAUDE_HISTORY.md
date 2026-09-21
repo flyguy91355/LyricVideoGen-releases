@@ -3338,3 +3338,19 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   name, so every saved transcript.json (medium) is redone the next time a Redo/Batch/verify_lyrics run needs it; the timing gate only READS
   transcript.json and keeps working on the old ones. Context: failing songs are mostly a lyric-TEXT problem (choruses; text not matching
   the vocals), so a bigger recognizer helps hear/anchor more lines but is not the whole fix -- see the memory note on why songs fail the gate.
+
+## 2026-09-20 (late): large-v3 tried and reverted; medium stays the Whisper default
+
+- Owner asked for large-v3 ("slower build is fine if more accurate; dont need to test"); I switched it and downloaded it (v2.0.45), then a test
+  showed it is worse for this app, so the owner said "lets use medium". Measured on this 4-core CPU: (1) the SAME saved, spot-on videos score
+  98% -> 85% (Cracklin' Rosie) and 97% -> 66% (With or Without You) against a large-v3 transcript, because its word starts run ~0.35-0.5 s
+  EARLIER than medium's (median placed-minus-heard offset -0.09/-0.14 s medium vs +0.26/+0.38 s large-v3) -- the 0.5 s bar was calibrated
+  on medium; (2) NOT fewer lyric words after all: the raw counts (257 vs 477, 167 vs 272) were medium's "ba ba ba" / "oh oh oh" runs; on content
+  words With or Without You is 72 medium vs 75 large-v3 with 70 shared (my first "large hears fewer words" and the earlier "410 vs ~300"
+  -- words heard vs words matched -- were both wrong); (3) 86 s vs 45 s per 120 s of vocals. Like a Prayer's redo scored 60% vs large-v3 but 71% vs
+  medium (83% after the owner fixed its lyric text). The transcript cache records the model name, so a song transcribed by large-v3 is
+  re-transcribed by medium on its next Redo. Reverted with `git revert` of the large-v3 commit (the download-fallback code went with it);
+  the 3 GB weights remain in ~/.cache/huggingface and LYRICVIDEO_WHISPER_MODEL=large-v3 still selects them. Rule going forward: a model
+  change needs the gate re-validated on the owner's judged songs first.
+- Root cause of the failing Like a Prayer was found the same evening: v2.0.45's IPv4 outage (a manual IPv4 address the owner added switched
+  Wi-Fi off DHCP) had made GitHub/Hugging Face unreachable; automatic DHCP fixed it (router is on 10.0.0.x).

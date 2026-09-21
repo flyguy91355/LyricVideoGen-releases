@@ -127,7 +127,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `.lrc`/`.txt` beside `work_dir`'s audio copy, 9-15; lrclib.net edition-consensus
    voting, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes,
    into `lyric_lines.json`/`Song`. Passing = matching what faster-whisper HEARS in the
-   vocal stem (large-v3, VAD off): >=70% in-order word coverage, no run of >3 unmatched lines
+   vocal stem (medium, VAD off): >=70% in-order word coverage, no run of >3 unmatched lines
    or >12 sung words the lyrics lack (backing vocals ignored; unsung lead/tail lines dropped). None passing keeps the least-bad match flagged: no auto-upload, listed in "Flagged for Lyrics Review". Claude then
    JUDGES unmatched stretches (`lyric_arbiter.py`: all recognizer failures -> accepted);
    its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. `python -m

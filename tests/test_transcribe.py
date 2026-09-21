@@ -136,14 +136,12 @@ def test_a_cache_made_for_another_language_is_not_reused(tmp_path, monkeypatch):
     assert text == "hello friend"
 
 
-def test_the_default_model_is_large_v3_and_an_environment_setting_still_goes_back_to_medium(monkeypatch):
-    """Owner, 2026-09-20: a slower build is fine if it hears more of the singing (`small` looped on loud rock
-    vocals on 2026-09-19; `medium` scored 53-78% on correct lyrics). LYRICVIDEO_WHISPER_MODEL=medium reverts."""
+def test_the_default_model_is_medium_because_small_cannot_hear_loud_rock_vocals():
+    """Real finding, 2026-09-19: on six loud rock songs `small` scored 19-62% on lyrics that
+    were correct (it looped on 'wild, wild, wild' / 'oh, oh, oh'); `medium` scored 53-78%. And not `large-v3`
+    (2026-09-20): its word times sit 0.35-0.5 s earlier, so it fails videos that pass the 0.5 s gate against medium."""
     from lyricvideo.transcribe import _model_name
 
-    monkeypatch.delenv("LYRICVIDEO_WHISPER_MODEL", raising=False)
-    assert _model_name() == "large-v3"
-    monkeypatch.setenv("LYRICVIDEO_WHISPER_MODEL", "medium")
     assert _model_name() == "medium"
 
 
@@ -232,41 +230,3 @@ def test_missing_word_timings_read_as_empty(tmp_path):
     assert load_transcript_words(tmp_path) == []
     transcribe_vocals(_vocals(tmp_path), tmp_path, model=_FakeModel([" no word timings here"]))
     assert load_transcript_words(tmp_path) == []
-
-
-# --- the large model is used only once it is on this computer (2026-09-20: its host was unreachable from the owner's network) ---
-
-def test_the_default_large_model_falls_back_to_medium_until_it_has_been_downloaded(monkeypatch, capsys):
-    from lyricvideo import transcribe
-    monkeypatch.delenv("LYRICVIDEO_WHISPER_MODEL", raising=False)
-    monkeypatch.setattr(transcribe, "_is_downloaded", lambda name: name != "large-v3")
-
-    assert transcribe._effective_model_name() == "medium"
-    assert "large-v3" in capsys.readouterr().err                  # says why, and how to get it
-
-
-def test_the_default_large_model_is_used_as_soon_as_it_is_on_disk(monkeypatch):
-    from lyricvideo import transcribe
-    monkeypatch.delenv("LYRICVIDEO_WHISPER_MODEL", raising=False)
-    monkeypatch.setattr(transcribe, "_is_downloaded", lambda name: True)
-
-    assert transcribe._effective_model_name() == "large-v3"
-
-
-def test_a_model_the_owner_chose_explicitly_is_never_swapped_for_medium(monkeypatch):
-    from lyricvideo import transcribe
-    monkeypatch.setenv("LYRICVIDEO_WHISPER_MODEL", "small")
-    monkeypatch.setattr(transcribe, "_is_downloaded", lambda name: False)
-
-    assert transcribe._effective_model_name() == "small"
-
-
-def test_a_transcript_is_labelled_with_the_model_that_really_made_it(tmp_path, monkeypatch):
-    import json
-    from lyricvideo import transcribe
-    monkeypatch.delenv("LYRICVIDEO_WHISPER_MODEL", raising=False)
-    monkeypatch.setattr(transcribe, "_is_downloaded", lambda name: False)      # large-v3 missing: medium does the work
-
-    transcribe_vocals(_vocals(tmp_path), tmp_path, model=_recording_model({}))
-
-    assert json.loads((tmp_path / "transcript.json").read_text(encoding="utf-8"))["model"] == "medium"
