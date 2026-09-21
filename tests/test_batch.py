@@ -286,3 +286,18 @@ def test_release_memory_swallows_a_missing_libc(monkeypatch):
     monkeypatch.setattr("lyricvideo.batch.ctypes.CDLL", _raise)
 
     release_memory()  # must not raise
+
+
+def test_a_song_held_before_its_video_counts_as_already_processed_so_a_batch_does_not_redo_it(tmp_path, monkeypatch):
+    from lyricvideo.pipeline import HELD_MARKER
+
+    audio = tmp_path / "some-song.mp3"
+    audio.write_bytes(b"")
+    work_root = tmp_path / "work"
+    (work_root / "some-song").mkdir(parents=True)
+    (work_root / "some-song" / HELD_MARKER).write_text("{}", encoding="utf-8")      # no video: held before it was made
+    monkeypatch.setattr("lyricvideo.batch.extract_metadata", lambda path: type("Info", (), {"title": "Some Song"})())
+
+    items = resolve_batch_items([audio], work_root)
+
+    assert items[0].already_done is True

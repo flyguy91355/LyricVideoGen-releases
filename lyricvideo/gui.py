@@ -34,6 +34,7 @@ from .dismissed_songs import dismiss_song, load_dismissed
 from .owner_lyrics import load_editable_lyrics, save_owner_lyrics
 from .pipeline import (
     STAGES,
+    HeldBeforeVideo,
     run_pipeline,
     slugify as _slugify,
     list_flagged_songs,
@@ -1174,6 +1175,12 @@ class LyricVideoGUI:
                     _maybe_upload_to_youtube(item.work_dir, self.settings)
                     self._queue.put(("batch_item_done", None))
                     results["succeeded"].append(item.title)
+                except HeldBeforeVideo as e:
+                    # Not a failure: the sync check said no, so no chords/images/video were made (a big saving) and it waits
+                    # in Flagged for Lyrics Review. The batch just moves on to the next song.
+                    results.setdefault("held", []).append(item.title)
+                    print(f"Batch item {item.title!r} held for review before its video: {e.concern}")
+                    self._queue.put(("batch_item_done", None))
                 except Exception as e:
                     results["failed"].append((item.title, f"{type(e).__name__}: {e}"))
                     print(f"Batch item {item.title!r} failed: {type(e).__name__}: {e}")
@@ -1236,6 +1243,8 @@ class LyricVideoGUI:
             f"Succeeded: {len(results['succeeded'])}\n"
             f"Failed: {len(results['failed'])}"
         )
+        if results.get("held"):
+            summary += f"\nHeld for review (no video made): {len(results['held'])}"
         if results["failed"]:
             failed_names = "\n".join(f"  - {title}: {err}" for title, err in results["failed"])
             messagebox.showwarning("Batch finished with failures", f"{summary}\n\n{failed_names}")
@@ -1835,17 +1844,27 @@ class LyricVideoGUI:
             ).pack(fill="x", padx=6, pady=(0, 4))
         buttons = ctk.CTkFrame(row, fg_color="transparent")
         buttons.pack(fill="x", padx=6, pady=(0, 6))
-        ctk.CTkButton(
-            buttons, text="▶ Watch", width=70, fg_color="gray30", hover_color="gray20",
-            command=lambda: self._on_watch_song(slug),
-        ).pack(side="left", padx=(0, 6))
+        has_video = song_video_path(PROJECT_ROOT / "work" / slug) is not None
+        if has_video:
+            ctk.CTkButton(
+                buttons, text="▶ Watch", width=70, fg_color="gray30", hover_color="gray20",
+                command=lambda: self._on_watch_song(slug),
+            ).pack(side="left", padx=(0, 6))
+        else:
+            ctk.CTkLabel(row, text="Held before the video -- no video was made.", anchor="w", text_color="gray60").pack(
+                fill="x", padx=6, pady=(0, 4))
         ctk.CTkButton(
             buttons, text="✎ Edit Lyrics", width=100, command=lambda: self._on_edit_lyrics_flagged(slug),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             buttons, text="Redo", width=70, command=lambda: self._on_redo_flagged(slug),
         ).pack(side="left", padx=(0, 6))
-        if not uploaded:  # an uploaded song would be a duplicate video
+        if not has_video:  # nothing to watch, verify or upload yet: the owner can still make the video
+            ctk.CTkButton(
+                buttons, text="Render Anyway", width=110, fg_color="#2b7a3d", hover_color="#236232",
+                command=lambda: self._on_render_anyway_flagged(slug),
+            ).pack(side="left")
+        elif not uploaded:  # an uploaded song would be a duplicate video
             ctk.CTkButton(
                 buttons, text="✔ Mark Verified", width=120, fg_color="#2b7a3d", hover_color="#236232",
                 command=lambda: self._on_mark_verified(slug),
@@ -1930,6 +1949,53 @@ class LyricVideoGUI:
         # check, so a clean fetch this time clears the concern on its own.
         self.redo_song_var.set(slug)
         self._on_redo()
+
+    def _on_held_before_video(self, concern: str) -> None:
+        """A run stopped before its video because the sync check failed (HeldBeforeVideo): tell the owner plainly, free the
+        buttons, and refresh the lists so the song shows in Flagged for Lyrics Review."""
+        self.status_var.set("Held for review")
+        self._running = False
+        self.generate_button.configure(state="normal")
+        self.redo_button.configure(state="normal")
+        self.batch_button.configure(state="normal")
+        self._refresh_retry_upload_options()
+        messagebox.showinfo(
+            "Held for review",
+            f"No video was made.\n\n{concern}\n\nIt is in Flagged for Lyrics Review: edit the lyrics and Redo it, or use "
+            "Render Anyway to make the video and watch it.",
+        )
+
+    def _on_render_anyway_flagged(self, slug: str) -> None:
+        """Makes the video for a song that was held before it (owner, 2026-09-21), from the timing already worked out
+        (resumes at the chords stage). It stays flagged; the owner can then watch it and Mark Verified."""
+        if self._running:
+            return
+        song_dir = PROJECT_ROOT / "work" / slug
+        try:
+            audio_path, title = load_redo_inputs(song_dir)
+        except Exception as e:
+            messagebox.showerror("Could not load song", f"{type(e).__name__}: {e}")
+            return
+        if not audio_path.is_file():
+            messagebox.showerror("Original audio file not found", f'"{title}" was generated from:\n{audio_path}\n\nThat file no longer exists.')
+            return
+        if not messagebox.askyesno(
+            "Render anyway",
+            f'Make the video for "{title}" anyway?\n\nIt did not reach the timing pass mark, so it was held before the video. '
+            "This makes the video from the timing already worked out (about 15-25 minutes; new AI images are generated only "
+            "if none exist yet). You can then watch it and use Mark Verified if it is good.",
+        ):
+            return
+        self._running = True
+        self.generate_button.configure(state="disabled")
+        self.redo_button.configure(state="disabled")
+        self.batch_button.configure(state="disabled")
+        self.status_var.set("Starting...")
+        self.progress_bar.set(0.0)
+        self._clear_log()
+        self._last_work_dir = song_dir
+        threading.Thread(target=self._run_worker, args=(audio_path, song_dir, title, "detect_chords"), daemon=True).start()
+        self.root.after(100, self._poll_queue)
 
     def _song_label(self, list_name: str, song: str) -> str:
         """A list row's text: the song's name, plus "verified by you (NN% automatic)" in the Upload list when it is."""
@@ -2113,6 +2179,8 @@ class LyricVideoGUI:
             )
             _maybe_upload_to_youtube(work_dir, self.settings)
             self._queue.put(("done", str(out_path)))
+        except HeldBeforeVideo as e:
+            self._queue.put(("held", e.concern))
         except Exception as e:
             self._queue.put(("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
         finally:
@@ -2171,6 +2239,9 @@ class LyricVideoGUI:
                 self.batch_button.configure(state="normal")
                 self._refresh_retry_upload_options()
                 messagebox.showinfo("Video ready", f"Wrote {payload}")
+                return
+            elif kind == "held":
+                self._on_held_before_video(payload)
                 return
             elif kind == "error":
                 self.status_var.set("Failed")

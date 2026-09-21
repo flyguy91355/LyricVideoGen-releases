@@ -1754,3 +1754,116 @@ def test_changing_some_other_setting_leaves_the_song_lists_alone():
     LyricVideoGUI._on_settings_changed(_settings_change_stub(90, invalidated))
 
     assert invalidated == []
+
+
+# --- held before the video: how the GUI callers treat it (2026-09-21) ---------------------------------------------------
+
+def _held_error(concern="SET ASIDE FOR REVIEW -- the lyric timing is not precise enough: only 60% ..."):
+    from lyricvideo.pipeline import HeldBeforeVideo
+    return HeldBeforeVideo(concern)
+
+
+def test_a_single_run_held_before_its_video_is_reported_as_held_not_as_an_error_or_a_finished_video(monkeypatch):
+    def held_pipeline(*a, **k):
+        raise _held_error()
+
+    monkeypatch.setattr("lyricvideo.gui.run_pipeline", held_pipeline)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", _must_not_run)
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
+
+    LyricVideoGUI._run_worker(stub, Path("a.mp3"), Path("work/a"), "A", "identify")
+
+    kinds = []
+    while not stub._queue.empty():
+        kinds.append(stub._queue.get_nowait())
+    assert [k for k, _ in kinds if k in ("held", "done", "error")] == ["held"]
+    assert "not precise enough" in dict(kinds)["held"]
+
+
+def test_the_held_message_says_no_video_was_made_shows_the_reason_and_frees_the_buttons(monkeypatch):
+    shown, states = [], []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda title, message, **kw: shown.append((title, message)))
+    button = SimpleNamespace(configure=lambda **kw: states.append(kw))
+    stub = _gui_stub(
+        status_var=SimpleNamespace(set=lambda v: None), _running=True, generate_button=button, redo_button=button,
+        batch_button=button, _refresh_retry_upload_options=lambda: None,
+    )
+
+    LyricVideoGUI._on_held_before_video(stub, "only 60% of the lines start within half a second")
+
+    assert stub._running is False and states == [{"state": "normal"}] * 3
+    assert shown[0][0] == "Held for review" and "No video was made" in shown[0][1] and "60%" in shown[0][1]
+
+
+def test_a_batch_carries_on_after_a_song_is_held_before_its_video_and_counts_it_separately(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    ran = []
+
+    def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
+        ran.append(title)
+        if title == "Held Song":
+            raise _held_error()
+
+    monkeypatch.setattr("lyricvideo.gui.run_pipeline", fake_run_pipeline)
+    items = [
+        BatchItem(audio_path=Path("a.mp3"), title="Held Song", work_dir=Path("work/held"), already_done=False),
+        BatchItem(audio_path=Path("b.mp3"), title="Good Song", work_dir=Path("work/good"), already_done=False),
+    ]
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
+
+    LyricVideoGUI._run_batch_worker(stub, items)
+
+    assert ran == ["Held Song", "Good Song"]
+    messages = []
+    while not stub._queue.empty():
+        messages.append(stub._queue.get_nowait())
+    results = dict(messages)["batch_done"]
+    assert results["held"] == ["Held Song"] and results["succeeded"] == ["Good Song"] and results["failed"] == []
+    assert [k for k, _ in messages].count("batch_item_done") == 2           # the review list refreshes for the held one too
+
+
+def test_the_batch_summary_counts_the_songs_held_before_their_video(monkeypatch):
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda title, message, **kw: shown.append(message))
+    button = SimpleNamespace(configure=lambda **kw: None)
+    stub = _gui_stub(
+        _batch_items=[1], _batch_index=1, status_var=SimpleNamespace(set=lambda v: None),
+        progress_bar=SimpleNamespace(set=lambda v: None), generate_button=button, redo_button=button, batch_button=button,
+        _refresh_retry_upload_options=lambda: None,
+    )
+
+    LyricVideoGUI._on_batch_done(stub, {"succeeded": ["a"], "failed": [], "held": ["b", "c"]})
+
+    assert "Held for review (no video made): 2" in shown[0]
+
+
+def test_render_anyway_asks_first_then_resumes_at_the_chords_stage_with_the_saved_timing(tmp_path, monkeypatch):
+    audio = tmp_path / "song.mp3"
+    audio.write_bytes(b"x")
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("lyricvideo.gui.load_redo_inputs", lambda song_dir: (audio, "Hard Song"))
+    asked, started = [], []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, message, **kw: asked.append(message) or True)
+
+    class _Thread:
+        def __init__(self, target, args, daemon):
+            started.append((target, args))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _Thread)
+    button = SimpleNamespace(configure=lambda **kw: None)
+    worker = object()
+    stub = _gui_stub(
+        _running=False, generate_button=button, redo_button=button, batch_button=button,
+        status_var=SimpleNamespace(set=lambda v: None), progress_bar=SimpleNamespace(set=lambda v: None),
+        _clear_log=lambda: None, _run_worker=worker, _poll_queue=lambda: None,
+    )
+
+    LyricVideoGUI._on_render_anyway_flagged(stub, "hard-song")
+
+    assert "Hard Song" in asked[0]
+    assert started == [(worker, (audio, tmp_path / "work" / "hard-song", "Hard Song", "detect_chords"))]
+    assert stub._last_work_dir == tmp_path / "work" / "hard-song"

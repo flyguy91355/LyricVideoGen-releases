@@ -593,3 +593,13 @@ def test_the_message_says_an_approved_song_is_now_in_pending_and_does_not_promis
 def test_a_plain_deferred_song_is_only_promised_an_automatic_upload_when_auto_upload_is_on(monkeypatch):
     assert "automatically" not in _done_message(monkeypatch, {"deferred": ["a"]}, auto_upload=False)
     assert "automatically" in _done_message(monkeypatch, {"deferred": ["a"]}, auto_upload=True)
+
+
+def test_a_score_that_rounds_up_to_the_bar_is_shown_with_a_decimal_so_a_fail_never_reads_like_a_pass():
+    report = check_sync(WORDS, placed(), HEARD, needed=0.9)
+    from lyricvideo.timing_gate import SyncReport
+    almost = SyncReport(26 / 29, 29, 0, 29, (3, 9, 20), 0.9)            # 89.66%: it fails, though it rounds to 90%
+
+    assert report.passes and not almost.passes
+    assert "89.7%" in almost.concern and "(90% are needed)" in almost.concern
+    assert "only 80% of the lines" in check_sync(WORDS, placed({1: 1.0, 6: -1.0}), HEARD).concern     # whole numbers stay plain

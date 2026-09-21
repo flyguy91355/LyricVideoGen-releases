@@ -57,6 +57,11 @@ def pass_share() -> float:
         return PASS_SHARE
 
 
+def _percent(share: float) -> str:
+    """"80%", but "89.7%" -- a score that rounds up to the bar must never read like a pass."""
+    return f"{share * 100:.1f}".rstrip("0").rstrip(".") + "%"
+
+
 def is_gate_concern(text: str) -> bool:
     """True for a concern THIS check wrote and alone (never one from the lyric-text checks, alone or combined with one):
     only those may be released or rewritten when the bar moves."""
@@ -98,8 +103,8 @@ class SyncReport:
         shown = ", ".join(str(n) for n in self.out_of_sync_lines[:_SHOWN_LINES])
         more = ", ..." if len(self.out_of_sync_lines) > _SHOWN_LINES else ""
         return (
-            f"SET ASIDE FOR REVIEW -- the lyric timing is not precise enough: only {self.share:.0%} of the lines start within "
-            f"half a second of where they are sung ({self.needed:.0%} are needed); lines {shown}{more} are off. {tail}"
+            f"SET ASIDE FOR REVIEW -- the lyric timing is not precise enough: only {_percent(self.share)} of the lines start "
+            f"within half a second of where they are sung ({_percent(self.needed)} are needed); lines {shown}{more} are off. {tail}"
         )
 
 

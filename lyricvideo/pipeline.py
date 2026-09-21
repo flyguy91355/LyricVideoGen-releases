@@ -209,7 +209,7 @@ def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[
         return []
     flagged = []
     for entry in sorted(work_root.iterdir(), key=lambda e: e.name):
-        if not entry.is_dir() or song_video_path(entry) is None:
+        if not entry.is_dir() or (song_video_path(entry) is None and not held_before_video(entry)):
             continue
         if not include_uploaded and (entry / STATE_FILENAME).exists():
             continue
@@ -221,6 +221,9 @@ def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[
         except Exception:
             continue
         concern = song.lyrics_accuracy_concern
+        if held_before_video(entry):
+            flagged.append(entry.name)              # no video yet: Edit Lyrics / Redo / Render Anyway (whatever the mark is now)
+            continue
         if verification(entry):
             continue                                # approved by the owner: not up for review any more
         if (concern and not is_gate_concern(concern)) or hold_if_timing_fails(entry):
@@ -415,6 +418,52 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
         f"alignment ({decision.report.agreement:.0%} agree)."
     )
     return settled({"whole-song": whole, "anchored": anchored}, decision.method, decision.concern)
+
+
+HELD_MARKER = "held_before_video.json"      # written when a song is stopped before its video; removed when the video is made
+
+
+class HeldBeforeVideo(RuntimeError):
+    """The sync check failed, so the song was held for review BEFORE chords, images and video (owner, 2026-09-21: a song that
+    does not reach the pass mark is not worth an image bill and a 20-minute render). Not an error and not a finished video:
+    callers report it separately. `Render Anyway` (start_stage="detect_chords") makes the video from the saved timing."""
+
+    def __init__(self, concern: str):
+        super().__init__(concern)
+        self.concern = concern
+
+
+def held_before_video(work_dir: Path) -> bool:
+    return (Path(work_dir) / HELD_MARKER).exists()
+
+
+def _record_finished(work_dir: Path, song: Song) -> None:
+    """Completes the redo record started by backup_song_outputs (a no-op for a brand-new song) and updates the running list
+    of cleared / removed songs (cleared_log.py)."""
+    try:
+        note_redo_finished(work_dir, concern=song.lyrics_accuracy_concern)
+        try:
+            if song.lyrics_accuracy_concern:
+                record_removed(work_dir.name, song.lyrics_accuracy_concern[:300])
+            else:
+                record_cleared(work_dir.name, "passed the lyric and timing checks")
+        except Exception as e:
+            print(f"WARNING: could not update the cleared-songs record ({type(e).__name__}: {e})", file=sys.stderr)
+    except Exception as e:
+        print(f"WARNING: could not record this redo: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def _hold_before_video(work_dir: Path, final_path: Path, song: Song, concern: str) -> None:
+    """Stops the run here. A video left from before a Redo is moved aside (a redo backup of it already exists) so the old
+    video is never mistaken for the new timing's."""
+    if final_path.exists():
+        final_path.replace(final_path.with_name(final_path.stem + ".previous.mp4"))
+    (work_dir / HELD_MARKER).write_text(
+        json.dumps({"reason": concern, "at": datetime.now().astimezone().isoformat(timespec="seconds")}, indent=2),
+        encoding="utf-8",
+    )
+    _record_finished(work_dir, song)
+    raise HeldBeforeVideo(concern)
 
 
 def run_pipeline(
@@ -652,6 +701,8 @@ def run_pipeline(
             lyrics_accuracy_concern=lyrics_concern,
         )
         save_song(song, timed_path)
+        if timing_concern and is_gate_concern(timing_concern):
+            _hold_before_video(work_dir, final_path, song, timing_concern)          # raises HeldBeforeVideo
     else:
         song = load_song(timed_path)
 
@@ -724,18 +775,9 @@ def run_pipeline(
             chord_legend_labels=ordered_unique_chords(song.chord_track),
             **assemble_kwargs,
         )
+        (work_dir / HELD_MARKER).unlink(missing_ok=True)        # the video exists now (Render Anyway, or a Redo that passes)
 
-    try:  # completes the redo record started by backup_song_outputs (a no-op for a brand-new song)
-        note_redo_finished(work_dir, concern=song.lyrics_accuracy_concern)
-        try:  # the running list of cleared / removed songs (cleared_log.py)
-            if song.lyrics_accuracy_concern:
-                record_removed(work_dir.name, song.lyrics_accuracy_concern[:300])
-            else:
-                record_cleared(work_dir.name, "passed the lyric and timing checks")
-        except Exception as e:
-            print(f"WARNING: could not update the cleared-songs record ({type(e).__name__}: {e})", file=sys.stderr)
-    except Exception as e:
-        print(f"WARNING: could not record this redo: {type(e).__name__}: {e}", file=sys.stderr)
+    _record_finished(work_dir, song)
     report("done")
     return final_path
 
@@ -755,7 +797,11 @@ def main() -> None:
     parser.add_argument("--font", default=None)
     args = parser.parse_args()
 
-    out = run_pipeline(args.audio, args.work_dir, args.title, args.stage, args.font)
+    try:
+        out = run_pipeline(args.audio, args.work_dir, args.title, args.stage, args.font)
+    except HeldBeforeVideo as held:
+        print(f"Held for review -- no video was made: {held.concern}")
+        return
     print(f"Wrote {out}")
 
 

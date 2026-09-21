@@ -3379,3 +3379,24 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   upload"). Same session: Like a Prayer's stale youtube_state.json (he deleted the video by hand; the Flagged row's "already on YouTube"
   test is just that file existing, the app never re-checks YouTube) was renamed `youtube_state.deleted-on-youtube.json` so the row showed
   Mark Verified / Upload Anyway. Billie Jean and You Can't Always Get What You Want (also deleted by hand) still have stale records -- asked.
+
+## 2026-09-21: a song that fails the sync check is HELD BEFORE its video is made
+
+- Owner: a 60% song still went through chords, AI images (Replicate cost) and a 15-25 minute render, then landed in review anyway --
+  "from now on that song will be held for review before it makes the video ... so i can get good videos made hopefully 100% of the time."
+  Rule confirmed: >= the pass mark (Settings.timing_pass_percent, default 90) continues; below it is held; one setpoint, no second threshold.
+- `pipeline.HeldBeforeVideo` (a RuntimeError with `.concern`) is raised inside the align stage right after lyrics_timed.json is saved when
+  the gate's own concern is set (`is_gate_concern(timing_concern)`: "not precise enough" or "could not be checked"; a lyric-TEXT concern still
+  makes its video as before). Before raising: a video left from a previous run is moved to `<slug>.previous.mp4` (a redo backup of it exists),
+  `held_before_video.json` (`HELD_MARKER`) is written, and the redo/cleared records are completed (`_record_finished`, extracted from the end of
+  run_pipeline). No chords, images or render happen. The marker is removed when the render stage finishes.
+- Callers: `_run_worker` puts ("held", concern) -> `_on_held_before_video` (plain dialog: "No video was made", the reason, where to find it);
+  `_run_batch_worker` records `results["held"]` (only when non-empty) and carries on -- the biggest saving is in Batch, no more image bills
+  and renders for failing songs; the batch summary shows "Held for review (no video made): N"; the CLI prints it and exits normally.
+  `batch.resolve_batch_items`: a held song counts as already processed (skipped unless the owner chooses to regenerate).
+- `list_flagged_songs` includes songs with the marker even with no mp4. Their Flagged row has no Watch / Mark Verified / Upload Anyway (nothing
+  to watch or upload) and a green **Render Anyway** button: `_on_render_anyway_flagged` confirms, then runs `run_pipeline(start_stage=
+  "detect_chords")` with the saved timing (the align/hold block is skipped), so the video is made, the marker cleared and the song stays
+  flagged for the owner to watch and Mark Verified. Redo (Edit Lyrics -> Redo) re-analyses from the lyrics and can now pass.
+- Also: the gate's message shows one decimal when the score is not whole ("only 89.7% ... 90% are needed"), so a fail can no longer read like
+  a pass (Dreams looked like "90%" and failed).

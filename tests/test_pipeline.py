@@ -1470,3 +1470,100 @@ def test_a_finished_run_with_a_concern_is_recorded_as_removed_with_the_reason(tm
 
     assert cleared_songs() == []
     assert history()[-1]["status"] == "removed" and "60%" in history()[-1]["note"]
+
+
+# --- a song that fails the sync check is HELD BEFORE any video is made (owner, 2026-09-21) ---------------------------------
+
+def _failing_gate(monkeypatch, share=0.6):
+    from lyricvideo.timing_gate import Settled, SyncReport
+    report = SyncReport(share, 20, 0, 20, (1, 2, 3), 0.9)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.settle_alignment",
+        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None: Settled(
+            preferred, candidates[preferred], report, report.concern,
+        ),
+    )
+
+
+def _must_not_run(*args, **kwargs):
+    raise AssertionError("the video stages must not run for a song held before the video")
+
+
+def test_a_song_that_fails_the_sync_check_stops_before_chords_images_and_video_and_is_held(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.cleared_log import history
+    from lyricvideo.pipeline import HELD_MARKER, HeldBeforeVideo, song_video_path
+
+    _patch_common(monkeypatch, tmp_path)
+    _failing_gate(monkeypatch)
+    for name in ("detect_chords", "summarize_song_gist", "get_or_generate_image", "assemble_video"):
+        monkeypatch.setattr(f"lyricvideo.pipeline.{name}", _must_not_run)
+    work_dir = tmp_path / "work"
+
+    with pytest.raises(HeldBeforeVideo) as held:
+        run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert "60%" in str(held.value) and "90% are needed" in str(held.value)
+    assert (work_dir / HELD_MARKER).exists() and song_video_path(work_dir) is None
+    assert "not precise enough" in load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+    assert history()[-1]["status"] == "removed"
+
+
+def test_a_video_left_from_before_a_redo_is_moved_aside_when_the_new_timing_is_held(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.pipeline import HeldBeforeVideo
+
+    _patch_common(monkeypatch, tmp_path)
+    _failing_gate(monkeypatch)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "test-song.mp4").write_bytes(b"the old video")
+
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert not (work_dir / "test-song.mp4").exists()                       # it is not the current video any more
+    assert (work_dir / "test-song.previous.mp4").read_bytes() == b"the old video"
+
+
+def test_a_song_that_passes_the_sync_check_is_rendered_and_leaves_no_hold(tmp_path, monkeypatch):
+    from lyricvideo.pipeline import HELD_MARKER
+
+    _patch_common(monkeypatch, tmp_path)                                   # its stand-in gate accepts the alignment
+    work_dir = tmp_path / "work"
+
+    out = run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert out.name == "test-song.mp4" and not (work_dir / HELD_MARKER).exists()
+
+
+def test_render_anyway_makes_the_video_from_the_saved_timing_and_clears_the_hold(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.pipeline import HELD_MARKER, HeldBeforeVideo
+
+    _patch_common(monkeypatch, tmp_path)
+    _failing_gate(monkeypatch)
+    work_dir = tmp_path / "work"
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), work_dir)
+    rendered = []
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", lambda *a, **k: rendered.append(True))
+
+    out = run_pipeline(Path("audio.mp3"), work_dir, start_stage="detect_chords")      # what the Render Anyway button runs
+
+    assert rendered == [True] and out.name == "test-song.mp4"
+    assert not (work_dir / HELD_MARKER).exists()
+    assert "not precise enough" in load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern   # still flagged
+
+
+def test_a_song_held_before_its_video_is_listed_for_review_but_never_for_upload(tmp_path):
+    from lyricvideo.pipeline import HELD_MARKER
+
+    work_root = tmp_path / "work"
+    for name, held in (("held-song", True), ("half-built-song", False)):
+        (work_root / name).mkdir(parents=True)
+        save_song(Song(title="T", audio_path="a.mp3", lyrics_accuracy_concern="x" if held else ""), work_root / name / "lyrics_timed.json")
+    (work_root / "held-song" / HELD_MARKER).write_text("{}", encoding="utf-8")
+
+    assert list_flagged_songs(work_root) == ["held-song"]
+    assert list_pending_uploads(work_root) == []

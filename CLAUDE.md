@@ -33,10 +33,10 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   a required input — then click Generate; work dir (no Browse) falls back to
   the filename if identification isn't done (HISTORY). A "New Song"
   button beside Generate resets the form/log/progress bar (no relaunch).
-  The window's own close (X) button (bound via `root.protocol("WM_DELETE_WINDOW",
-  self._on_close_window)` in `__init__` -- the only way to quit) confirms first
+  The window's own close (X) button (`root.protocol("WM_DELETE_WINDOW",
+  self._on_close_window)` in `__init__`; the only way to quit) confirms first
   if a Generate/Redo/Batch is actively running -- closing mid-run kills the
-  pipeline (and any in-flight upload) partway through with no way to resume;
+  pipeline (and any in-flight upload) with no way to resume;
   closes immediately, no prompt, whenever nothing is running. Tests must invoke
   the registered `WM_DELETE_WINDOW` Tcl callback, not the Python method (the
   binding was once shipped unwired; HISTORY 9-10). A
@@ -139,7 +139,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
    choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
    against lrclib's line timestamps (`combine_anchors`) bound each line to its own
-   window (`align_words_anchored`); `precision.py`/`sync.py` pre-check; `timing_gate.py` decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's singing) -- best of whole-song/anchored/blended else set aside; pending/flagged lists hold failing older songs, the Upload list (`list_uploadable_songs`) shows only passing; `owner_verified.py` (Mark Verified, or an Upload Anyway the daily limit skips) overrides every check until a Redo; `python -m lyricvideo.timing_gate` reports. MMS_FA knows
+   window (`align_words_anchored`); `precision.py`/`sync.py` pre-check; `timing_gate.py` decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's singing) -- best of whole-song/anchored/blended else set aside; pending/flagged lists hold failing older songs, a failing song is HELD before chords/images/render (Flagged: Render Anyway); the Upload list (`list_uploadable_songs`) shows only passing; `owner_verified.py` (Mark Verified, or an Upload Anyway the daily limit skips) overrides every check until a Redo; `python -m lyricvideo.timing_gate` reports. MMS_FA knows
    only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
    "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
    token (issue #3). Display text never changes.
@@ -280,7 +280,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    the colored block itself still draws, so a chord change stays visible,
    but the text no longer overflows into the neighboring segment's own
    label (HISTORY 9-10). No song title or artist text is drawn into the frame
-   anywhere (owner decision, 2026-09-09) — only the chord bar, Key/BPM badge, and
+   anywhere (owner, 9-09) — only the chord bar, Key/BPM badge, and
    chord legend were added to the frame.
 
 ## Redo an Existing Song
@@ -362,7 +362,7 @@ against a stale release reverting newer commits (HISTORY, 9-13).
 `Settings.render_kwargs()` centralizes resolution/color unpacking for
 `assemble_video()` (an unknown resolution label falls back to 1080p with a
 warning, never a KeyError); `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`
-(owner request 2026-09-09) renders a synthetic sample frame (fake lyric line + fake
+(owner, 9-09) renders a synthetic sample frame (fake lyric line + fake
 chord track, no real song/network/AI image) at the chosen output resolution using
 that same mapping, then downscales it for on-screen display. `gui.py`'s Settings
 column is now preview pane (fixed, on top) + the scrollable `SettingsPanel` (which
