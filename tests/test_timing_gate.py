@@ -8,6 +8,7 @@ from lyricvideo.anchors import HeardWord
 from lyricvideo.models import LyricLine, Song, Word, load_song, save_song
 import pytest
 
+from lyricvideo.owner_verified import mark_verified, upload_label, verification
 from lyricvideo.pipeline import list_flagged_songs, list_pending_uploads, list_uploadable_songs
 from lyricvideo.timing_gate import (
     check_saved_song, check_sync, hidden_note, hold_if_timing_fails, pick_by_sync, scan_songs, settle_alignment,
@@ -395,3 +396,139 @@ def test_the_note_under_the_upload_list_says_how_many_videos_are_hidden_and_belo
     assert hidden_note(6, 90) == "6 videos hidden: below 90%"
     assert hidden_note(1, 95) == "1 video hidden: below 95%"
     assert hidden_note(0, 90) == ""
+
+
+# --- the owner's own verdict (2026-09-20: "if i decide its a good video its a good video") -------------------------------
+
+def test_a_song_the_owner_verified_remembers_the_automatic_score_and_an_unverified_one_reports_nothing(tmp_path):
+    _save(tmp_path / "a", placed({1: 1.0, 6: -1.0}))
+    _save(tmp_path / "b", placed())
+
+    mark_verified(tmp_path / "a", automatic_share=0.83)
+
+    assert verification(tmp_path / "a")["automatic_share"] == 0.83
+    assert verification(tmp_path / "b") is None
+
+
+def test_a_redo_that_changes_the_timing_voids_the_verification(tmp_path):
+    _save(tmp_path / "a", placed({1: 1.0, 6: -1.0}))
+    mark_verified(tmp_path / "a", automatic_share=0.8)
+
+    _rewrite = tmp_path / "a" / "lyrics_timed.json"
+    song = load_song(_rewrite)
+    song.lines[0].words[0].start_time += 0.7                       # what a redo does: a new timing file
+    save_song(song, _rewrite)
+
+    assert verification(tmp_path / "a") is None
+
+
+def test_a_verified_song_that_fails_the_bar_is_offered_for_upload_and_is_not_held_or_flagged(tmp_path):
+    _rendered(tmp_path, "checked", placed({1: 1.0, 6: -1.0}))                  # 80% in sync: fails the 90% bar
+    before = (tmp_path / "checked" / "lyrics_timed.json").read_text(encoding="utf-8")
+    mark_verified(tmp_path / "checked", automatic_share=0.8)
+
+    assert list_uploadable_songs(tmp_path) == ["checked"]
+    assert list_pending_uploads(tmp_path) == ["checked"]
+    assert list_flagged_songs(tmp_path) == []
+    assert (tmp_path / "checked" / "lyrics_timed.json").read_text(encoding="utf-8") == before      # nothing written into it
+
+
+def test_the_owners_verdict_also_overrides_a_lyric_text_concern(tmp_path):
+    _rendered(tmp_path, "wording", placed())
+    path = tmp_path / "wording" / "lyrics_timed.json"
+    save_song(replace(load_song(path), lyrics_accuracy_concern="Only 60% of these lyrics match what is sung."), path)
+    assert list_uploadable_songs(tmp_path) == []
+
+    mark_verified(tmp_path / "wording", automatic_share=1.0)
+
+    assert list_uploadable_songs(tmp_path) == ["wording"] and list_flagged_songs(tmp_path) == []
+
+
+def test_a_verified_song_goes_back_to_needing_review_once_it_is_redone(tmp_path):
+    _rendered(tmp_path, "redone", placed({1: 1.0, 6: -1.0}))
+    mark_verified(tmp_path / "redone", automatic_share=0.8)
+    path = tmp_path / "redone" / "lyrics_timed.json"
+    song = load_song(path)
+    song.lines[2].words[0].start_time += 1.5                        # the redo's new timing (still failing)
+    save_song(song, path)
+
+    assert list_uploadable_songs(tmp_path) == [] and list_flagged_songs(tmp_path) == ["redone"]
+
+
+def test_marking_a_song_verified_puts_it_on_the_cleared_list_with_the_reason(tmp_path):
+    from lyricvideo import cleared_log
+    _save(tmp_path / "a", placed({1: 1.0, 6: -1.0}))
+
+    mark_verified(tmp_path / "a", automatic_share=0.8)
+
+    assert [e["slug"] for e in cleared_log.cleared_songs()] == ["a"]
+    assert "verified" in cleared_log.history()[-1]["note"] and "80%" in cleared_log.history()[-1]["note"]
+
+
+def test_the_upload_list_row_says_a_song_was_verified_by_the_owner_and_what_the_automatic_score_was(tmp_path):
+    _save(tmp_path / "plain", placed())
+    _save(tmp_path / "checked", placed({1: 1.0, 6: -1.0}))
+    mark_verified(tmp_path / "checked", automatic_share=0.83)
+
+    assert upload_label(tmp_path / "plain") == "plain"
+    assert upload_label(tmp_path / "checked") == "checked  ✔ verified by you (83% automatic)"
+
+
+def _gui_with_a_failing_song(tmp_path, monkeypatch, answer):
+    from types import SimpleNamespace
+    from lyricvideo.settings import Settings
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    (tmp_path / "work").mkdir()
+    _rendered(tmp_path / "work", "hard-song", placed({1: 1.0, 6: -1.0}))                   # 80% in sync
+    asked, refreshed = [], []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, message, **kw: asked.append(message) or answer)
+    stub = SimpleNamespace(
+        settings=Settings(),
+        _invalidate_upload_list=lambda: refreshed.append("upload"), _invalidate_pending_list=lambda: refreshed.append("pending"),
+        _invalidate_flagged_list=lambda: refreshed.append("flagged"),
+    )
+    return stub, asked, refreshed
+
+
+def test_marking_verified_asks_first_shows_the_automatic_score_then_records_the_owners_verdict_and_refreshes_the_lists(tmp_path, monkeypatch):
+    from lyricvideo.gui import LyricVideoGUI
+    stub, asked, refreshed = _gui_with_a_failing_song(tmp_path, monkeypatch, answer=True)
+
+    LyricVideoGUI._on_mark_verified(stub, "hard-song")
+
+    assert len(asked) == 1 and "80%" in asked[0] and "90%" in asked[0]
+    assert verification(tmp_path / "work" / "hard-song")["automatic_share"] == 0.8
+    assert sorted(refreshed) == ["flagged", "pending", "upload"]
+
+
+def test_saying_no_to_the_verify_prompt_records_nothing(tmp_path, monkeypatch):
+    from lyricvideo.gui import LyricVideoGUI
+    stub, asked, refreshed = _gui_with_a_failing_song(tmp_path, monkeypatch, answer=False)
+
+    LyricVideoGUI._on_mark_verified(stub, "hard-song")
+
+    assert verification(tmp_path / "work" / "hard-song") is None and refreshed == []
+
+
+def test_only_the_upload_list_rows_carry_the_verified_label(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from lyricvideo.gui import LyricVideoGUI
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    (tmp_path / "work").mkdir()
+    _rendered(tmp_path / "work", "hard-song", placed({1: 1.0, 6: -1.0}))
+    mark_verified(tmp_path / "work" / "hard-song", automatic_share=0.8)
+    stub = SimpleNamespace()
+
+    assert LyricVideoGUI._song_label(stub, "upload", "hard-song") == "hard-song  ✔ verified by you (80% automatic)"
+    assert LyricVideoGUI._song_label(stub, "redo", "hard-song") == "hard-song"
+
+
+def test_the_hold_command_leaves_a_song_the_owner_verified_alone(tmp_path):
+    _rendered(tmp_path, "checked", placed({1: 1.0, 6: -1.0}))                  # fails the bar
+    mark_verified(tmp_path / "checked", automatic_share=0.8)
+    before = (tmp_path / "checked" / "lyrics_timed.json").read_text(encoding="utf-8")
+
+    scan_songs(tmp_path, hold=True)
+
+    assert (tmp_path / "checked" / "lyrics_timed.json").read_text(encoding="utf-8") == before
+    assert verification(tmp_path / "checked") is not None                       # and the verdict is still valid

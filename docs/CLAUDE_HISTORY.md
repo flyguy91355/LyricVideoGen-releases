@@ -3354,3 +3354,16 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   change needs the gate re-validated on the owner's judged songs first.
 - Root cause of the failing Like a Prayer was found the same evening: v2.0.45's IPv4 outage (a manual IPv4 address the owner added switched
   Wi-Fi off DHCP) had made GitHub/Hugging Face unreachable; automatic DHCP fixed it (router is on 10.0.0.x).
+
+## 2026-09-20 (late): "Mark Verified" -- the owner's own verdict overrides the automatic check
+
+- Owner, on Like a Prayer (a hard song; 83% vs medium after his lyric fixes, with the last lines flagged where Whisper heard "I'm a prisoner"
+  for the backing vocals): "if i decide its a good video its a good video." The gate is only an automatic yardstick (Whisper's ears).
+- `owner_verified.py`: `mark_verified()` writes `owner_verified.json` in the song's work folder (NOT the song's concern field, which other checks
+  own) with a fingerprint (sha256) of the exact `lyrics_timed.json` watched, the automatic score and the bar; `verification()` returns it only
+  while that fingerprint still matches, so a Redo (new timing file) voids it by itself; `upload_label()` is the Upload-list row text
+  ("name  ✔ verified by you (83% automatic)"). Verified songs: offered in the Upload and Pending lists, dropped from Flagged for Lyrics
+  Review, never re-held by `hold_if_timing_fails`/`--hold`, and recorded in cleared_log ("verified by the owner"). It overrides ANY concern,
+  timing or lyric text -- the owner looked at the whole video. Flagged rows (songs not on YouTube) get a green "Mark Verified" button with a
+  confirm box that shows the automatic score ("83%, 90% needed"); Upload Anyway is unchanged. No "un-verify" button: redo the song.
+- Whisper stays on medium (large-v3 tested and reverted the same evening -- see the entry above); a model choice in Settings was deferred.

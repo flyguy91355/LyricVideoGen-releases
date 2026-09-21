@@ -47,8 +47,9 @@ from .pipeline import (
     song_video_path,
 )
 from .models import load_song
+from .owner_verified import mark_verified, upload_label
 from .settings import Settings
-from .timing_gate import hidden_note, use_pass_share_from
+from .timing_gate import check_saved_song, hidden_note, use_pass_share_from
 from .settings_panel import SettingsPanel
 from .settings_preview import SettingsPreviewFrame
 from .update.apply import (
@@ -1532,7 +1533,8 @@ class LyricVideoGUI:
             try:
                 self._build_song_list_row(
                     frame, list_name, song,
-                    lambda row, song=song: ctk.CTkRadioButton(row, text=song, variable=variable, value=song),
+                    lambda row, song=song: ctk.CTkRadioButton(
+                        row, text=self._song_label(list_name, song), variable=variable, value=song),
                 )
             except Exception as e:
                 # One bad row must never blank the WHOLE list silently --
@@ -1822,6 +1824,10 @@ class LyricVideoGUI:
         ).pack(side="left", padx=(0, 6))
         if not uploaded:  # an uploaded song would be a duplicate video
             ctk.CTkButton(
+                buttons, text="✔ Mark Verified", width=120, fg_color="#2b7a3d", hover_color="#236232",
+                command=lambda: self._on_mark_verified(slug),
+            ).pack(side="left", padx=(0, 6))
+            ctk.CTkButton(
                 buttons, text="Upload Anyway", width=110, fg_color="gray30", hover_color="gray20",
                 command=lambda: self._on_upload_anyway_flagged(slug),
             ).pack(side="left")
@@ -1901,6 +1907,34 @@ class LyricVideoGUI:
         # check, so a clean fetch this time clears the concern on its own.
         self.redo_song_var.set(slug)
         self._on_redo()
+
+    def _song_label(self, list_name: str, song: str) -> str:
+        """A list row's text: the song's name, plus "verified by you (NN% automatic)" in the Upload list when it is."""
+        return upload_label(PROJECT_ROOT / "work" / song) if list_name == "upload" else song
+
+    def _on_mark_verified(self, slug: str) -> None:
+        """"If i decide its a good video its a good video" (owner, 2026-09-20): after a confirm that shows the automatic
+        score, records the owner's approval of THIS version (owner_verified.py). The song then leaves Flagged for Lyrics
+        Review and is offered in the Upload and Pending lists; a Redo cancels it."""
+        work_dir = PROJECT_ROOT / "work" / slug
+        report = check_saved_song(work_dir)
+        if report is None or report.share is None:
+            score = "The automatic check could not score it."
+        else:
+            score = f"The automatic check scored it {report.share:.0%} ({report.needed:.0%} needed)."
+        if not messagebox.askyesno(
+            "Mark as verified",
+            f"Mark '{slug}' as verified?\n\nThis says you watched this video and it is good. {score}\n\n"
+            "It will then be offered for upload. Redoing the song cancels this.",
+        ):
+            return
+        mark_verified(
+            work_dir, automatic_share=None if report is None else report.share,
+            needed=None if report is None else report.needed,
+        )
+        self._invalidate_flagged_list()
+        self._invalidate_pending_list()
+        self._invalidate_upload_list()
 
     def _on_upload_anyway_flagged(self, slug: str) -> None:
         # A deliberate owner override, same as any other manual upload --

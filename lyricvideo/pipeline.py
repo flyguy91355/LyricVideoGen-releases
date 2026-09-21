@@ -34,6 +34,7 @@ from .separate import separate_vocals, stems_look_complete
 from .precision import blend, choose_alignment, match_words
 from .sync import decide_alignment, sync_agreement
 from .settings import Settings
+from .owner_verified import verification
 from .timing_gate import check_saved_song, hold_if_timing_fails, is_gate_concern, settle_alignment
 from .transcribe import load_transcript_segments, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
@@ -137,6 +138,8 @@ def list_uploadable_songs(work_root: Path) -> list[str]:
 
 
 def _passes_for_upload(song_dir: Path) -> bool:
+    if verification(song_dir):
+        return True                                 # "if i decide its a good video its a good video"
     try:
         concern = load_song(song_dir / "lyrics_timed.json").lyrics_accuracy_concern
     except Exception:
@@ -175,6 +178,8 @@ def _held_for_review(song_dir: Path) -> bool:
     timed_path = song_dir / "lyrics_timed.json"
     if not timed_path.exists():
         return False
+    if verification(song_dir):
+        return False                                # the owner watched this version and approved it
     try:
         concern = load_song(timed_path).lyrics_accuracy_concern
     except Exception:
@@ -210,6 +215,8 @@ def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[
         except Exception:
             continue
         concern = song.lyrics_accuracy_concern
+        if verification(entry):
+            continue                                # approved by the owner: not up for review any more
         if (concern and not is_gate_concern(concern)) or hold_if_timing_fails(entry):
             flagged.append(entry.name)
     return flagged

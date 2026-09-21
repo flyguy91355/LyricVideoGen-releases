@@ -139,7 +139,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
    choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
    against lrclib's line timestamps (`combine_anchors`) bound each line to its own
-   window (`align_words_anchored`); `precision.py`/`sync.py` pre-check; `timing_gate.py` decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's singing) -- best of whole-song/anchored/blended else set aside; pending/flagged lists hold failing older songs, the Upload list (`list_uploadable_songs`) shows only passing; `python -m lyricvideo.timing_gate` reports. MMS_FA knows
+   window (`align_words_anchored`); `precision.py`/`sync.py` pre-check; `timing_gate.py` decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's singing) -- best of whole-song/anchored/blended else set aside; pending/flagged lists hold failing older songs, the Upload list (`list_uploadable_songs`) shows only passing; `owner_verified.py` (Flagged panel's Mark Verified) overrides every check until a Redo; `python -m lyricvideo.timing_gate` reports. MMS_FA knows
    only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
    "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
    token (issue #3). Display text never changes.
@@ -350,8 +350,7 @@ opened behind the outer dialog without it (HISTORY 9-10).
 Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs both launchers; releases repo is public). The sync step exports from
 git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
 `cp`) specifically so uncommitted local changes can never leak into a
-public release — see the 2026-09-08 history entry for the real incident
-that found this the hard way. `git show ... > file` drops git's executable
+public release (HISTORY 2026-09-08). `git show ... > file` drops git's executable
 bit, so the script re-applies `chmod +x` to any path `git ls-tree HEAD`
 tracks as `100755` (the `.sh` launcher once shipped non-executable;
 HISTORY 9-10). The owner runs the app directly from this same
@@ -562,6 +561,6 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 ```
 
 Two tests self-skip on Windows (trailing-space folder; symlinked destination).
-`tests/conftest.py`'s font fixture lists Windows fonts too (before 2026-09-14,
-73 render tests silently skipped there). The align tests need FFmpeg's shared
+`tests/conftest.py`'s font fixture lists Windows fonts too (73 render tests skipped there
+before 2026-09-14). The align tests need FFmpeg's shared
 DLLs on PATH (torchcodec) -- an environment requirement, not a code one.

@@ -23,6 +23,7 @@ from .anchors import HeardWord
 from .cleared_log import record_cleared, record_removed
 from .lyric_audio_match import _content, _tokens, _words_match
 from .models import load_song, save_song
+from .owner_verified import verification
 from .transcribe import load_transcript_words
 
 TOLERANCE_SECONDS = 0.5        # a line this close to the singing is in sync (the owner notices at about half a second)
@@ -210,6 +211,8 @@ def hold_if_timing_fails(song_dir: Path, needed: float | None = None) -> str:
     existing = song.lyrics_accuracy_concern
     if existing and not is_gate_concern(existing):
         return ""
+    if verification(song_dir):
+        return ""                                   # the owner approved this version: never re-held behind their back
     report = check_saved_song(song_dir, needed)
     if report is None or report.share is None:
         return existing
