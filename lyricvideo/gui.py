@@ -90,6 +90,12 @@ from .youtube_upload_count_state import load_uploads_today, record_upload
 _CR_LF_RE = re.compile(r"[\r\n]")
 
 
+class _StopPolling(Exception):
+    """Raised by _dispatch_queue_message to tell _poll_queue "this tick is done, don't reschedule" -- the same
+    thing an early `return` inside _poll_queue itself used to mean, before that logic moved into its own method
+    so a message handler that raises for real can be caught without losing track of these intentional exits."""
+
+
 def _split_log_text(pending: str, text: str) -> tuple[str, str]:
     """Terminal-style \\r/\\n handling for the log widget: \\n commits the
     current line permanently, \\r discards it and starts the line over (this
@@ -2316,61 +2322,19 @@ class LyricVideoGUI:
                 log_chunks.append(payload)
                 continue
             flush_log()
-            if kind == "stage":
-                if self._batch_items:
-                    self.status_var.set(f"File {self._batch_index}/{len(self._batch_items)}: Stage: {payload}")
-                    try:
-                        stage_fraction = (STAGES.index(payload) + 1) / len(STAGES)
-                    except ValueError:
-                        stage_fraction = 0.0
-                    combined = (self._batch_index - 1 + stage_fraction) / len(self._batch_items)
-                    self.progress_bar.set(min(1.0, combined))
-                else:
-                    self.status_var.set(f"Stage: {payload}")
-                    # +1: report("done") isn't a real STAGES entry, but seeing the
-                    # bar reach 100% only once done fires (not at the start of the
-                    # last real stage) reads better than stalling at 6/7.
-                    try:
-                        fraction = (STAGES.index(payload) + 1) / len(STAGES)
-                    except ValueError:
-                        fraction = self.progress_bar.get()
-                    self.progress_bar.set(min(1.0, fraction))
-            elif kind == "done":
-                self.status_var.set("Done")
-                self.progress_bar.set(1.0)
-                self._running = False
-                self.generate_button.configure(state="normal")
-                self.redo_button.configure(state="normal")
-                self.batch_button.configure(state="normal")
-                self._refresh_retry_upload_options()
-                messagebox.showinfo("Video ready", f"Wrote {payload}")
+            try:
+                _dispatch_queue_message(self, kind, payload)
+            except _StopPolling:
                 return
-            elif kind == "held":
-                self._on_held_before_video(payload)
-                return
-            elif kind == "error":
-                self.status_var.set("Failed")
-                self._running = False
-                self.generate_button.configure(state="normal")
-                self.redo_button.configure(state="normal")
-                self.batch_button.configure(state="normal")
-                self._append_log(f"\nERROR:\n{payload}\n")
-                messagebox.showerror("Generation failed", payload.splitlines()[0])
-                return
-            elif kind == "batch_resolved":
-                self._on_batch_resolved(payload)
-                return
-            elif kind == "batch_file_start":
-                self._batch_index, total, title = payload
-                self.status_var.set(f"File {self._batch_index}/{total}: {title}")
-                self.progress_bar.set(min(1.0, (self._batch_index - 1) / total))
-            elif kind == "batch_item_done":
-                # So Pending/Flagged/Upload lists reflect each song as it
-                # finishes, not only once the whole batch (e.g. 100 songs) ends.
-                self._refresh_retry_upload_options()
-            elif kind == "batch_done":
-                self._on_batch_done(payload)
-                return
+            except Exception as e:
+                # A single message's handler failing must never kill this recurring poll -- real incident,
+                # 2026-09-22: rebuilding an OPEN review list (invalidate() -> populate_now(), from the routine
+                # post-batch-item refresh) threw partway through a Batch run. With no guard here, that exception
+                # propagated straight out of _poll_queue, so root.after(100, self._poll_queue) below never ran
+                # again -- no later tick was left to read the batch's own eventual "batch_done" message, so
+                # self._running stayed stuck True even though the pipeline had already finished. The owner's
+                # window then insisted a video was "still being generated" every time they tried to close it.
+                print(f"WARNING: could not handle a {kind!r} GUI update: {type(e).__name__}: {e}", file=sys.stderr)
         flush_log()
 
         if self._running:
@@ -2400,6 +2364,70 @@ class LyricVideoGUI:
         self.log_widget.see("end")
         self.log_widget.configure(state="disabled")
         self._log_has_uncommitted_line = bool(self._log_pending)
+
+
+def _dispatch_queue_message(self, kind: str, payload) -> None:
+    """One queued message's worth of GUI update, split out of _poll_queue so a handler that raises can be caught
+    there without losing track of which branches must stop the poll for this tick (_StopPolling, exactly the
+    branches that used to `return` straight out of _poll_queue) vs. fall through to the next queued message. A
+    plain module-level function, not a method, so _poll_queue's own tests (which pass a bare stub object as
+    `self`, not a real LyricVideoGUI instance) don't need this bound onto every stub -- same reason
+    _open_with_default_app/_slugify/etc. above are free functions rather than methods."""
+    if kind == "stage":
+        if self._batch_items:
+            self.status_var.set(f"File {self._batch_index}/{len(self._batch_items)}: Stage: {payload}")
+            try:
+                stage_fraction = (STAGES.index(payload) + 1) / len(STAGES)
+            except ValueError:
+                stage_fraction = 0.0
+            combined = (self._batch_index - 1 + stage_fraction) / len(self._batch_items)
+            self.progress_bar.set(min(1.0, combined))
+        else:
+            self.status_var.set(f"Stage: {payload}")
+            # +1: report("done") isn't a real STAGES entry, but seeing the
+            # bar reach 100% only once done fires (not at the start of the
+            # last real stage) reads better than stalling at 6/7.
+            try:
+                fraction = (STAGES.index(payload) + 1) / len(STAGES)
+            except ValueError:
+                fraction = self.progress_bar.get()
+            self.progress_bar.set(min(1.0, fraction))
+    elif kind == "done":
+        self.status_var.set("Done")
+        self.progress_bar.set(1.0)
+        self._running = False
+        self.generate_button.configure(state="normal")
+        self.redo_button.configure(state="normal")
+        self.batch_button.configure(state="normal")
+        self._refresh_retry_upload_options()
+        messagebox.showinfo("Video ready", f"Wrote {payload}")
+        raise _StopPolling
+    elif kind == "held":
+        self._on_held_before_video(payload)
+        raise _StopPolling
+    elif kind == "error":
+        self.status_var.set("Failed")
+        self._running = False
+        self.generate_button.configure(state="normal")
+        self.redo_button.configure(state="normal")
+        self.batch_button.configure(state="normal")
+        self._append_log(f"\nERROR:\n{payload}\n")
+        messagebox.showerror("Generation failed", payload.splitlines()[0])
+        raise _StopPolling
+    elif kind == "batch_resolved":
+        self._on_batch_resolved(payload)
+        raise _StopPolling
+    elif kind == "batch_file_start":
+        self._batch_index, total, title = payload
+        self.status_var.set(f"File {self._batch_index}/{total}: {title}")
+        self.progress_bar.set(min(1.0, (self._batch_index - 1) / total))
+    elif kind == "batch_item_done":
+        # So Pending/Flagged/Upload lists reflect each song as it
+        # finishes, not only once the whole batch (e.g. 100 songs) ends.
+        self._refresh_retry_upload_options()
+    elif kind == "batch_done":
+        self._on_batch_done(payload)
+        raise _StopPolling
 
 
 def main() -> None:

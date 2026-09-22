@@ -3447,3 +3447,32 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
     rendered rows (Watch already has audio) rather than shown everywhere.
   - The existing real-window test (`test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show`) still passes with the added buttons
     (widest row ~394 px against its 480 px budget) -- no new test needed for layout, since it already covers any row this method can produce.
+
+## 2026-09-22 (later): a finished Batch left the app insisting a video was still generating -- "this program will not close....wtf!!"
+
+- Owner report, live: the app wouldn't close, and repeatedly clicking the X did nothing new. Checked the actual running process (`ps`,
+  `/proc/<pid>/task/*/wchan`, `wmctrl`) rather than guessing: 0% CPU, main thread idle in Tcl's normal `poll_schedule_timeout` wait, exactly one
+  window, no hidden dialog -- not a real deadlock. File timestamps under `work/` showed a 7-song Batch had genuinely finished over two hours
+  earlier (last video 09:59:57); the owner separately confirmed "the batch was finished."
+- Root cause: `_poll_queue`'s per-tick dispatch (`lyricvideo/gui.py`) had no exception handling around any single queued message's GUI update.
+  After every batch item, `_refresh_retry_upload_options()` runs `invalidate()` on the Upload/Pending/Flagged sections, which rebuilds a section
+  immediately (not lazily) if it happens to be open -- and if that rebuild throws for any reason, the exception propagates straight out of
+  `_poll_queue`, so the closing `self.root.after(100, self._poll_queue)` line never runs. With no later tick left to ever read the batch worker's
+  own eventual `("batch_done", ...)` message, `self._running` stays stuck `True` forever, even though the worker thread had already finished
+  writing every file. `_on_close_window` then keeps asking "A video is currently being generated. Quit anyway?" -- correct code, acting on stale
+  state -- so a cautious owner declines it every time, which reads exactly like "the program will not close."
+- Immediate unblock: confirmed nothing was mid-render (no file writes in 10+ minutes) and killed the stuck process directly (`kill -TERM`) at the
+  owner's go-ahead so they could relaunch once the fix shipped, rather than asking them to keep fighting the stale dialog.
+- Fix: `_poll_queue`'s per-message dispatch was pulled out into its own function, `_dispatch_queue_message` (a plain module-level function, not a
+  method -- `_poll_queue`'s own tests pass a bare stub as `self`, not a real `LyricVideoGUI`, so a new method wouldn't be visible on them; same
+  reason `_open_with_default_app`/`_slugify` etc. are already free functions). The branches that used to `return` straight out of `_poll_queue`
+  ("done"/"held"/"error"/"batch_resolved"/"batch_done") now `raise _StopPolling`, a tiny sentinel exception `_poll_queue` catches to stop this
+  tick without rescheduling -- any OTHER exception is caught, logged as a warning, and the loop continues to the next queued message, guaranteeing
+  the trailing `if self._running: self.root.after(100, self._poll_queue)` always runs. A new test
+  (`test_poll_queue_keeps_polling_even_when_a_queued_messages_handler_raises`) reproduces the original bug with a `_refresh_retry_upload_options`
+  that raises and asserts the poll still reschedules itself. `self._running` itself was never touched by this fix -- it was always correctly
+  reset by `_on_batch_done`; the bug was purely that nothing was left running to ever call it.
+- Note for later: this specific incident's own trigger (what actually threw inside that batch's list-refresh) was never identified -- the app
+  has no persistent log file, so nothing survived to inspect after the process was killed. If it recurs, the new warning print
+  (`WARNING: could not handle a 'batch_item_done' GUI update: ...`) will finally show up somewhere the owner can see it, which the silent version
+  of this bug never did.

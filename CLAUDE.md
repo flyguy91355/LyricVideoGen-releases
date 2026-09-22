@@ -34,12 +34,13 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   the filename if identification isn't done (HISTORY). A "New Song"
   button beside Generate resets the form/log/progress bar (no relaunch).
   The window's own close (X) button (`root.protocol("WM_DELETE_WINDOW",
-  self._on_close_window)` in `__init__`; the only way to quit) confirms first
-  if a Generate/Redo/Batch is actively running -- closing mid-run kills the
-  pipeline (and any in-flight upload) with no way to resume;
-  closes immediately, no prompt, whenever nothing is running. Tests must invoke
-  the registered `WM_DELETE_WINDOW` Tcl callback, not the Python method (the
-  binding was once shipped unwired; HISTORY 9-10). A
+  self._on_close_window)` in `__init__`; the only quit) confirms first
+  while a Generate/Redo/Batch runs -- closing mid-run kills the
+  pipeline (and any in-flight upload), no resume;
+  closes immediately, no prompt, whenever nothing is running (never wedged True
+  by a later GUI error, HISTORY 9-22). Tests must invoke
+  the registered `WM_DELETE_WINDOW` Tcl callback, not the Python method (once
+  shipped unwired; HISTORY 9-10). A
   "Batch: Process a Folder" section (`lyricvideo/batch.py` finds/resolves the
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or
@@ -476,7 +477,7 @@ live from `list_pending_uploads()` (never-uploaded, cleared;
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
 `youtube_auto_upload` (a deliberate click always has). A "Flagged for
 Lyrics Review" panel (same lazy pattern) shows each flagged song's concern
-text with Watch (Play MP3 with no video), Whisper Text (HISTORY 9-22), Edit Lyrics (saved to `lyrics_owner.txt`, used as-is next Redo), Redo and Upload Anyway buttons; `_maybe_upload_to_youtube()` skips any flagged song
+text with Watch (else Play MP3), Whisper Text (HISTORY 9-22), Edit Lyrics (saved to `lyrics_owner.txt`, reused next Redo), Redo and Upload Anyway buttons; `_maybe_upload_to_youtube()` skips any flagged song
 outright. `_run_batch_worker` emits a `"batch_item_done"` queue message
 after each song so these three lists update live during a long Batch run
 not just at the end (real gap, HISTORY 9-18).

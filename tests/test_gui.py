@@ -1589,6 +1589,42 @@ def test_poll_queue_refreshes_retry_upload_options_on_each_batch_item_done():
     assert refreshed == [True]
 
 
+class _RecordingRoot:
+    """Stands in for the real Tk root's after(): records the call instead of firing it, so a test can assert a
+    reschedule was requested without recursing forever (unlike _ImmediateRoot, which would fire it straight back
+    into the same broken handler)."""
+
+    def __init__(self):
+        self.after_calls = []
+
+    def after(self, delay, callback, *args):
+        self.after_calls.append((delay, callback, args))
+
+
+def test_poll_queue_keeps_polling_even_when_a_queued_messages_handler_raises():
+    """Real incident, 2026-09-22: a Batch finished, but the owner's window kept insisting a video was "still
+    being generated" when they tried to close it. Rebuilding an OPEN review list (invalidate() -> populate_now(),
+    triggered by the routine post-item _refresh_retry_upload_options() call) threw partway through the batch;
+    _poll_queue had no protection around that, so the exception killed this recurring
+    root.after(100, self._poll_queue) chain right there -- no later tick ever ran to read the batch's own
+    eventual "batch_done" message, so self._running was never reset to False even though the pipeline itself had
+    long since finished. A single message's handler failing must never stop the poll loop."""
+    q = queue.Queue()
+    q.put(("batch_item_done", None))
+
+    def _broken_refresh():
+        raise RuntimeError("boom")
+
+    stub = _gui_stub(
+        _queue=q, _running=True, _refresh_retry_upload_options=_broken_refresh, _poll_queue="SENTINEL",
+    )
+    stub.root = _RecordingRoot()
+
+    LyricVideoGUI._poll_queue(stub)
+
+    assert stub.root.after_calls == [(100, "SENTINEL", ())]
+
+
 def test_run_batch_worker_releases_memory_after_every_item_success_or_failure(monkeypatch):
     """Real incident, 2026-09-18: earlyoom killed the app on song #24 of an
     overnight 100-song Batch run after memory crept up across dozens of
