@@ -47,7 +47,7 @@ from .pipeline import (
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
     song_video_path,
-    whisper_text_for,
+    whisper_lines_for,
 )
 from .models import load_song
 from .owner_verified import mark_verified, upload_label
@@ -1936,10 +1936,12 @@ class LyricVideoGUI:
             messagebox.showerror("Could not open the audio", f"{type(e).__name__}: {e}")
 
     def _on_whisper_text_flagged(self, slug: str) -> None:
-        """A small read-only popup showing what Whisper heard sung -- lets the owner judge a lyrics-mismatch or
-        timing concern against the actual recognized words (owner request, 2026-09-22). Every currently flagged
-        song already has a cached transcript, so whisper_text_for() returns instantly; a rare older song
-        without one is transcribed fresh (~70s) off the GUI thread so the window never freezes."""
+        """A small read-only popup showing what Whisper heard sung, one row per LYRIC line (owner request,
+        2026-09-22: "make the whisper text line by line like the lyrics text ... would make it a lot easier to
+        figure out") so it reads side-by-side against Edit Lyrics's own one-line-per-line box -- lets the owner
+        judge a lyrics-mismatch or timing concern against the actual recognized words, line for line. Every
+        currently flagged song already has a cached transcript, so whisper_lines_for() returns instantly; a rare
+        older song without one is transcribed fresh (~70s) off the GUI thread so the window never freezes."""
         work_dir = PROJECT_ROOT / "work" / slug
         dialog = ctk.CTkToplevel(self.root)
         dialog.title(f"Whisper text -- {slug}")
@@ -1956,8 +1958,8 @@ class LyricVideoGUI:
 
         ctk.CTkLabel(
             dialog, anchor="w", wraplength=dialog_w - 40, justify="left", text_color="gray60",
-            text="What Whisper (speech recognition) heard sung in this song's isolated vocal track -- read-only, "
-                 "for comparing against the lyrics in Edit Lyrics.",
+            text="What Whisper (speech recognition) heard sung, one row per lyric line -- read-only, for reading "
+                 "side-by-side against the lyrics in Edit Lyrics.",
         ).pack(fill="x", padx=14, pady=(12, 6))
         box = ctk.CTkTextbox(dialog, wrap="word", font=ctk.CTkFont(size=14))
         box.pack(fill="both", expand=True, padx=14, pady=(0, 6))
@@ -1977,13 +1979,13 @@ class LyricVideoGUI:
 
         def worker():
             try:
-                text = whisper_text_for(work_dir)
+                lines = whisper_lines_for(work_dir)
             except Exception as e:
                 # Formatted here, not inside the lambda -- `e` is unbound once this except block ends.
                 message = f"Could not get the Whisper text: {type(e).__name__}: {e}"
                 self.root.after(0, lambda: show_in_box(message))
                 return
-            self.root.after(0, lambda: show_in_box(text))
+            self.root.after(0, lambda: show_in_box("\n".join(lines)))
 
         threading.Thread(target=worker, daemon=True).start()
 

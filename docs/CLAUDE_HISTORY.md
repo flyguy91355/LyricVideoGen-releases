@@ -3476,3 +3476,19 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   has no persistent log file, so nothing survived to inspect after the process was killed. If it recurs, the new warning print
   (`WARNING: could not handle a 'batch_item_done' GUI update: ...`) will finally show up somewhere the owner can see it, which the silent version
   of this bug never did.
+
+## 2026-09-22 (later still): Whisper Text split one row per lyric line
+
+- Owner: "can you make the whisper text line by line like the lyrics texts? would make it a lot easier to figure
+  out." Asked which "line by line" was meant -- Whisper's own natural pauses (quick, already-cached `segments`,
+  but the count/boundaries wouldn't necessarily match the lyrics) vs. one row per LYRIC line (more work, but line
+  N always lines up with line N of the lyrics for a direct side-by-side read). Owner picked the latter.
+- Added `pipeline.whisper_lines_for(work_dir, model=None) -> list[str]`: for each lyric line, gathers the heard
+  words within that line's own `[start_time - SEARCH_SECONDS, end_time + SEARCH_SECONDS]` window (the exact same
+  window `timing_gate.check_sync()` already searches when scoring a line, reusing `SEARCH_SECONDS` and
+  `HeardWord` rather than reinventing the windowing), joins them, and reads "(nothing heard)" for a line with
+  nothing nearby; a blank lyric line (no words) is skipped, matching `load_editable_lyrics()`'s own convention.
+  Ensures a transcript is cached first via the existing `whisper_text_for()` (transcribing fresh only for the
+  rare song without one already). `lyricvideo/gui.py`'s Whisper Text popup now joins these lines with `\n`
+  instead of showing `whisper_text_for()`'s single flat block -- `whisper_text_for` itself is unchanged and no
+  longer imported by `gui.py` at all (nothing else there used it).

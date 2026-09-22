@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import os
 import re
@@ -35,7 +36,7 @@ from .precision import blend, choose_alignment, match_words
 from .sync import decide_alignment, sync_agreement
 from .settings import Settings
 from .owner_verified import verification
-from .timing_gate import check_saved_song, hold_if_timing_fails, is_gate_concern, settle_alignment
+from .timing_gate import SEARCH_SECONDS, check_saved_song, hold_if_timing_fails, is_gate_concern, settle_alignment
 from .transcribe import load_transcript_segments, load_transcript_text, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
@@ -261,6 +262,35 @@ def whisper_text_for(work_dir: Path, model=None) -> str:
     audio_path, _title = load_redo_inputs(work_dir)
     vocals_path = work_dir / "htdemucs" / Path(audio_path).stem / "vocals.wav"
     return transcribe_vocals(vocals_path, work_dir, model=model)
+
+
+def whisper_lines_for(work_dir: Path, model=None) -> list[str]:
+    """What Whisper heard sung, one entry per LYRIC line rather than one flat block (owner request, 2026-09-22:
+    "make the whisper text line by line like the lyrics text ... would make it a lot easier to figure out") --
+    each line shows only the words heard within that line's own time window (the same +-SEARCH_SECONDS window
+    timing_gate's sync check searches around a line's placed time), so line N here always lines up with line N
+    of the lyrics for a direct side-by-side read, even where the two disagree about what's sung when. A line
+    with nothing heard nearby reads as "(nothing heard)"; a blank lyric line (no words at all) is skipped, same
+    as the lyrics editor already does. `model` is injectable, same as whisper_text_for()/transcribe_vocals()."""
+    work_dir = Path(work_dir)
+    whisper_text_for(work_dir, model=model)  # ensures transcript.json (text/segments/words) is cached
+    heard = sorted(
+        (HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)),
+        key=lambda hw: hw.start,
+    )
+    starts = [hw.start for hw in heard]
+    song = load_song(work_dir / "lyrics_timed.json")
+
+    lines = []
+    for line in song.lines:
+        if not line.words:
+            continue
+        low = line.words[0].start_time - SEARCH_SECONDS
+        high = line.words[-1].end_time + SEARCH_SECONDS
+        nearby = heard[bisect.bisect_left(starts, low):bisect.bisect_right(starts, high)]
+        text = " ".join(hw.word.strip() for hw in nearby if hw.word.strip())
+        lines.append(text or "(nothing heard)")
+    return lines
 
 
 def backup_song_outputs(work_dir: Path, slug: str, now: datetime | None = None) -> Path | None:

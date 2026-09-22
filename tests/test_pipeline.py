@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +19,7 @@ from lyricvideo.pipeline import (
     song_end_time,
     song_video_path,
     whisper_text_for,
+    whisper_lines_for,
 )
 from lyricvideo.settings import Settings
 
@@ -541,6 +543,78 @@ def test_whisper_text_for_raises_a_clear_error_with_no_vocal_stem(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         whisper_text_for(song_dir)
+
+
+def test_whisper_lines_for_groups_heard_words_by_each_lyric_lines_own_time_window(tmp_path, monkeypatch):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    song = Song(
+        title="Angie", audio_path="angie.mp3",
+        lines=[
+            LyricLine(words=[Word("hello", 1.0, 1.4), Word("there", 1.5, 2.0)]),
+            LyricLine(words=[Word("second", 10.0, 10.4), Word("line", 10.5, 11.0)]),
+        ],
+    )
+    save_song(song, song_dir / "lyrics_timed.json")
+    (song_dir / "transcript.json").write_text(json.dumps({
+        "text": "hello there second line",
+        "words": [
+            {"word": "hello", "start": 1.05, "end": 1.4},
+            {"word": "there", "start": 1.55, "end": 2.0},
+            {"word": "second", "start": 10.05, "end": 10.4},
+            {"word": "line", "start": 10.55, "end": 11.0},
+        ],
+    }), encoding="utf-8")
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("should not transcribe when a cache already exists")
+
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", _must_not_run)
+
+    assert whisper_lines_for(song_dir) == ["hello there", "second line"]
+
+
+def test_whisper_lines_for_marks_a_line_with_nothing_heard_nearby(tmp_path):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    song = Song(title="Angie", audio_path="angie.mp3", lines=[LyricLine(words=[Word("hello", 1.0, 1.4)])])
+    save_song(song, song_dir / "lyrics_timed.json")
+    (song_dir / "transcript.json").write_text(json.dumps({"text": "", "words": []}), encoding="utf-8")
+
+    assert whisper_lines_for(song_dir) == ["(nothing heard)"]
+
+
+def test_whisper_lines_for_skips_a_blank_lyric_line(tmp_path):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    song = Song(
+        title="Angie", audio_path="angie.mp3",
+        lines=[LyricLine(words=[Word("hello", 1.0, 1.4)]), LyricLine(words=[])],
+    )
+    save_song(song, song_dir / "lyrics_timed.json")
+    (song_dir / "transcript.json").write_text(json.dumps({
+        "text": "hello", "words": [{"word": "hello", "start": 1.0, "end": 1.4}],
+    }), encoding="utf-8")
+
+    assert whisper_lines_for(song_dir) == ["hello"]
+
+
+def test_whisper_lines_for_transcribes_fresh_when_no_cache_exists(tmp_path):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    song = Song(title="Angie", audio_path="angie.mp3", lines=[LyricLine(words=[Word("hello", 1.0, 1.4)])])
+    save_song(song, song_dir / "lyrics_timed.json")
+    vocals_dir = song_dir / "htdemucs" / "angie"
+    vocals_dir.mkdir(parents=True)
+    (vocals_dir / "vocals.wav").write_bytes(b"x")
+
+    class _WordModel:
+        def transcribe(self, path, **kwargs):
+            words = [SimpleNamespace(word=" hello", start=1.0, end=1.4)]
+            segs = [SimpleNamespace(start=0.9, end=1.5, text=" hello", words=words)]
+            return iter(segs), SimpleNamespace(language="en", language_probability=0.9)
+
+    assert whisper_lines_for(song_dir, model=_WordModel()) == ["hello"]
 
 
 def test_song_video_path_returns_none_with_no_lyrics_timed_json(tmp_path):
