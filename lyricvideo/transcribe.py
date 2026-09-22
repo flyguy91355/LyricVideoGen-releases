@@ -123,6 +123,17 @@ def load_transcript_segments(work_dir: Path) -> list[dict]:
         return []
 
 
+def load_transcript_text(work_dir: Path) -> str | None:
+    """The cached transcript's whole recognized text, or None when there is no cache yet (or it is unreadable) --
+    lets a caller (the GUI's Whisper Text review button) tell "already have it" from "need to transcribe" without
+    running Whisper just to check."""
+    try:
+        data = json.loads((Path(work_dir) / _TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+        return str(data["text"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def load_transcript_words(work_dir: Path) -> list[dict]:
     """The cached transcript's [{word, start, end}] word timings, or [] if there are none (older cache,
     unreadable file) -- the anchors the lyric aligner uses to keep every line inside its own stretch of the

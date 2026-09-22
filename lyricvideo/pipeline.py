@@ -36,7 +36,7 @@ from .sync import decide_alignment, sync_agreement
 from .settings import Settings
 from .owner_verified import verification
 from .timing_gate import check_saved_song, hold_if_timing_fails, is_gate_concern, settle_alignment
-from .transcribe import load_transcript_segments, load_transcript_words, transcribe_vocals
+from .transcribe import load_transcript_segments, load_transcript_text, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
 STAGES = ["identify", "separate", "fetch_lyrics", "align", "detect_chords", "images", "render"]
@@ -245,6 +245,22 @@ def load_redo_inputs(song_dir: Path) -> tuple[Path, str]:
     if local_copy.exists():
         return local_copy, song.title
     return Path(song.audio_path), song.title
+
+
+def whisper_text_for(work_dir: Path, model=None) -> str:
+    """What Whisper heard sung, for the GUI's Whisper Text review button: the cached transcript if this song
+    already has one (every song set aside for review does, since the checks that set it aside needed one --
+    this is the instant, common case), else transcribes the vocal stem fresh via transcribe_vocals() (which
+    caches its own result, so a second click is instant too). `model` is injectable for tests, same as
+    transcribe_vocals() itself. Raises FileNotFoundError (via transcribe_vocals) if the song has no separated
+    vocal stem to transcribe."""
+    work_dir = Path(work_dir)
+    cached = load_transcript_text(work_dir)
+    if cached is not None:
+        return cached
+    audio_path, _title = load_redo_inputs(work_dir)
+    vocals_path = work_dir / "htdemucs" / Path(audio_path).stem / "vocals.wav"
+    return transcribe_vocals(vocals_path, work_dir, model=model)
 
 
 def backup_song_outputs(work_dir: Path, slug: str, now: datetime | None = None) -> Path | None:

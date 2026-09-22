@@ -476,10 +476,10 @@ live from `list_pending_uploads()` (never-uploaded, cleared;
 `_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
 `youtube_auto_upload` (a deliberate click always has). A "Flagged for
 Lyrics Review" panel (same lazy pattern) shows each flagged song's concern
-text with Watch, Edit Lyrics (saved as `lyrics_owner.txt`, used verbatim by the next Redo), Redo and Upload Anyway (a deliberate override) buttons; `_maybe_upload_to_youtube()` skips any flagged song
+text with Watch (Play MP3 with no video), Whisper Text (HISTORY 9-22), Edit Lyrics (saved to `lyrics_owner.txt`, used as-is next Redo), Redo and Upload Anyway buttons; `_maybe_upload_to_youtube()` skips any flagged song
 outright. `_run_batch_worker` emits a `"batch_item_done"` queue message
 after each song so these three lists update live during a long Batch run
-instead of only once at the very end (real gap, HISTORY 9-18).
+not just at the end (real gap, HISTORY 9-18).
 Redo's list, this
 one, and the Pending checklist are each `CTkRadioButton`/`CTkCheckBox`
 rows in a `CTkScrollableFrame` fixed to

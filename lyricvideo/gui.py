@@ -47,6 +47,7 @@ from .pipeline import (
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
     song_video_path,
+    whisper_text_for,
 )
 from .models import load_song
 from .owner_verified import mark_verified, upload_label
@@ -1873,6 +1874,15 @@ class LyricVideoGUI:
                 buttons, text="▶ Watch", width=70, fg_color="gray30", hover_color="gray20",
                 command=lambda: self._on_watch_song(slug),
             ).pack(side="left", padx=(0, 6))
+        else:  # no video to Watch yet -- the only way to hear the song at all (owner request, 2026-09-22)
+            ctk.CTkButton(
+                buttons, text="▶ Play MP3", width=90, fg_color="gray30", hover_color="gray20",
+                command=lambda: self._on_play_mp3_flagged(slug),
+            ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            buttons, text="Whisper Text", width=110, fg_color="gray30", hover_color="gray20",
+            command=lambda: self._on_whisper_text_flagged(slug),
+        ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             buttons, text="✎ Edit Lyrics", width=100, command=lambda: self._on_edit_lyrics_flagged(slug),
         ).pack(side="left", padx=(0, 6))
@@ -1902,6 +1912,74 @@ class LyricVideoGUI:
 
     def _on_edit_lyrics_flagged(self, slug: str) -> None:
         self._open_lyrics_editor(slug)
+
+    def _on_play_mp3_flagged(self, slug: str) -> None:
+        """Hands the original song audio off to the OS's default player -- the only way to hear a song held
+        before its video was ever rendered (owner request, 2026-09-22; a rendered song has Watch instead)."""
+        try:
+            audio_path, _title = load_redo_inputs(PROJECT_ROOT / "work" / slug)
+        except Exception as e:
+            messagebox.showerror("Could not find the audio", f"{type(e).__name__}: {e}")
+            return
+        if not audio_path.exists():
+            messagebox.showerror("No audio file", f'"{slug}"\'s audio file could not be found at {audio_path}.')
+            return
+        try:
+            _open_with_default_app(audio_path)
+        except Exception as e:
+            messagebox.showerror("Could not open the audio", f"{type(e).__name__}: {e}")
+
+    def _on_whisper_text_flagged(self, slug: str) -> None:
+        """A small read-only popup showing what Whisper heard sung -- lets the owner judge a lyrics-mismatch or
+        timing concern against the actual recognized words (owner request, 2026-09-22). Every currently flagged
+        song already has a cached transcript, so whisper_text_for() returns instantly; a rare older song
+        without one is transcribed fresh (~70s) off the GUI thread so the window never freezes."""
+        work_dir = PROJECT_ROOT / "work" / slug
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title(f"Whisper text -- {slug}")
+        dialog_w, dialog_h = 600, 500
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_h) // 2
+        dialog.geometry(f"{dialog_w}x{dialog_h}+{max(x, 0)}+{max(y, 0)}")
+        dialog.transient(self.root)
+        dialog.lift()
+        dialog.focus_force()
+        dialog.attributes("-topmost", True)
+        dialog.after(300, lambda: dialog.attributes("-topmost", False))
+
+        ctk.CTkLabel(
+            dialog, anchor="w", wraplength=dialog_w - 40, justify="left", text_color="gray60",
+            text="What Whisper (speech recognition) heard sung in this song's isolated vocal track -- read-only, "
+                 "for comparing against the lyrics in Edit Lyrics.",
+        ).pack(fill="x", padx=14, pady=(12, 6))
+        box = ctk.CTkTextbox(dialog, wrap="word", font=ctk.CTkFont(size=14))
+        box.pack(fill="both", expand=True, padx=14, pady=(0, 6))
+        box.insert("1.0", "Loading... (transcribing fresh audio can take about a minute)")
+        box.configure(state="disabled")
+        ctk.CTkButton(
+            dialog, text="Close", width=80, fg_color="gray30", hover_color="gray20", command=dialog.destroy,
+        ).pack(anchor="e", padx=14, pady=(0, 12))
+
+        def show_in_box(text: str) -> None:
+            if not dialog.winfo_exists():
+                return  # the owner closed the popup before a fresh transcription finished
+            box.configure(state="normal")
+            box.delete("1.0", "end")
+            box.insert("1.0", text)
+            box.configure(state="disabled")
+
+        def worker():
+            try:
+                text = whisper_text_for(work_dir)
+            except Exception as e:
+                # Formatted here, not inside the lambda -- `e` is unbound once this except block ends.
+                message = f"Could not get the Whisper text: {type(e).__name__}: {e}"
+                self.root.after(0, lambda: show_in_box(message))
+                return
+            self.root.after(0, lambda: show_in_box(text))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _save_owner_lyrics_from_editor(self, slug: str, text: str) -> bool:
         """Saves the owner's edited lyrics (lyrics_owner.txt) for the next Redo. False (with a message) if the text

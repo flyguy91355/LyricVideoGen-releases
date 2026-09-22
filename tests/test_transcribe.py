@@ -183,6 +183,22 @@ def test_missing_or_corrupt_transcript_segments_read_as_empty(tmp_path):
     assert load_transcript_segments(tmp_path) == []
 
 
+def test_the_saved_transcript_text_can_be_read_back(tmp_path):
+    from lyricvideo.transcribe import load_transcript_text
+
+    transcribe_vocals(_vocals(tmp_path), tmp_path, model=_FakeModel([" hello there"]))
+
+    assert load_transcript_text(tmp_path) == "hello there"
+
+
+def test_missing_or_corrupt_transcript_text_reads_as_none(tmp_path):
+    from lyricvideo.transcribe import load_transcript_text
+
+    assert load_transcript_text(tmp_path) is None
+    (tmp_path / "transcript.json").write_text("{nope", encoding="utf-8")
+    assert load_transcript_text(tmp_path) is None
+
+
 # --- word-level timestamps (anchors for lyric alignment, 2026-09-19) --------------------------------
 
 class _WordModel(_FakeModel):

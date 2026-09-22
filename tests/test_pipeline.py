@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Song, Word, load_song, save_song
 from lyricvideo.pipeline import (
     run_pipeline,
@@ -15,6 +17,7 @@ from lyricvideo.pipeline import (
     ordered_unique_chords,
     song_end_time,
     song_video_path,
+    whisper_text_for,
 )
 from lyricvideo.settings import Settings
 
@@ -493,6 +496,51 @@ def test_song_video_path_returns_none_when_not_yet_rendered(tmp_path):
     save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
 
     assert song_video_path(song_dir) is None
+
+
+def test_whisper_text_for_returns_the_cached_transcript_without_transcribing(tmp_path, monkeypatch):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    save_song(Song(title="Angie", audio_path="angie.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "transcript.json").write_text(json.dumps({"text": "cached words"}), encoding="utf-8")
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("should not transcribe when a cache already exists")
+
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", _must_not_run)
+
+    assert whisper_text_for(song_dir) == "cached words"
+
+
+def test_whisper_text_for_transcribes_the_vocal_stem_when_no_cache_exists(tmp_path, monkeypatch):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    save_song(Song(title="Angie", audio_path="angie.mp3"), song_dir / "lyrics_timed.json")
+    vocals_dir = song_dir / "htdemucs" / "angie"
+    vocals_dir.mkdir(parents=True)
+    (vocals_dir / "vocals.wav").write_bytes(b"x")
+
+    seen = {}
+
+    def _fake_transcribe(vocals_path, work_dir, model=None):
+        seen["vocals_path"] = vocals_path
+        seen["work_dir"] = work_dir
+        return "fresh words"
+
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", _fake_transcribe)
+
+    assert whisper_text_for(song_dir) == "fresh words"
+    assert seen["vocals_path"] == vocals_dir / "vocals.wav"
+    assert seen["work_dir"] == song_dir
+
+
+def test_whisper_text_for_raises_a_clear_error_with_no_vocal_stem(tmp_path):
+    song_dir = tmp_path / "angie-rolling-stones"
+    song_dir.mkdir()
+    save_song(Song(title="Angie", audio_path="angie.mp3"), song_dir / "lyrics_timed.json")
+
+    with pytest.raises(FileNotFoundError):
+        whisper_text_for(song_dir)
 
 
 def test_song_video_path_returns_none_with_no_lyrics_timed_json(tmp_path):

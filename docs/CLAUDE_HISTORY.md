@@ -3425,3 +3425,25 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   and tested, then SET ASIDE in `git stash` ("bigger sync-gate rework") because the owner wanted no large changes to a program that works well.
 - Process mistake: `cut_release.sh` ran after a BLOCKED commit (CLAUDE.md size/hook) and published v2.0.51 with the v2.0.50 code and notes for a change that
   was not in it; the notes were corrected to say "No code changes... published by mistake". Release commands are now chained with && after commit+push.
+
+## 2026-09-22: review buttons for Flagged for Lyrics Review -- Play MP3 and Whisper Text
+
+- Owner request, while reviewing a full census of the ~265 processed songs (128/264 passed the timing gate; 143 set aside for review across the
+  timing gate, the lyrics-text-match check, and one damaged source file): "on the non rendered held for review songs... i need the lyric text, the
+  whisper text (you may need to create it) and the mp3 file... as buttons to be able to review the songs." Brainstormed as bounded (existing panel,
+  existing row/button pattern): the lyric text was already covered by the existing Edit Lyrics button (no new button needed), so the actual gap was
+  hearing the song and seeing what Whisper heard.
+- Added, TDD: `transcribe.load_transcript_text(work_dir)` (the cached transcript's plain text, or None -- mirrors `load_transcript_segments`/
+  `load_transcript_words`) and `pipeline.whisper_text_for(work_dir, model=None)` (that cached text if present, else `transcribe_vocals()` on the
+  song's own vocal stem, same `htdemucs/<audio-stem>/vocals.wav` convention `run_pipeline` itself uses -- `model` injectable for tests). A quick
+  audit found all 144 currently-flagged songs already have a cached `transcript.json` (the checks that flagged them needed one), so in practice this
+  path is always instant; the fresh-transcription branch exists for a rare older song without one.
+  Test files: `tests/test_transcribe.py`, `tests/test_pipeline.py`.
+  - `_render_one_flagged_song` (`lyricvideo/gui.py`): a rendered song keeps its `▶ Watch` button; a song with no video yet gets `▶ Play MP3` in its
+    place (`load_redo_inputs()` for the audio path, `_open_with_default_app()` -- the same OS-hands-off convention Watch already uses). Every row
+    also gets a `Whisper Text` button: a small read-only popup (same dialog treatment as Edit Lyrics) that calls `whisper_text_for()` off the GUI
+    thread and fills the box via `root.after`, guarded by `dialog.winfo_exists()` in case the owner closes it mid-transcription.
+  - Owner mid-design, on Play MP3: "not sure i need the mp3 in the rendered videos, but i guess it doesnt hurt anything" -- so it was dropped from
+    rendered rows (Watch already has audio) rather than shown everywhere.
+  - The existing real-window test (`test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show`) still passes with the added buttons
+    (widest row ~394 px against its 480 px budget) -- no new test needed for layout, since it already covers any row this method can produce.
