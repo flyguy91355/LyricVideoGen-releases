@@ -3953,3 +3953,13 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   same day, before `easy_chord_capo.json` existed) into the new nested location and backfilled its marker
   file by hand with the same values `build_capo_variant()` would have written, rather than a full ~18-minute
   re-render for a file move.
+
+## 2026-09-23: EASY CHORD videos keep the original key
+
+- Owner: "the key of the song doesnt change... we need to keep the origianl key in the capo videos." A capo
+  changes the shapes fretted, not the sounding key, but the capo variant's Key badge showed the shape key
+  (`transpose_chord_track()` renames `chord_track.key`). The stored key was left as the shape key on purpose
+  -- `youtube_playlists.organize_video()`'s EASY / 3-/4-CHORD playlists key off it -- and `run_pipeline()`
+  instead passes the marker's `original_key` to `draw_chord_bar(key_label=...)`. Owner declined adding
+  "· E shapes" to the CAPO badge ("just needs the original key").
+- CLAUDE.md trim: dropped the `_default_font` -> `default_font` rename narrative (renamed 2026-09-09).

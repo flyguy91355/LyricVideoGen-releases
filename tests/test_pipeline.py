@@ -888,7 +888,7 @@ def test_run_pipeline_no_settings_argument_uses_all_defaults(tmp_path, monkeypat
     run_pipeline(Path("audio.mp3"), work_dir)
 
     assert captured["detect_chords_kwargs"] == {}
-    assert captured["assemble_video_kwargs"] == {"chord_legend_labels": ["C"], "capo": None}
+    assert captured["assemble_video_kwargs"] == {"chord_legend_labels": ["C"], "capo": None, "key_label": None}
 
 
 def test_run_pipeline_settings_reach_detect_chords(tmp_path, monkeypatch):
@@ -1893,6 +1893,34 @@ def test_build_capo_variant_builds_the_capo_dir_and_renders_it(tmp_path, monkeyp
         "capo_fret": 1, "shape_key": "D", "original_key": "Eb major",
         "original_title": "Bridge Over Troubled Water",
     }
+
+
+def test_build_capo_variant_renders_the_original_key(tmp_path, monkeypatch):
+    """Owner, 2026-09-23: "the key of the song doesnt change... we need to keep the original key in the capo
+    videos" -- the stored chord_track.key stays the shape key (EASY playlists key off it), but the rendered
+    Key badge gets the original key."""
+    _patch_common(monkeypatch, tmp_path)
+    captured = {}
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", lambda *a, **k: captured.update(k))
+    work_dir = tmp_path / "work" / "bridge-over-troubled-water"
+    _write_original_song_for_capo(work_dir, key="Eb major")
+
+    build_capo_variant(work_dir, audio_path_override=tmp_path / "audio.m4a")
+
+    assert captured["key_label"] == "Eb major"
+    assert captured["capo"] == 1
+
+
+def test_run_pipeline_passes_no_key_override_for_an_ordinary_song(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    captured = {}
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", lambda *a, **k: captured.update(k))
+    audio = tmp_path / "song.mp3"
+    audio.write_bytes(b"fake")
+
+    run_pipeline(audio, tmp_path / "work" / "plain")
+
+    assert captured["key_label"] is None
 
 
 def test_run_pipeline_builds_the_easy_chord_variant_when_setting_is_on_and_key_is_hard(tmp_path, monkeypatch):

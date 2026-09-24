@@ -683,3 +683,14 @@ def test_apply_ken_burns_gives_identical_output_for_a_pre_resized_input():
     from_pre_resized = np.array(apply_ken_burns(pre_resized, progress=0.4))
 
     assert np.array_equal(from_raw, from_pre_resized)
+
+
+def test_draw_chord_bar_key_label_overrides_the_tracks_own_key_in_the_badge(test_font_path):
+    """Owner, 2026-09-23: a capo doesn't change the song's key -- an EASY CHORD video's badge shows the
+    ORIGINAL key (key_label) even though its chord_track.key holds the shape key."""
+    bg = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    shape_track = ChordTrack(events=[ChordEvent(0.0, 1.0, "E")], key="E major", bpm=120.0)
+    real_track = ChordTrack(events=[ChordEvent(0.0, 1.0, "E")], key="F# major", bpm=120.0)
+    overridden = np.array(draw_chord_bar(bg, shape_track, t=0.5, font_path=test_font_path, key_label="F# major"))
+    real = np.array(draw_chord_bar(bg, real_track, t=0.5, font_path=test_font_path))
+    assert np.array_equal(overridden, real)

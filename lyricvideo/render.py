@@ -376,6 +376,7 @@ def draw_chord_bar(
     show_chord_timeline: bool = True,
     show_key_bpm: bool = True,
     timeline_window_sec: float = TIMELINE_WINDOW_SECONDS,
+    key_label: str | None = None,
 ) -> Image.Image:
     """Composites the NOW/NEXT/timeline chord bar and the Key/BPM badge onto
     `frame`, ported from LyricChord's FrameComposer._draw_chords + its header
@@ -456,10 +457,13 @@ def draw_chord_bar(
                     label, font=seg_font, fill=text_color,
                 )
 
-    if show_key_bpm and (chord_track.key or chord_track.bpm):
+    # `key_label` (owner, 2026-09-23): an EASY CHORD (capo) video's chord_track.key is the SHAPE key it frets,
+    # but a capo never changes the song's real key -- that video passes its original key here instead.
+    key = key_label or chord_track.key
+    if show_key_bpm and (key or chord_track.bpm):
         parts = []
-        if chord_track.key:
-            parts.append(f"Key: {chord_track.key}")
+        if key:
+            parts.append(f"Key: {key}")
         if chord_track.bpm:
             parts.append(f"{int(round(chord_track.bpm))} BPM")
         badge = "   ·   ".join(parts)

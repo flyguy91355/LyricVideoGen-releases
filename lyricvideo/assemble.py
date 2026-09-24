@@ -72,6 +72,7 @@ def assemble_video(
     support_overlay_scale: float = 1.0,
     support_overlay_lead_seconds: float = 20.0,
     capo: int | None = None,
+    key_label: str | None = None,
 ) -> None:
     image_cache: dict[str, Image.Image] = {}
     audio_clip = AudioFileClip(str(audio_path))
@@ -178,7 +179,7 @@ def assemble_video(
             frame_size=frame_size, accent_color=accent_color, dim_text_color=dim_text_color,
             panel_color=panel_color, panel_alpha=panel_alpha, chord_now_size=chord_now_size,
             chord_next_size=chord_next_size, show_chord_timeline=show_chord_timeline,
-            show_key_bpm=show_key_bpm, timeline_window_sec=timeline_window_sec,
+            show_key_bpm=show_key_bpm, timeline_window_sec=timeline_window_sec, key_label=key_label,
         )
         current = current_chord_at(chord_track, song_t)
         frame = draw_chord_legend(

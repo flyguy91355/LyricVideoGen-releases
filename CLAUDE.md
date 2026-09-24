@@ -382,9 +382,8 @@ riding along with a later deliberate one); Discard reloads
 Closing the app (or a crash) with unsaved changes loses them, by design.
 `gui.py`'s in-memory `self.settings` still updates live on every change (so the
 current session's own Generate/Redo/Batch always uses your latest tweak) -- only
-the on-disk file itself is gated behind the explicit Save click. `pipeline.py`'s font-resolution helper
-was renamed `_default_font` -> `default_font` (no longer module-private, since the
-preview needs it too). Its candidates cover Linux DejaVu/Liberation and Windows
+the on-disk file itself is gated behind the explicit Save click. `pipeline.py`'s `default_font()` (public; the
+preview uses it too). Its candidates cover Linux DejaVu/Liberation and Windows
 Arial Bold / Segoe UI Bold.
 
 `lyricvideo/chord_shapes.py` holds guitar fingering data for every chord
@@ -550,7 +549,7 @@ failing every remaining song (9-17). EASY/3-/4-CHORD use `is_easy_key`
 (open C/D/E/G/A/Am/Dm/Em, F/B excluded). `pipeline.build_capo_variant()`
 (9-23 spec) renders `<slug>/easychords` (nested): same audio/lyrics/images, chords
 re-spelled via `capo_and_shape_key()`, `draw_capo_badge()` shows CAPO N under
-the legend; Settings/Redo/backfill/upload triggers exist -- `easy_chord_capo.json` backs the title/description.
+the legend, Key badge the original key (`key_label`); Settings/Redo/backfill/upload triggers exist -- `easy_chord_capo.json` backs the title/description.
 
 This feature is complete and tested; the interactive OAuth `connect()` flow
 and live comment/engagement-comment posting have run live against the

@@ -29,7 +29,7 @@ from .lyric_audio_match import drop_unsung_leading_lines, drop_unsung_trailing_l
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .owner_lyrics import owner_lyrics_lines
 from .chord_theory import (  # noqa: F401 -- ordered_unique_chords re-exported: every existing `pipeline.ordered_unique_chords` caller keeps working unchanged
-    capo_and_shape_key, is_easy_key, ordered_unique_chords, save_easy_chord_capo_marker, transpose_chord_track,
+    capo_and_shape_key, is_easy_key, load_easy_chord_capo_marker, ordered_unique_chords, save_easy_chord_capo_marker, transpose_chord_track,
 )
 from .cleared_log import record_cleared, record_removed
 from .redo_log import note_redo_finished, note_redo_started
@@ -861,11 +861,15 @@ def run_pipeline(
 
     if start_idx <= STAGES.index("render") <= end_idx:
         report("render")
+        # A capo never changes the song's real key (owner, 2026-09-23): an EASY CHORD variant's stored key is
+        # the shape key (the EASY playlists key off it), so the Key badge reads the original key from its marker.
+        capo_marker = load_easy_chord_capo_marker(work_dir) if capo is not None else None
         assemble_video(
             song.lines, song.chord_track, images_dir, audio_path, final_path,
             font_path or default_font(),
             chord_legend_labels=ordered_unique_chords(song.chord_track),
             capo=capo,
+            key_label=capo_marker["original_key"] if capo_marker else None,
             **assemble_kwargs,
         )
         (work_dir / HELD_MARKER).unlink(missing_ok=True)        # the video exists now (Render Anyway, or a Redo that passes)
