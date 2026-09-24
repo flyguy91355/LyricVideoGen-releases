@@ -33,7 +33,7 @@ from .chord_theory import (  # noqa: F401 -- ordered_unique_chords re-exported: 
 )
 from .cleared_log import record_cleared, record_removed
 from .redo_log import note_redo_finished, note_redo_started
-from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
+from .models import ChordTrack, LyricLine, Song, Word, display_slug, load_song, save_song
 from .separate import separate_vocals, stems_look_complete
 from .precision import blend, choose_alignment, match_words
 from .sync import decide_alignment, sync_agreement
@@ -98,6 +98,27 @@ def list_redoable_songs(work_root: Path) -> list[str]:
     )
 
 
+def _candidate_song_dirs(work_root: Path) -> list[tuple[str, Path]]:
+    """Every directory that could hold its own distinct song: each of work_root's immediate
+    subdirectories, plus that subdirectory's own `easychords/` nested folder if it has one -- an EASY
+    CHORD (capo) variant (owner, 2026-09-23: "i dont need twice the folder") lives nested inside its
+    original song's own folder rather than as a separate top-level sibling, but is still tracked/listed as
+    its own distinct song everywhere else. Returns (slug, path) pairs sorted by slug; a slug already works
+    unchanged everywhere one is turned back into a path via `PROJECT_ROOT / "work" / slug`, since pathlib
+    splits a "/"-containing string into path segments on every platform. Deliberately NOT used by
+    list_redoable_songs() -- a capo variant is rebuilt via build_capo_variant(), never "Redo"-d (that would
+    pointlessly re-fetch lyrics/re-detect chords a derived video has no business re-deciding)."""
+    pairs: list[tuple[str, Path]] = []
+    for entry in work_root.iterdir():
+        if not entry.is_dir():
+            continue
+        pairs.append((entry.name, entry))
+        nested = entry / "easychords"
+        if nested.is_dir():
+            pairs.append((f"{entry.name}/easychords", nested))
+    return sorted(pairs, key=lambda pair: pair[0])
+
+
 def song_video_path(work_dir: Path) -> Path | None:
     """The rendered mp4 for work_dir, if it exists -- None if the song has
     no lyrics_timed.json yet, or hasn't been rendered yet. Shared by
@@ -112,19 +133,14 @@ def song_video_path(work_dir: Path) -> Path | None:
 
 
 def list_rendered_songs(work_root: Path) -> list[str]:
-    """Names of work_root's immediate subdirectories that have a rendered
-    video, whether or not it's ever been uploaded to YouTube -- backs the
-    GUI's single-song Upload dropdown, which (unlike list_pending_uploads())
-    must also offer an already-uploaded song so the owner can force a fresh
-    re-upload (a correction/re-post) for any past song, not just the one
-    from the current session."""
+    """Names (or "<song>/easychords" slugs -- see _candidate_song_dirs) of work_root's songs that have a
+    rendered video, whether or not it's ever been uploaded to YouTube -- backs the GUI's single-song Upload
+    dropdown, which (unlike list_pending_uploads()) must also offer an already-uploaded song so the owner
+    can force a fresh re-upload (a correction/re-post) for any past song, not just the one from the current
+    session."""
     if not work_root.exists():
         return []
-    return sorted(
-        entry.name
-        for entry in work_root.iterdir()
-        if entry.is_dir() and song_video_path(entry) is not None
-    )
+    return [slug for slug, path in _candidate_song_dirs(work_root) if song_video_path(path) is not None]
 
 
 def list_uploadable_songs(work_root: Path) -> list[str]:
@@ -137,14 +153,15 @@ def list_uploadable_songs(work_root: Path) -> list[str]:
 
 def list_easy_chord_backfill_candidates(work_root: Path) -> list[str]:
     """Names of work_root's already-passing songs whose own key is hard (not is_easy_key) and that don't
-    already have a `<slug>-capo` sibling folder -- backs the one-time "Generate EASY CHORD Versions"
-    catch-up action (owner, 2026-09-23: "this idea will give me hundreds of new songs"; trigger 3 of 3 from
-    the design spec). A song's own capo variant is naturally excluded here too, without special-casing it --
-    its OWN key is the easy shape key it was converted to, so it never passes the is_easy_key check itself."""
+    already have their own nested `<slug>/easychords` folder -- backs the one-time "Generate EASY CHORD
+    Versions" catch-up action (owner, 2026-09-23: "this idea will give me hundreds of new songs"; trigger 3
+    of 3 from the design spec). A song's own capo variant is naturally excluded here too, without
+    special-casing it -- its OWN key is the easy shape key it was converted to, so it never passes the
+    is_easy_key check itself."""
     root = Path(work_root)
     candidates = []
     for name in list_uploadable_songs(root):
-        if (root / f"{name}-capo").exists():
+        if (root / name / "easychords").exists():
             continue
         try:
             song = load_song(root / name / "lyrics_timed.json")
@@ -170,25 +187,22 @@ def _passes_for_upload(song_dir: Path) -> bool:
 
 
 def list_pending_uploads(work_root: Path) -> list[str]:
-    """Names of work_root's immediate subdirectories that have a rendered
-    video but no recorded YouTube upload yet -- backs the GUI's retry-upload
-    dropdown for a failed upload (e.g. YouTube's daily uploadLimitExceeded
-    cap) on a song that isn't self._last_work_dir (only set by Generate/Redo
-    in the same session, not Batch). Filesystem-only, no live YouTube call:
-    schedule_upload() only ever writes youtube_state.json AFTER a successful
-    upload, so a missing one is already the right signal that nothing
-    succeeded -- no need for a network round trip per song just to build
-    this list."""
+    """Names (or "<song>/easychords" slugs) of work_root's songs that have a rendered video but no
+    recorded YouTube upload yet -- backs the GUI's retry-upload dropdown for a failed upload (e.g.
+    YouTube's daily uploadLimitExceeded cap) on a song that isn't self._last_work_dir (only set by
+    Generate/Redo in the same session, not Batch). Filesystem-only, no live YouTube call:
+    schedule_upload() only ever writes youtube_state.json AFTER a successful upload, so a missing one is
+    already the right signal that nothing succeeded -- no need for a network round trip per song just to
+    build this list. An EASY CHORD variant's own youtube_state.json is tracked independently of its
+    original song's, so one can be pending while the other is already uploaded, or vice versa."""
     if not work_root.exists():
         return []
-    return sorted(
-        entry.name
-        for entry in work_root.iterdir()
-        if entry.is_dir()
-        and not (entry / STATE_FILENAME).exists()
-        and song_video_path(entry) is not None
-        and not _held_for_review(entry)
-    )
+    return [
+        slug for slug, path in _candidate_song_dirs(work_root)
+        if not (path / STATE_FILENAME).exists()
+        and song_video_path(path) is not None
+        and not _held_for_review(path)
+    ]
 
 
 def needs_review(song_dir: Path) -> bool:
@@ -215,20 +229,17 @@ def _held_for_review(song_dir: Path) -> bool:
 
 
 def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[str]:
-    """Names of work_root's immediate subdirectories whose lyrics were
-    never confirmed accurate by check_lyric_accuracy() across every source
-    tried (Song.lyrics_accuracy_concern non-empty) and that haven't been
-    uploaded yet -- backs the GUI's "Flagged for Lyrics Review" list. Same
-    not-yet-uploaded convention as list_pending_uploads() above, so a song
-    naturally drops off this list once the owner uploads it anyway (via
-    the review panel's own Upload Anyway) without needing a separate
-    "dismiss" action -- and once a later Redo's fresh fetch clears the
-    concern, it drops off too."""
+    """Names (or "<song>/easychords" slugs) of work_root's songs whose lyrics were never confirmed
+    accurate by check_lyric_accuracy() across every source tried (Song.lyrics_accuracy_concern non-empty)
+    and that haven't been uploaded yet -- backs the GUI's "Flagged for Lyrics Review" list. Same
+    not-yet-uploaded convention as list_pending_uploads() above, so a song naturally drops off this list
+    once the owner uploads it anyway (via the review panel's own Upload Anyway) without needing a separate
+    "dismiss" action -- and once a later Redo's fresh fetch clears the concern, it drops off too."""
     if not work_root.exists():
         return []
     flagged = []
-    for entry in sorted(work_root.iterdir(), key=lambda e: e.name):
-        if not entry.is_dir() or (song_video_path(entry) is None and not held_before_video(entry)):
+    for slug, entry in _candidate_song_dirs(work_root):
+        if song_video_path(entry) is None and not held_before_video(entry):
             continue
         if not include_uploaded and (entry / STATE_FILENAME).exists():
             continue
@@ -241,12 +252,12 @@ def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[
             continue
         concern = song.lyrics_accuracy_concern
         if held_before_video(entry):
-            flagged.append(entry.name)              # no video yet: Edit Lyrics / Redo / Render Anyway (whatever the mark is now)
+            flagged.append(slug)              # no video yet: Edit Lyrics / Redo / Render Anyway (whatever the mark is now)
             continue
         if verification(entry):
             continue                                # approved by the owner: not up for review any more
         if (concern and not is_gate_concern(concern)) or hold_if_timing_fails(entry):
-            flagged.append(entry.name)
+            flagged.append(slug)
     return flagged
 
 
@@ -506,11 +517,12 @@ def _record_finished(work_dir: Path, song: Song, share: float | None = None) -> 
     try:
         note_redo_finished(work_dir, concern=song.lyrics_accuracy_concern)
         try:
+            slug = display_slug(work_dir)
             if song.lyrics_accuracy_concern:
-                record_removed(work_dir.name, song.lyrics_accuracy_concern[:300])
+                record_removed(slug, song.lyrics_accuracy_concern[:300])
             else:
                 note = f"passed the lyric and timing checks at {percent_display(share)}" if share is not None else "passed the lyric and timing checks"
-                record_cleared(work_dir.name, note)
+                record_cleared(slug, note)
         except Exception as e:
             print(f"WARNING: could not update the cleared-songs record ({type(e).__name__}: {e})", file=sys.stderr)
     except Exception as e:
@@ -882,15 +894,19 @@ def run_pipeline(
 
 
 def build_capo_variant(work_dir: Path, audio_path_override: Path | str | None = None) -> Path | None:
-    """Builds and renders a sibling `<work_dir.name>-capo` work dir: the same song's lyrics,
-    timing, and images, converted to easy open-chord shapes via a capo -- see
-    docs/superpowers/specs/2026-09-23-capo-easy-chord-videos-design.md ("EASY CHORD Play Along
-    videos"). No new AI/Replicate spend: images are copied from the original, never regenerated,
-    and only the render stage runs.
+    """Builds and renders a `<work_dir>/easychords` work dir NESTED inside the original song's own folder
+    (owner, 2026-09-23: "i dont need twice the folder" -- was a sibling `<slug>-capo` folder next to it
+    until this point): the same song's lyrics, timing, and images, converted to easy open-chord shapes via
+    a capo -- see docs/superpowers/specs/2026-09-23-capo-easy-chord-videos-design.md ("EASY CHORD Play
+    Along videos"). No new AI/Replicate spend: images are copied from the original, never regenerated, and
+    only the render stage runs. Still tracked/listed/uploadable as its own distinct song everywhere else
+    (list_rendered_songs()/list_uploadable_songs()/list_pending_uploads() all look one level deeper for
+    this "easychords" subfolder) -- models.display_slug() gives it a unique slug ("<song>/easychords")
+    wherever a bare directory name (always literally "easychords") would otherwise collide across songs.
 
     Returns None (nothing built) if `work_dir` has no finished `lyrics_timed.json` yet, or if the
     song's own key is already easy (capo_and_shape_key) -- there's nothing to convert. Idempotent:
-    a second call just re-renders the same `-capo` dir.
+    a second call just re-renders the same nested dir.
 
     `audio_path_override` is for the case load_redo_inputs() can't resolve on its own -- a song
     recorded before run_pipeline() kept its own local audio copy, whose original external
@@ -910,7 +926,7 @@ def build_capo_variant(work_dir: Path, audio_path_override: Path | str | None = 
     info = json.loads(info_path.read_text(encoding="utf-8"))
     original_title = info["title"]
 
-    capo_work_dir = work_dir.parent / f"{work_dir.name}-capo"
+    capo_work_dir = work_dir / "easychords"
     capo_work_dir.mkdir(parents=True, exist_ok=True)
 
     capo_info = {**info, "title": f"{original_title} EasyChords"}

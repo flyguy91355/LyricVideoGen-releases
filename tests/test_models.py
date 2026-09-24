@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from lyricvideo.models import (
     ChordEvent,
@@ -7,11 +8,23 @@ from lyricvideo.models import (
     Song,
     Word,
     current_chord_at,
+    display_slug,
     line_hash,
     load_song,
     next_chord_after,
     save_song,
 )
+
+
+def test_display_slug_is_the_plain_directory_name_for_an_ordinary_song():
+    assert display_slug(Path("work/bridge-over-troubled-water")) == "bridge-over-troubled-water"
+
+
+def test_display_slug_includes_the_parent_for_a_nested_easychords_variant():
+    # Owner, 2026-09-23: "i dont need twice the folder" -- an EASY CHORD (capo) variant lives nested at
+    # work/<song>/easychords/, so its OWN directory name alone ("easychords") is the same for every song
+    # and would collide if used bare anywhere a slug needs to be unique (e.g. cleared_log.py's history).
+    assert display_slug(Path("work/bridge-over-troubled-water/easychords")) == "bridge-over-troubled-water/easychords"
 
 
 def test_lyric_line_text_joins_words():

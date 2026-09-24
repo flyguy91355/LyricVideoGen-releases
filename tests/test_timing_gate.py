@@ -206,6 +206,14 @@ def test_a_rendered_song_that_fails_the_check_appears_for_review_with_the_reason
     assert "80%" in load_song(tmp_path / "bad" / "lyrics_timed.json").lyrics_accuracy_concern
 
 
+def test_a_nested_easychords_variant_that_fails_the_check_is_flagged_under_its_own_slug(tmp_path):
+    # Owner, 2026-09-23: "i dont need twice the folder" -- nested at <song>/easychords/, but still its own
+    # independently checked/flagged song.
+    _rendered(tmp_path / "bridge-over-troubled-water", "easychords", placed({1: 1.0, 6: -1.0}))
+
+    assert list_flagged_songs(tmp_path) == ["bridge-over-troubled-water/easychords"]
+
+
 def test_a_fresh_render_takes_the_alignment_that_is_in_sync_and_reports_no_concern():
     drifted = placed({k: -3.0 * (k - 3) for k in range(4, 10)})
 
@@ -444,7 +452,7 @@ def test_easy_chord_backfill_lists_only_a_passing_hard_key_song(tmp_path):
 def test_easy_chord_backfill_excludes_a_song_already_converted(tmp_path):
     _rendered(tmp_path, "hard", placed())
     _set_key(tmp_path, "hard", "Eb major")
-    (tmp_path / "hard-capo").mkdir()   # already has its own capo variant -- don't offer it again
+    (tmp_path / "hard" / "easychords").mkdir()   # already has its own capo variant -- don't offer it again
 
     assert list_easy_chord_backfill_candidates(tmp_path) == []
 
@@ -529,6 +537,20 @@ def test_the_upload_list_row_says_a_song_was_verified_by_the_owner_and_what_the_
 
     assert upload_label(tmp_path / "plain") == "plain"
     assert upload_label(tmp_path / "checked") == "checked  ✔ verified by you (83% automatic)"
+
+
+def test_upload_label_and_mark_verified_use_a_unique_slug_for_a_nested_easychords_variant(tmp_path):
+    # Owner, 2026-09-23: "i dont need twice the folder" -- an EASY CHORD (capo) variant's own directory is
+    # always literally named "easychords", the same for every song, so the label/log slug must include its
+    # parent to stay distinguishable.
+    _save(tmp_path / "bridge-over-troubled-water" / "easychords", placed({1: 1.0, 6: -1.0}))
+
+    mark_verified(tmp_path / "bridge-over-troubled-water" / "easychords", automatic_share=0.83)
+
+    assert upload_label(tmp_path / "bridge-over-troubled-water" / "easychords") == \
+        "bridge-over-troubled-water/easychords  ✔ verified by you (83% automatic)"
+    from lyricvideo import cleared_log
+    assert [e["slug"] for e in cleared_log.cleared_songs()] == ["bridge-over-troubled-water/easychords"]
 
 
 def _gui_with_a_failing_song(tmp_path, monkeypatch, answer):

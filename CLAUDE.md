@@ -548,7 +548,7 @@ lazy-build pattern) has Approve (posts, marks
 loads `.env` itself, and stops cleanly on a quota error instead of
 failing every remaining song (9-17). EASY/3-/4-CHORD use `is_easy_key`
 (open C/D/E/G/A/Am/Dm/Em, F/B excluded). `pipeline.build_capo_variant()`
-(9-23 spec) renders a `<slug>-capo` video: same audio/lyrics/images, chords
+(9-23 spec) renders `<slug>/easychords` (nested): same audio/lyrics/images, chords
 re-spelled via `capo_and_shape_key()`, `draw_capo_badge()` shows CAPO N under
 the legend; Settings/Redo/backfill/upload triggers exist -- `easy_chord_capo.json` backs the title/description.
 

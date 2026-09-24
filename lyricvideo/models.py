@@ -83,6 +83,18 @@ class Song:
     lyrics_accuracy_concern: str = ""   # "" means check_lyric_accuracy() passed; non-empty = flagged
 
 
+def display_slug(work_dir: Path) -> str:
+    """The slug to show/log for work_dir -- ordinarily just its own directory name, but an EASY CHORD
+    (capo) variant's directory is always literally named "easychords" (nested inside its original song's
+    own folder, owner 2026-09-23: "i dont need twice the folder"), which would collide across every song
+    if used bare anywhere a slug needs to stay unique (e.g. cleared_log.py's history, upload_label()).
+    Falls back to "<parent>/easychords" in that one case; every other folder is unaffected."""
+    work_dir = Path(work_dir)
+    if work_dir.name == "easychords":
+        return f"{work_dir.parent.name}/easychords"
+    return work_dir.name
+
+
 def line_hash(text: str) -> str:
     return hashlib.sha256(text.strip().lower().encode("utf-8")).hexdigest()[:16]
 

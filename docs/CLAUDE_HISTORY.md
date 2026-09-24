@@ -3919,3 +3919,37 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   else already run against this channel today, had already spent a meaningful chunk of the 10,000-unit daily
   cap. Stopped cleanly as designed; re-running after the midnight-Pacific reset picks up exactly where it left
   off (idempotent, `organize_video()` checks membership before adding).
+
+## 2026-09-23 (later still): EASY CHORD variant moved from a sibling folder to a nested one
+
+- Owner: "lets put them both in the same work folder.. i dont need twice the folder." Explained the real
+  cost up front: almost every song-listing function in this app (Upload to YouTube, Pending Uploads,
+  Flagged for Review, the backup-before-redo step) assumes "one folder = one song, with the same three
+  fixed filenames (lyrics_timed.json/song_info.json/youtube_state.json) inside it" -- merging both videos'
+  full data into ONE folder under different filenames would mean teaching every one of those ~15-20 call
+  sites which song it means. Offered a middle ground instead: keep the capo variant as its own real
+  folder (so none of that logic has to change), just NESTED inside the original song's folder
+  (`<slug>/easychords/`) instead of sitting next to it as a sibling `<slug>-capo`. Owner picked that.
+- `pipeline.build_capo_variant()`'s target changed from `work_dir.parent / f"{work_dir.name}-capo"` to
+  `work_dir / "easychords"`. New `pipeline._candidate_song_dirs()` is the one place that now knows to also
+  look one level deeper for this nested folder; `list_rendered_songs()`/`list_pending_uploads()`/
+  `list_flagged_songs()` were rewritten on top of it (each still applies its own existing per-song
+  predicate, unchanged). `list_redoable_songs()` deliberately does NOT use it -- a capo variant is rebuilt
+  via `build_capo_variant()` (idempotent), never "Redo"-d through the normal fetch_lyrics-onward pipeline,
+  which would pointlessly re-decide lyrics/chords a derived video has no business re-deciding.
+- Real bug caught before it shipped: every nested variant's own directory is literally named "easychords"
+  -- the same for every song -- so anything that derived a slug from `work_dir.name` alone (cleared_log.py's
+  history via `_record_finished()`, and `owner_verified.py`'s `upload_label()`/`mark_verified()`) would
+  have collided across every song's capo variant. Fixed with `models.display_slug()`, a small shared
+  helper that returns `"<parent>/easychords"` for that one case and the plain name for everything else.
+- Owner, after seeing the actual diff size: "all that just to do what i ask? seems like alot of work for a
+  very simple task." Fair -- explained plainly that the folder-layout ask was simple, but the codebase's
+  "one folder = one song" assumption is load-bearing in a lot of places, which is exactly why it was
+  flagged as bigger-than-it-looks before starting, not after. Then, separately: "doesnt really need a
+  subfolder does it? ... they have diff file names correct?" -- only the .mp4 filenames differ; the other
+  three per-song files do not, which is the actual reason every song needs its own folder today. Owner
+  accepted nesting as the right tradeoff once that was clear.
+- Migrated the one real capo folder already on disk (`bridge-over-troubled-water-capo`, built earlier the
+  same day, before `easy_chord_capo.json` existed) into the new nested location and backfilled its marker
+  file by hand with the same values `build_capo_variant()` would have written, rather than a full ~18-minute
+  re-render for a file move.

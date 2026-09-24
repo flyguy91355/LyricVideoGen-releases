@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .cleared_log import record_cleared
+from .models import display_slug
 
 FILENAME = "owner_verified.json"
 
@@ -40,7 +41,7 @@ def mark_verified(song_dir: Path, automatic_share: float | None = None, needed: 
     }
     (song_dir / FILENAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
     score = "no automatic score" if automatic_share is None else f"automatic {automatic_share:.0%}"
-    record_cleared(song_dir.name, f"verified by the owner ({score})")
+    record_cleared(display_slug(song_dir), f"verified by the owner ({score})")
 
 
 def verification(song_dir: Path) -> dict | None:
@@ -57,8 +58,9 @@ def verification(song_dir: Path) -> dict | None:
 def upload_label(song_dir: Path) -> str:
     """The row text in the Upload to YouTube list: the song's name, plus who vouched for it when the owner did."""
     song_dir = Path(song_dir)
+    slug = display_slug(song_dir)
     record = verification(song_dir)
     if record is None:
-        return song_dir.name
+        return slug
     share = record.get("automatic_share")
-    return f"{song_dir.name}  ✔ verified by you ({'no automatic score' if share is None else f'{share:.0%} automatic'})"
+    return f"{slug}  ✔ verified by you ({'no automatic score' if share is None else f'{share:.0%} automatic'})"

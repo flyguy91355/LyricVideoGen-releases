@@ -683,6 +683,26 @@ def test_list_rendered_songs_returns_empty_list_when_work_dir_missing(tmp_path):
     assert list_rendered_songs(tmp_path / "does-not-exist") == []
 
 
+def test_list_rendered_songs_includes_a_nested_easychords_variant_as_its_own_distinct_song(tmp_path):
+    """Owner, 2026-09-23: "i dont need twice the folder" -- the EASY CHORD (capo) variant lives nested at
+    <song>/easychords/ instead of a sibling `<song>-capo` folder, but must still be its own separately
+    listed/uploadable song everywhere else."""
+    work_root = tmp_path / "work"
+    song_dir = work_root / "bridge-over-troubled-water"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Bridge Over Troubled Water", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "bridge-over-troubled-water.mp4").write_bytes(b"video")
+
+    capo_dir = song_dir / "easychords"
+    capo_dir.mkdir()
+    save_song(Song(title="Bridge Over Troubled Water EasyChords", audio_path="a.mp3"), capo_dir / "lyrics_timed.json")
+    (capo_dir / "bridge-over-troubled-water-easychords.mp4").write_bytes(b"video")
+
+    assert list_rendered_songs(work_root) == [
+        "bridge-over-troubled-water", "bridge-over-troubled-water/easychords",
+    ]
+
+
 def test_list_pending_uploads_finds_a_rendered_song_with_no_youtube_state(tmp_path):
     work_root = tmp_path / "work"
     song_dir = work_root / "angie-rolling-stones"
@@ -691,6 +711,24 @@ def test_list_pending_uploads_finds_a_rendered_song_with_no_youtube_state(tmp_pa
     (song_dir / "angie.mp4").write_bytes(b"video")
 
     assert list_pending_uploads(work_root) == ["angie-rolling-stones"]
+
+
+def test_list_pending_uploads_includes_a_nested_easychords_variant_independently(tmp_path):
+    """The original song can already be uploaded while its EASY CHORD variant is still pending, or vice
+    versa -- each one's own youtube_state.json is tracked separately."""
+    work_root = tmp_path / "work"
+    song_dir = work_root / "bridge-over-troubled-water"
+    song_dir.mkdir(parents=True)
+    save_song(Song(title="Bridge Over Troubled Water", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / "bridge-over-troubled-water.mp4").write_bytes(b"video")
+    (song_dir / "youtube_state.json").write_text("{}", encoding="utf-8")   # original already uploaded
+
+    capo_dir = song_dir / "easychords"
+    capo_dir.mkdir()
+    save_song(Song(title="Bridge Over Troubled Water EasyChords", audio_path="a.mp3"), capo_dir / "lyrics_timed.json")
+    (capo_dir / "bridge-over-troubled-water-easychords.mp4").write_bytes(b"video")   # capo variant not uploaded yet
+
+    assert list_pending_uploads(work_root) == ["bridge-over-troubled-water/easychords"]
 
 
 def test_list_pending_uploads_excludes_a_song_already_recorded_as_uploaded(tmp_path):
@@ -1644,6 +1682,19 @@ def test_a_finished_run_with_no_concern_is_recorded_as_cleared(tmp_path, monkeyp
     assert [e["slug"] for e in cleared_songs()] == ["work"]
 
 
+def test_a_nested_easychords_work_dir_is_recorded_under_its_own_unique_slug(tmp_path, monkeypatch):
+    """Owner, 2026-09-23: "i dont need twice the folder" -- an EASY CHORD (capo) variant's own directory is
+    always literally named "easychords" (nested inside its original song's folder), the same for every
+    song; cleared_log.py's history must still record which song it actually was."""
+    from lyricvideo.cleared_log import cleared_songs
+
+    _patch_common(monkeypatch, tmp_path)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work" / "bridge-over-troubled-water" / "easychords")
+
+    assert [e["slug"] for e in cleared_songs()] == ["bridge-over-troubled-water/easychords"]
+
+
 def test_a_finished_run_records_the_real_achieved_percentage_not_just_a_flat_pass_message(tmp_path, monkeypatch):
     """Owner, 2026-09-23: "i want to know how close it is when actually creating a video" -- a flat "it passed"
     note says nothing about whether a song squeaked by or breezed through."""
@@ -1803,7 +1854,7 @@ def test_build_capo_variant_returns_none_for_an_already_easy_key_song(tmp_path):
     _write_original_song_for_capo(work_dir, key="C major")
 
     assert build_capo_variant(work_dir) is None
-    assert not (tmp_path / "work" / "some-song-capo").exists()
+    assert not (tmp_path / "work" / "some-song" / "easychords").exists()
 
 
 def test_build_capo_variant_returns_none_with_no_lyrics_timed_json_yet(tmp_path):
@@ -1821,7 +1872,9 @@ def test_build_capo_variant_builds_the_capo_dir_and_renders_it(tmp_path, monkeyp
 
     out_path = build_capo_variant(work_dir, audio_path_override=override_audio)
 
-    capo_work_dir = tmp_path / "work" / "bridge-over-troubled-water-capo"
+    # Owner, 2026-09-23: "i dont need twice the folder" -- nested inside the original song's own folder,
+    # not a sibling `-capo` folder next to it.
+    capo_work_dir = tmp_path / "work" / "bridge-over-troubled-water" / "easychords"
     assert out_path == capo_work_dir / "bridge-over-troubled-water-easychords.mp4"
 
     capo_info = json.loads((capo_work_dir / "song_info.json").read_text(encoding="utf-8"))
