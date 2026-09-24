@@ -89,6 +89,14 @@ class Settings:
     include_seventh_chords: bool = False
     min_chord_seconds: float = 0.5
 
+    # --- EASY CHORD capo videos (pipeline.build_capo_variant) -------------
+    generate_easy_chord_versions: bool = False  # owner, 2026-09-23: when on, every future Generate/Redo/
+                                                 # Batch run that lands in a hard key also builds a
+                                                 # `<slug>-capo` EASY CHORD variant -- no extra AI/Replicate
+                                                 # cost (images/audio are reused, only the render re-runs).
+                                                 # Off by default, matching this app's existing convention
+                                                 # for opt-in extra renders (e.g. Redo's "Generate new images").
+
     # --- Quality check (timing_gate.py) -----------------------------------
     timing_pass_percent: int = 90            # a video is "good" when at least this share of its lyric lines start
                                               # within half a second of the singing; only good ones are offered for

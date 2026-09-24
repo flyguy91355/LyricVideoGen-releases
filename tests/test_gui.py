@@ -1279,6 +1279,38 @@ def test_redo_refuses_when_the_original_audio_file_is_gone(monkeypatch, tmp_path
     assert "Angie" in shown[0][1]
 
 
+def test_on_redo_passes_the_easy_chord_checkbox_through_to_the_worker_thread(monkeypatch, tmp_path):
+    """Owner, 2026-09-23: the per-Redo "Easy Chords" checkbox must reach the worker thread as
+    force_easy_chord, so a redo can build the capo variant for one song without touching the global
+    Settings toggle."""
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    audio_path = tmp_path / "angie.mp3"
+    audio_path.write_bytes(b"fake")
+    monkeypatch.setattr("lyricvideo.gui.load_redo_inputs", lambda song_dir: (audio_path, "Angie"))
+    monkeypatch.setattr("lyricvideo.gui.backup_song_outputs", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda *a, **k: True)
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+
+    calls = []
+    button = SimpleNamespace(configure=lambda **kw: None)
+    stub = _gui_stub(
+        _running=False,
+        redo_song_var=SimpleNamespace(get=lambda: "angie"),
+        redo_new_images_var=SimpleNamespace(get=lambda: False),
+        redo_easy_chord_var=SimpleNamespace(get=lambda: True),
+        generate_button=button, redo_button=button, batch_button=button,
+        status_var=SimpleNamespace(set=lambda v: None),
+        progress_bar=SimpleNamespace(set=lambda v: None),
+        _clear_log=lambda: None,
+        _run_worker=lambda *a, **k: calls.append((a, k)),
+        _poll_queue=lambda: None,
+    )
+
+    LyricVideoGUI._on_redo(stub)
+
+    assert calls == [((audio_path, tmp_path / "work" / "angie", "Angie", "fetch_lyrics"), {"force_easy_chord": True})]
+
+
 def test_retry_upload_refuses_when_nothing_is_selected(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.threading.Thread", _must_not_run)
     shown = []
@@ -1401,6 +1433,102 @@ def test_upload_selected_pending_uploads_only_the_checked_songs(monkeypatch):
     LyricVideoGUI._on_upload_selected_pending(stub)
 
     assert started == [["song-a", "song-c"]]
+
+
+# --- EASY CHORD (capo) backfill: trigger 3 of 3 from the design spec -------------------------------------
+
+def test_generate_selected_easy_chord_backfill_refuses_when_nothing_is_checked(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _must_not_run)
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, msg: shown.append((title, msg)))
+
+    stub = _gui_stub(_running=False, _easy_chord_backfill_vars={"song-a": SimpleNamespace(get=lambda: False)})
+    LyricVideoGUI._on_generate_selected_easy_chord_backfill(stub)
+
+    assert [title for title, _ in shown] == ["No songs selected"]
+
+
+def test_generate_selected_easy_chord_backfill_does_nothing_if_declined(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _must_not_run)
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda *a, **k: False)
+
+    stub = _gui_stub(_running=False, _easy_chord_backfill_vars={"song-a": SimpleNamespace(get=lambda: True)})
+    LyricVideoGUI._on_generate_selected_easy_chord_backfill(stub)  # must not raise (Thread must_not_run confirms it never starts)
+
+
+def test_generate_selected_easy_chord_backfill_starts_the_worker_with_only_the_checked_songs(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda *a, **k: True)
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+    button = SimpleNamespace(configure=lambda **kw: None)
+    calls = []
+    stub = _gui_stub(
+        _running=False,
+        _easy_chord_backfill_vars={
+            "song-a": SimpleNamespace(get=lambda: True),
+            "song-b": SimpleNamespace(get=lambda: False),
+        },
+        generate_button=button, redo_button=button, batch_button=button,
+        generate_easy_chord_backfill_button=button,
+        status_var=SimpleNamespace(set=lambda v: None),
+        progress_bar=SimpleNamespace(set=lambda v: None),
+        _clear_log=lambda: None,
+        _run_easy_chord_backfill_worker=lambda slugs: calls.append(slugs),
+        _poll_queue=lambda: None,
+    )
+
+    LyricVideoGUI._on_generate_selected_easy_chord_backfill(stub)
+
+    assert calls == [["song-a"]]
+    assert stub._running is True
+
+
+def test_run_easy_chord_backfill_worker_tolerates_one_songs_failure_and_reports_both(monkeypatch):
+    """One bad song must never abort the rest -- same convention as _run_batch_worker."""
+    built = []
+
+    def fake_build_capo_variant(work_dir):
+        built.append(work_dir.name)
+        if work_dir.name == "bad-song":
+            raise RuntimeError("boom")
+        return work_dir / f"{work_dir.name}-easychords.mp4"
+
+    monkeypatch.setattr("lyricvideo.gui.build_capo_variant", fake_build_capo_variant)
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", Path("/repo"))
+    stub = _gui_stub(_queue=queue.Queue())
+
+    LyricVideoGUI._run_easy_chord_backfill_worker(stub, ["good-song", "bad-song"])
+
+    assert built == ["good-song", "bad-song"]
+    messages = []
+    while not stub._queue.empty():
+        messages.append(stub._queue.get_nowait())
+    done_kind, results = messages[-1]
+    assert done_kind == "easy_chord_backfill_done"
+    assert results["succeeded"] == ["good-song"]
+    assert results["failed"][0][0] == "bad-song" and "boom" in results["failed"][0][1]
+
+
+def test_easy_chord_backfill_done_resets_running_state_and_reports_a_summary(monkeypatch):
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda title, msg: shown.append((title, msg)))
+    button_states = []
+    button = SimpleNamespace(configure=lambda **kw: button_states.append(kw))
+    stub = _gui_stub(
+        _running=True,
+        generate_button=button, redo_button=button, batch_button=button,
+        generate_easy_chord_backfill_button=button,
+        status_var=SimpleNamespace(set=lambda v: None),
+        progress_bar=SimpleNamespace(set=lambda v: None),
+        _invalidate_easy_chord_backfill_list=lambda: None,
+        _refresh_retry_upload_options=lambda: None,
+    )
+
+    LyricVideoGUI._on_easy_chord_backfill_done(stub, {"succeeded": ["a"], "failed": [("b", "RuntimeError: boom")]})
+
+    assert stub._running is False
+    assert {"state": "normal"} in button_states
+    assert "Built 1 EASY CHORD version(s)." in shown[0][1]
+    assert "b: RuntimeError: boom" in shown[0][1]
 
 
 class _FakeBooleanVar:
@@ -1955,6 +2083,41 @@ def test_redoing_a_removed_song_brings_it_back_to_review(monkeypatch):
     assert brought_back == [("flagged", "a")]
 
 
+def test_run_worker_force_easy_chord_overrides_the_setting_for_this_one_run_only(monkeypatch):
+    """Owner, 2026-09-23: "i could redo a song with easy chords checked.. it would redo that song with the
+    capo and easy chords" -- a per-Redo request must work even when the global Settings toggle is off, and
+    must never flip that global toggle itself (self.settings stays untouched -- a later plain Redo/Generate
+    must not silently inherit it)."""
+    captured = {}
+    monkeypatch.setattr(
+        "lyricvideo.gui.run_pipeline",
+        lambda *a, **k: captured.setdefault("settings", k["settings"]) or Path("work/a/a.mp4"),
+    )
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: None)
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings(generate_easy_chord_versions=False))
+
+    LyricVideoGUI._run_worker(stub, Path("a.mp3"), Path("work/a"), "A", "fetch_lyrics", force_easy_chord=True)
+
+    assert captured["settings"].generate_easy_chord_versions is True
+    assert stub.settings.generate_easy_chord_versions is False  # the shared object itself is untouched
+
+
+def test_run_worker_without_force_easy_chord_passes_settings_through_unchanged(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "lyricvideo.gui.run_pipeline",
+        lambda *a, **k: captured.setdefault("settings", k["settings"]) or Path("work/a/a.mp4"),
+    )
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: None)
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings(generate_easy_chord_versions=False))
+
+    LyricVideoGUI._run_worker(stub, Path("a.mp3"), Path("work/a"), "A", "fetch_lyrics")
+
+    assert captured["settings"] is stub.settings
+
+
 def test_a_batch_that_regenerates_a_removed_song_brings_it_back_to_review(monkeypatch):
     brought_back = []
     monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: brought_back.append((list_name, slug)))
@@ -2015,5 +2178,63 @@ def test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show(tmp_pat
         root.update_idletasks()
 
         assert 0 < _widest_button_row(frame) <= 480
+    finally:
+        root.destroy()
+
+
+# --- a popup's own window-close button must actually close it (owner, 2026-09-22: "the popups didnt close
+# either.. nothing did" -- CLAUDE.md's own 9-10 history already found this exact failure mode once: Tk does
+# nothing when a window's close button is clicked unless the app explicitly binds WM_DELETE_WINDOW) ---
+
+def _assert_dialog_closes_via_its_own_close_button(root, ctk) -> None:
+    dialogs = [w for w in root.winfo_children() if isinstance(w, ctk.CTkToplevel)]
+    assert len(dialogs) == 1
+    dialog = dialogs[0]
+    close_command = dialog.protocol("WM_DELETE_WINDOW")
+    assert close_command, "no WM_DELETE_WINDOW handler is bound -- the window's own close button does nothing"
+    dialog.tk.call(close_command)
+    root.update_idletasks()
+    assert not dialog.winfo_exists()
+
+
+def test_whisper_text_popup_closes_via_its_own_window_close_button(tmp_path, monkeypatch):
+    import customtkinter as ctk
+    try:
+        root = ctk.CTk()
+    except Exception:
+        pytest.skip("no display available for a real window")
+    try:
+        root.withdraw()
+        monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr("lyricvideo.gui.whisper_lines_for", lambda work_dir: ["a line"])
+        stub = SimpleNamespace(root=root)
+
+        LyricVideoGUI._on_whisper_text_flagged(stub, "some-song")
+        root.update_idletasks()
+
+        _assert_dialog_closes_via_its_own_close_button(root, ctk)
+    finally:
+        root.destroy()
+
+
+def test_edit_lyrics_dialog_closes_via_its_own_window_close_button(tmp_path, monkeypatch):
+    import customtkinter as ctk
+    try:
+        root = ctk.CTk()
+    except Exception:
+        pytest.skip("no display available for a real window")
+    try:
+        root.withdraw()
+        monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+        from lyricvideo.models import Song, save_song
+        song_dir = tmp_path / "work" / "some-song"
+        song_dir.mkdir(parents=True)
+        save_song(Song(title="Some Song", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+        stub = SimpleNamespace(root=root)
+
+        LyricVideoGUI._open_lyrics_editor(stub, "some-song")
+        root.update_idletasks()
+
+        _assert_dialog_closes_via_its_own_close_button(root, ctk)
     finally:
         root.destroy()

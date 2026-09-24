@@ -1,4 +1,5 @@
 from lyricvideo.youtube_metadata import (
+    build_easy_chord_title,
     build_play_along_title,
     classify_genre,
     draft_comment_reply,
@@ -46,6 +47,17 @@ def test_build_play_along_title_with_known_artist():
 
 def test_build_play_along_title_without_artist():
     assert build_play_along_title("Some Song", "") == "Some Song - (Play Along Lyrics & Chords)"
+
+
+def test_build_easy_chord_title_with_known_artist():
+    assert (
+        build_easy_chord_title("Bridge Over Troubled Water", "Simon and Garfunkel", 1)
+        == "Bridge Over Troubled Water - Simon and Garfunkel - (EASY CHORDS Play Along - Capo 1)"
+    )
+
+
+def test_build_easy_chord_title_without_artist():
+    assert build_easy_chord_title("Some Song", "", 2) == "Some Song - (EASY CHORDS Play Along - Capo 2)"
 
 
 def test_generate_video_metadata_parses_description_and_tags():

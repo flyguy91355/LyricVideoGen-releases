@@ -3492,3 +3492,430 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   rare song without one already). `lyricvideo/gui.py`'s Whisper Text popup now joins these lines with `\n`
   instead of showing `whisper_text_for()`'s single flat block -- `whisper_text_for` itself is unchanged and no
   longer imported by `gui.py` at all (nothing else there used it).
+
+## 2026-09-22 (evening): `deep_review/` -- a separate side program to work through the review backlog
+
+- Owner: "a deep dive into the videos that have been set aside for review... using all the information you have and
+  can get from the internet, both text file and the mp3... it can use ai if need be. This programs goal is to
+  achieve at least 90% pass. This program when complete will be blended into the main program when it is complete
+  and say so." Explicitly a SEPARATE program (owner: "new folder, right?") to prove itself before any merge into
+  `lyricvideo/` -- named `deep_review/`, a new top-level package (own `tests/deep_review/`), importing FROM
+  `lyricvideo` as a library, never the other way. Not part of the shipped app: outside `apply.py`'s
+  `ALLOWED_PATH_PREFIXES`, so it's committed and pushed but no release was cut for it -- nothing to distribute yet.
+- A live census (`list_flagged_songs`, free, no API calls) found the 144 flagged songs fail for genuinely different
+  reasons: 103 lyrics-text-wrong (this program's actual target), 34 alignment-only (correct lyrics, imprecise
+  timing -- a different, separate problem, see the wav2vec2/MTG aligner TODO), 5 stale concerns that already pass
+  today (a free clear, no research needed), 1 damaged audio (`ironic`, not fixable by lyrics work), 1 undiagnosable.
+  Told the owner plainly: even at 100% success on every fixable song, the ceiling is 108/144 = 75%, not 90%, until
+  the alignment problem is tackled too -- owner chose to proceed anyway, one song at a time.
+- `diagnosis.py` (pure logic, no API calls) classifies each flagged song BEFORE any research is attempted: reuses
+  `is_gate_concern()` and a fresh `check_saved_song()` to catch a song that already passes now (including the
+  2026-09-21 stale-concern bug's leftovers -- `you-can-t-hurry-love`-style, cleared here even though this program's
+  job is lyrics, not that bug specifically); for a genuine timing-gate concern, classifies each out-of-sync line by
+  comparing its own words against what's actually heard nearby (`timing_gate.heard_text_near_line()`, extracted
+  from `pipeline.whisper_lines_for()` so both share one implementation) -- matching words heard outside the gate's
+  strict 0.5s window but inside the wider 2.5s search window means "right lyrics, just imprecise alignment"; words
+  that don't match at all means "wrong lyrics for this recording."
+- `research.py` asks Claude to find the real lyrics using its server-side web-search tool (`web_search_20260209`,
+  runs automatically inside one API call -- no client-side search loop to write) cross-referenced against the
+  Whisper transcript, returning full corrected lyric lines plus citations and a confidence level. Deliberately
+  NOT bound by `lyric_reconcile.py`'s "never build lyrics from memory, only from the transcript" rule -- a real
+  cited web source is evidence, not memory, the same category of thing the transcript already is (owner explicitly
+  confirmed this, "1 but 2 maybe as final" on whether web sources or audio should be the final authority) -- but a
+  song is never counted fixed on the research step's own self-reported confidence either way.
+- `runner.py` is the actual closed loop: diagnose, and for LYRICS_WRONG only, research; a "high" confidence result
+  is applied via the EXISTING `save_owner_lyrics()` mechanism (used exactly like a manual Edit-Lyrics override) and
+  run through a REAL redo (`backup_song_outputs` + `run_pipeline(start_stage="fetch_lyrics")`, the same path the
+  GUI's own Redo uses) -- "fixed" is only ever the REAL post-redo `check_saved_song()` recheck, never a guess or
+  the research step's own confidence. "Low" confidence or an unusable research result is left alone for manual
+  review, never applied. One song's crash is caught and logged; the rest of the run continues.
+- `needs_human.py` (owner: "there will be songs that can't be fixed without human intervention... placed in
+  another folder" -- his own words, self-corrected mid-sentence from "aborted folder") writes one small marker
+  file per song this run could not get to a real pass, in `deep_review_needs_human/` (gitignored, local review
+  state) -- never inside the song's own `work/<slug>/`, which the rest of the app expects at its usual path. A
+  song a later run does fix has its marker cleared automatically.
+- `__main__.py` (`python -m deep_review [--work] [--songs slug1,slug2] [--pilot N] [--dry-run]`) prints a report
+  and states plainly whether the 90% goal is met on the songs actually decided (dry-run results don't count).
+- Real, live pilot (owner: "Pilot on 1 song first, then another. Don't do a batch yet" -- after being told the
+  real cost, ~$3-6 total on Sonnet 5 for all 103 fixable songs): ran on `1979` for real. Diagnosed lyrics_wrong,
+  researched, applied, redone -- genuinely moved the needle (89.7%, needs 90%, only 3 lines off: 1, 16, 19) without
+  passing yet. Backed up first, same as any Redo; nothing uploaded. A real test-hygiene bug was caught and fixed
+  the same session: several of `test_runner.py`'s own tests called `run_deep_review()` without overriding
+  `needs_human_dir`, so they fell through to the real default and wrote synthetic slugs (`song-b.txt` etc.) into
+  the actual project's `deep_review_needs_human/` folder on every test run -- fixed with a test-local wrapper that
+  always isolates it under that test's own `tmp_path` unless a test is deliberately testing the marker itself.
+- Owner, same session: "how will it be sorted? i think the videos that are closest to the 90% ... so the easy
+  ones are done first." `run_deep_review()` now pre-diagnoses every candidate (free, no API calls) purely to sort:
+  cleanly-clearable songs first, then LYRICS_WRONG songs by descending `sync_share` (closest to the pass mark
+  first; no computable share sorts last within the group -- no evidence it's easy), everything this program can't
+  act on last (order doesn't matter there, it's only ever reported). This also means `--pilot N` (or the owner's
+  own one-at-a-time habit) naturally tries the easiest song first, not an arbitrary one.
+
+## 2026-09-22 (night): "these windows... will not close" -- a wrong hypothesis, corrected, no code bug found
+
+- Owner, after opening Whisper Text and Edit Lyrics on `1979` from the Flagged for Lyrics Review panel: neither
+  popup, nor the main window while they were open, would close. First hypothesis (by analogy to CLAUDE.md's own
+  9-10 history, "the binding was once shipped unwired"): `_on_whisper_text_flagged`/`_open_lyrics_editor` never
+  call `dialog.protocol("WM_DELETE_WINDOW", ...)` at all (confirmed by grep -- only the main window and the
+  Settings popup do). Synthetic testing was contradictory and mostly unreliable in this environment: `wmctrl -c`
+  reported ALL THREE windows (including the main one, which definitely has the binding) as failing to close;
+  `xdotool windowclose` reported the SAME windows as succeeding. Neither tool was trustworthy evidence either way.
+- Resolved it properly: a real-window test (`tests/test_gui.py`, the established hidden-CTk-root pattern) that
+  reads back whatever Tcl command is actually registered for `WM_DELETE_WINDOW` and invokes it directly --
+  bypassing the window manager and any input-simulation flakiness entirely -- proved that even a bare,
+  unmodified `ctk.CTkToplevel(root)` closes correctly by default (Tk itself registers a destroy-on-close command
+  automatically; nothing in this app's code needs to set one for the default behavior to work). The
+  "shipped unwired" hypothesis was wrong for these two dialogs -- there was no missing binding to add.
+- Conclusion: this was very likely the same class of issue as the earlier same-day "blank window" incident (see
+  above) -- a desktop/window-manager-level glitch in this specific long-running session (the process had been
+  alive for ~2 hours, with several dialogs opened and closed), not a defect in this app's Python code. Killed the
+  stuck processes (including one extra instance started during investigation) and had the owner relaunch fresh,
+  same remedy as before. The two new tests were kept anyway -- they're a real, correct regression guard for this
+  dialog-closing property even though no bug was found -- but no code was changed, and this entry says so plainly
+  rather than implying a fix that didn't happen. If this recurs again on a fresh, short-lived session (not just a
+  long-running one), that would point back at the code after all and this conclusion should be revisited.
+
+## 2026-09-22 (later still): deep_review retries -- "try for 100%... not identical re attemps"
+
+- Owner, after the `1979` pilot landed at 89.7% (not quite 90%) on its first and only attempt: "the goal of the
+  program is to get every song above 90% and try for 100%. if it cant get it above 89.7 ... if all avenues fail
+  then straight to human attention after all attemps have been made" -- then, separately, "and not identical re
+  attemps" when asked to just build it. The single-attempt design (research once, redo once, recheck once, done)
+  did not match this at all.
+- `runner.py`'s LYRICS_WRONG branch is now a loop, `MAX_ATTEMPTS = 3` (matching `imagery.py`'s own
+  `_MAX_GENERATION_ATTEMPTS` convention for "how many tries before giving up" elsewhere in this app). Between
+  attempts it RE-DIAGNOSES the song from its current on-disk state, not just rechecking the same question --
+  fixing most of a song's lyrics can turn what's left into a genuinely different problem (e.g. now alignment-only,
+  correct lyrics but imprecise timing), and continuing to spend lyrics-research attempts on that would be pointless.
+  The loop stops the moment it passes, the moment re-diagnosis says it's no longer LYRICS_WRONG at all (success or
+  a different unfixable category), or after `MAX_ATTEMPTS` is exhausted -- only then does it land on "left for
+  manual review". A research call that raises, or a redo that raises `HeldBeforeVideo`, is just another failed
+  avenue now -- it's retried like any other failure, not treated as a hard stop (an old test asserting an
+  immediate "failed" verdict was deliberately updated: repeated real failures now exhaust every attempt too,
+  landing on "left for manual review" with the real error kept in `detail`).
+- "Not identical re attempts": `research.py`'s `research_lyrics()`/`build_research_prompt()` gained
+  `previous_attempts` -- each retry is explicitly shown what earlier attempts on this same song tried and why it
+  didn't work ("do NOT just repeat one of these; find a genuinely different reading..."), rather than hoping web
+  search plus model sampling noise alone produces something different. `runner.py` accumulates this list across
+  the loop (including a one-line summary for a crashed or low-confidence attempt) and passes it to every
+  subsequent call. `SongResult` gained an `attempts` field (0 for categories that never try at all), surfaced in
+  the CLI's per-song report line.
+- Existing sort-order/limit tests needed updating too: a song whose research keeps coming back low-confidence now
+  gets re-researched up to 3 times before the run moves to the next song, so "which song was researched" checks
+  had to dedupe/compare sets instead of asserting exact call counts or a single-call ordering.
+
+## 2026-09-22 (still later): real, measured API cost -- "whats the estimated cost of this?" deserved a real answer
+
+- Live run on `1979` (background, while the owner asked follow-up questions) exhausted all 3 attempts for real
+  (89.7% -> 86.7% -> 87%, still failing -- attempt 3's own research notes said the wording already matches the
+  official studio-album lyrics, suggesting what's left may genuinely be alignment, not text) before the owner
+  asked "whats the estimated cost of this?" -- with no telemetry wired in yet, the only honest answer was a
+  ballpark guess ($0.02-0.08/attempt from typical token counts), not a real number.
+- `research.py`'s `research_lyrics()` now always returns a `ResearchAttempt` (`research: Research | None`,
+  `cost_usd: float`) instead of a bare `Research | None` -- the API call costs money whether or not the reply
+  was usable, so cost is tracked unconditionally, computed from the response's own `usage` block at Sonnet 5's
+  real per-token rate ($2/1M in, $10/1M out) via a small `_cost_usd()` helper that returns 0.0 rather than
+  raising if `usage` is missing/malformed (never let a cost estimate break a real result).
+- `runner.py` accumulates `cost_usd` across every attempt (including failed/low-confidence ones) into a new
+  `SongResult.cost_usd` field. `needs_human.py`'s marker file and `__main__.py`'s CLI report both show it
+  per-song, and the CLI report adds a total "Real API cost this run" line summed across every song -- omitted
+  entirely when it's zero (e.g. a run of only free `already_passes` clears).
+- This is a real, load-bearing lesson for the owner's own stated priorities: cost questions get real, measured
+  numbers going forward, not estimates presented as if they were measured.
+
+## 2026-09-22 (still later): first real fix -- "dreams" -- and a stale-text cosmetic bug
+
+- Live run: `dreams` (89.7%, one attempt) passed for real -- 90%, video rendered, $0.26 real cost. The first song
+  `deep_review` has genuinely fixed end to end.
+- Caught in that same report: a PASSING result's `detail` field still showed the ORIGINAL pre-fix concern text
+  ("SET ASIDE FOR REVIEW -- only 89.7%...") next to its own `[PASS]` mark -- `_review_one` sets `result.detail`
+  once, from the initial diagnosis, at the very top, and the success branch never cleared it. Fixed: the
+  `researched_and_redone`/`passed=True` branch now clears `result.detail` to "" (the ALREADY_PASSES branch's own
+  detail -- "no concern recorded" / "passes the current gate now (X%)" -- was already fine as-is and untouched).
+
+## 2026-09-22 (still later): "$0.26 ... thats a lot" -- cut the default search limit from 5 to 3
+
+- Owner questioned the real measured $0.26 cost on "dreams" as high compared to the earlier ballpark ($0.02-0.08).
+  Checked rather than just reassured: `dreams`' own transcript is tiny (1,219 characters, 230 words) -- nowhere
+  near enough alone to explain $0.26 at Sonnet 5's per-token rate. The real driver is `research_lyrics()`'s
+  server-side web search: each search round's real page content gets folded into one continuous exchange, so
+  every subsequent internal turn re-processes the growing context -- cost compounds with search rounds, not
+  with the (small) song-specific text. This also meant the EARLIER whole-backlog estimate ($3-6) was wrong --
+  revised live to $27-80 based on this one real data point, given to the owner plainly rather than repeating
+  the stale lower number.
+- Owner chose to cut cost before continuing rather than accept it or batch through it. `research_lyrics()`'s
+  `max_searches` default cut from 5 to 3 -- trades some cross-referencing breadth for materially fewer
+  compounding rounds per attempt. A new test pins the new default (5 was previously untested as a default,
+  only ever exercised via an explicit override in the existing override test).
+
+## 2026-09-22 (still later): a hard 5-cent-per-song cap, and skipping near-misses before spending anything
+
+- Owner: "i cant do any more than 5 cents per song, so make it so, if i have to do more, my opinion, its not
+  worth doing." Added `runner.MAX_COST_PER_SONG_USD = 0.05`, checked at the top of every attempt in the
+  LYRICS_WRONG retry loop (including implicitly before the first, since `result.cost_usd` starts at 0.0). This
+  can only ever stop further attempts from COMPOUNDING past the cap -- a single attempt's own cost is only
+  known after the call returns, so it cannot prevent one expensive call from itself landing over the cap (see
+  the same-day pilot-run entry below, where this limitation showed up for real).
+- Owner, same message: "song like 89.7. not sure if i need to spend more money on those as well." Real evidence
+  backed this up: `1979` sat at high 80s-90% for 3 full attempts and never moved, and its own research kept
+  concluding the lyrics probably already match the studio release -- a song already this close is more likely a
+  borderline alignment case than genuinely wrong lyrics, and money spent researching it is money spent on the
+  wrong diagnosis. Added `runner.SKIP_RESEARCH_ABOVE_SHARE = 0.85` (owner's own choice from a presented
+  multiple-choice: "Skip anything already at 85%+"), checked once against the INITIAL diagnosis only, before
+  any research call -- a song at or above this share is marked "left for manual review" at zero cost instead
+  of being sent to `research_lyrics()`. Not re-checked mid-retry: by the time a retry is in progress, real
+  money already bought real evidence either way, so the cap governs whether to keep going, not whether the
+  share itself disqualifies further spend.
+- Two existing ordering tests (`test_fixable_songs_are_researched_closest_to_passing_first`,
+  `test_a_pilot_limit_after_sorting_picks_the_easiest_songs_first`) had a fixture song at 87.5% -- now above the
+  new 85% cutoff, so it started getting skipped instead of researched first, which broke what those tests were
+  actually checking (research ordering, not the new skip policy). Fixed by shifting the fixtures' `bad_line_count`
+  values so all three songs land under 85% (75%/62.5%/50%), leaving the near-miss-skip behavior itself covered
+  by its own two new tests instead.
+
+## 2026-09-22 (still later): pilot run on the reduced search limit -- cost went UP, not down
+
+- Ran `python -m deep_review --pilot 1` to validate the max_searches=5->3 cut from the previous entry. Result:
+  `i-can-t-get-no-satisfaction` passed for real (100%, 1 attempt, video rendered) -- but cost $0.52, roughly
+  double `dreams`' earlier $0.26 at the OLD max_searches=5 default, not lower.
+- This contradicts the assumption behind the cut: fewer allowed search rounds does not reliably lower cost,
+  because a longer song's own transcript/lyrics text (fed into every prompt in full) can dominate the bill
+  regardless of search-round count. It also demonstrates the cap's documented limitation for real: a single
+  first attempt landed at 10x the owner's stated 5-cent/song ceiling, since `MAX_COST_PER_SONG_USD` can only
+  stop a NEXT attempt, never the one already in flight. Reported to the owner plainly rather than presented as
+  a win, since the fix did not do what it was meant to do.
+
+## 2026-09-22 (still later): `run_pipeline()` gains `end_stage` -- real quality checks with no image/render spend
+
+- Owner asked for a round 3 of the most-popular-songs batches (201-300), with a new requirement: every song in
+  the round must be at least 85% on the real timing gate before it's handed to him, with any that don't
+  make it swapped for an easier replacement -- "you said no AI cost right? so we will eliminate the hardest
+  songs and bring in the easiest." Checking a candidate's REAL share means actually running identify, separate,
+  fetch_lyrics and align against its audio -- but `run_pipeline()` had no way to stop there: every call ran
+  all the way through detect_chords/images/render, and images means real Replicate/Claude spend per candidate,
+  which is exactly what this vetting step must not do.
+- Added `end_stage` (TDD, `tests/test_pipeline.py`): stops the run right after the named stage, gating every
+  stage's own `if start_idx <= STAGES.index(X):` check with `<= end_idx` too, and returning `None` instead of
+  a nonexistent video path whenever the run stopped early. The default (`"render"`) reproduces every existing
+  caller's behavior byte-for-byte -- this is purely additive. One subtlety: the align stage's own `else: song =
+  load_song(timed_path)` branch was written only for "resuming past an align that already happened," so it had
+  to be narrowed to `elif start_idx > STAGES.index("align")` -- otherwise a vetting call stopping BEFORE align
+  even starts (e.g. `end_stage="fetch_lyrics"`) would hit that branch and crash trying to load a
+  `lyrics_timed.json` that was never written.
+- This is the building block for round 3's real vetting script (`~/most_popular_songs_round3_vet.py`, outside
+  the git repo like the rest of the most-popular-songs tooling): call `run_pipeline(..., end_stage="align")` on
+  each candidate into the real `work/` folder, then `timing_gate.check_saved_song()` for the real share -- a
+  song at or above 85% is accepted into the round, a song below is logged and skipped, and the next candidate
+  in fame order is tried in its place, until 100 real passes are found. No image/render spend happens for a
+  candidate that never gets that far, exactly matching the owner's "no AI cost" expectation for this step.
+
+## 2026-09-23: three real bugs caught live in the round 3 vetting run -- "seems odd there all passing"
+
+- Owner watched the round 3 vetting run's first 9 songs all pass (85-100%) and said "seems odd there all
+  passing.. lets stop and do a real check" -- a real, warranted instinct, not reassured away. Checked the
+  actual saved `lyrics_accuracy_concern` for each accepted song directly rather than trusting the summary:
+  "Michelle" (88.0% share) was actually only 49% lyrics-content match to the audio (half the song wrong);
+  "Across the Universe" (89.7% share) was 68% match with a whole verse missing. `round3_vet.py`'s accept rule
+  only checked the timing-gate SHARE (`check_saved_song`), never the separate lyrics-content-mismatch flag
+  `fetch_lyrics`'s own audio check (`lyric_audio_match.py`) already writes into that same saved concern --
+  simply never read. A wrong line's forced-aligned timing can still land near unrelated real singing and get
+  marked "unjudged" rather than "out of sync," letting a real word-content mismatch hide behind a fine-looking
+  share number. Fixed: reused `verify_lyrics._is_audio_check_concern()` (the app's own existing detector for
+  this exact phrasing) so a candidate is only accepted when it BOTH clears the timing bar AND carries no such
+  concern -- verified against real saved data for 4 songs, then live on "Under the Bridge" (70% match,
+  correctly rejected even at a share nowhere near the cutoff).
+- Fixing this exposed a second bug: the ad-hoc script used to manually move the two bad songs into
+  `round3_hard_songs.json` used a simpler normalizer than the real one (missing the "the/a/an" stripping),
+  so the exclusion silently never took effect -- caught by testing the fix's own output, not assuming it
+  worked, and corrected using the real `norm()` from the module.
+- A third: killing a run mid-Demucs left a `work/<slug>/song_info.json` with no `lyrics_timed.json` --
+  `already_and_work_titles()`'s "already produced (work folder)" check only ever looked for `song_info.json`
+  (a safe assumption for `next_round.py`, which never runs anything), silently treating an interrupted vetting
+  attempt as permanently done: never accepted, never logged hard, just gone ("Californication" was lost this
+  way). Fixed to require `lyrics_timed.json` too before counting a work dir as produced.
+- A fourth, found from the owner's own question ("if my computer crashes, you wont lose the list correct?"):
+  every log write (`round3_accepted_songs.json`, `round3_hard_songs.json`, the final manifest and the
+  registry) used a plain overwrite, not write-then-rename -- a crash mid-write could in principle leave one
+  truncated/corrupt rather than just one entry behind. Added `_write_json_atomic()` (temp file + `Path.replace`,
+  which is atomic) and switched every one of those writes to it; verified with a real round-trip before
+  relying on it, then restarted the (already crash-safe-enough in practice, but now actually verified) run to
+  pick up the fix, since the already-running process had the old code loaded in memory.
+- A fifth, found while the job ran: `--go` finalized into a round folder and advanced `rounds_completed`
+  with WHATEVER count `vet()` returned, even short of the 100 target -- since each run's own candidate pool is
+  fixed at launch and the real accept rate (~55-58%, far below the ~85%+ the first few Beatles-heavy songs
+  suggested) can exhaust it well short of 100. Fixed: finalizing now only happens once the count actually
+  meets the target; short of that, everything already decided stays exactly as persisted for a follow-up run
+  (against a further-extended candidate list, several more added live as the pool ran low) to top up from,
+  with no re-vetting and no lost ground.
+- Every one of these was caught by checking real, on-disk state against a real question -- the owner's
+  suspicion, a re-read of the actual saved concern text, a live process's real elapsed/decided counts -- never
+  by trusting a summary number. Real measured accept rate as of this writing: ~55-58%, not the ~85-100% first
+  impression.
+
+## 2026-09-23: cleared_log now records the real achieved %, not just a flat "it passed"
+
+- Owner, watching the same run: "somewhere it needs to keep track of the results that made it pass.. i want
+  to know how close it is when actually creating a video." Checked: `cleared_log.py`'s permanent pass/fail
+  record already existed, but a CLEARED (passing) song's note was either a flat "passed the lyric and timing
+  checks" (pipeline.py's `_record_finished`, the real "a video was just made" moment) or "passes the {needed}
+  timing check" (timing_gate.py's `hold_if_timing_fails` release path) -- the latter is a real, separate bug:
+  it named the BAR the song was judged against, never the percentage it actually achieved, so a song let
+  through on a since-lowered bar showed that lower number instead of its own real score.
+- Fixed both (TDD, `tests/test_pipeline.py`, `tests/test_timing_gate.py`): `_align_lyrics()` now returns the
+  real sync share as a third value alongside its existing (times, concern) pair -- it already computed this
+  internally (`result.report.share`) and simply threw it away after printing it once. `run_pipeline()` threads
+  it through to `_record_finished(..., share=timing_share)`, which now writes "passed the lyric and timing
+  checks at {percent}" when a share is available (falling back to the old flat text only when align didn't
+  run this invocation at all, e.g. a low-level `--stage images` resume, or too little was heard to judge).
+  `timing_gate.py`'s own release-note now uses the report's real `share` instead of `needed`. Promoted
+  `timing_gate._percent` to public `percent_display()` (identical formatting -- "80%", but "89.7%") so both
+  modules format the number the same way instead of duplicating the rounding rule.
+
+## 2026-09-23: an EASY CHORD playlist, and two future-build asks (capo re-render, not built yet)
+
+- Owner asked for two things "for future build": (1) a Settings option to go through already-produced songs,
+  detect the ones with hard (barre-chord) keys, and re-render them showing the EASIER capo-transposed chord
+  shapes instead -- NOT built yet, noted here for the next session to pick up; touches chord_theory.py/
+  chord_diagram.py/chord_shapes.py and a new Settings field, real scope. (2) A YouTube playlist grouping every
+  video whose song is in an easy-chord key, which the owner said could be done today if there was time.
+- Built (2): `chord_theory.is_easy_key()` -- the owner's own rule arrived at over three messages: "the keys
+  that have the most easy chords ... c major D major a minor", then "dont forget B and F major and minor",
+  then the actual rule stated plainly: "i dont want any flat or sharp keys at all in this.. those where the
+  hard chords are." Final rule: easy means a NATURAL tonic (no # or b in its name), major or minor, full
+  stop -- all 7 natural note names qualify (C/D/E/F/G/A/B), every sharp/flat tonic (Db, F#, Bb, etc.) does
+  not, regardless of how many sharps/flats are actually in that key's signature. `youtube_playlists.
+  organize_video()` (already called after every upload, and by the existing
+  `scripts/backfill_channel_organization.py` for older ones) now also adds a song in an easy key to a fixed
+  "EASY CHORD Play Along Songs" playlist -- no new script needed, since it's idempotent and re-running the
+  existing backfill picks up the new behavior automatically. TDD'd in both `chord_theory.py` and
+  `youtube_playlists.py`; full suite green.
+- The easy-key rule itself moved twice within the same conversation before landing: first a curated set of
+  "beginner guitar keys," then the owner added B and F major/minor ("dont forget B and F major and minor"),
+  then the REAL final rule, stated plainly: "i dont want any flat or sharp keys at all in this.. those where
+  the hard chords are." Implemented as `is_easy_key()`: a natural tonic (no # or b), major or minor, full
+  stop -- simpler and exactly what was asked, once asked plainly.
+- Ran the real backfill against the owner's live channel: 33 songs organized, 9 skipped (deleted directly on
+  YouTube -- Bohemian Rhapsody among them, already known-dropped), then it hit YouTube's real daily API quota
+  and stopped cleanly as designed. Confirmed for real: `easy_chord` now has a real playlist id in
+  `~/.playalongvideoproduction/youtube_playlists.json` on the owner's own channel. Re-run needed after
+  midnight Pacific (quota reset) to finish organizing the rest -- there is no automatic retry for a failed
+  `organize_video()` call; only a manual re-run of the backfill script picks it back up.
+- Along the way, discovered (not fixed, deliberately): the round-3 vetting script
+  (`~/most_popular_songs_round3_vet.py`, outside the git repo) never calls `load_dotenv()`, so
+  `fetch_lyric_lines_verified()`'s Claude-based mismatch-arbitration step has been silently failing with an
+  auth error every time it would fire, for the whole vetting run. The pipeline's own error handling caught it
+  safely (falls back to flagging the song rather than crashing), so no vetting result was ever corrupted --
+  but a song that Claude arbitration might have rescued was rejected outright instead. Left as-is on purpose:
+  fixing it would let real (if small) Claude spend into a process the owner explicitly wants free ("no AI
+  cost"), so this is a real tradeoff for the owner to decide on for a future round, not something to silently
+  "fix" into a different cost profile.
+
+## 2026-09-23: two more chord-count playlists -- 3 CHORD and 4 CHORD Play Along Songs
+
+- Owner: "lets do 2 more.. 3 chord songs and 4 chord songs and easy chords" -- same one-fixed-playlist pattern
+  as EASY CHORD, keyed on the song's own chord count instead of its key. `ordered_unique_chords()` (which
+  already existed, backing the chord-fingering legend) moved from `pipeline.py` to `chord_theory.py` (still
+  re-exported from `pipeline` for every existing caller) so the light `youtube_playlists.py` module -- used by
+  a backfill script and a periodic GUI tick -- doesn't have to import all of `pipeline.py`'s heavy deps
+  (torch, anthropic, moviepy) just to count a song's chords. `organize_video()` now also adds a 3-chord song
+  to "3 CHORD Play Along Songs" and a 4-chord song to "4 CHORD Play Along Songs" (never both; a song with any
+  other chord count goes in neither). TDD'd; full suite green.
+- Owner caught a real gap right after: "3 and 4 chord still has to have the easy chord rule" -- chord count
+  alone doesn't make a song easy to play; a 3-chord song in Db is still all barre chords. Fixed: both playlists
+  now also require `is_easy_key(song.chord_track.key)`, same as EASY CHORD itself.
+
+## 2026-09-23: `is_easy_key` walked back to exclude F and B (no true open shape)
+
+- Started building the capo-conversion feature's core math (`chord_theory.capo_and_shape_key()`,
+  `parse_chord_label()`, `transpose_chord_label()`, TDD'd) and immediately hit a real inconsistency: F and B
+  are natural tonics (so `is_easy_key` said they were fine as-is), but neither has a true OPEN chord shape on
+  guitar (F is at least a mini-barre, B at least a partial barre), so no real capo chart ever uses them as a
+  shape to fret. Owner, on seeing the consequence: "well hang on.. should b and f not be in easy chords..
+  maybe not" -> "you didnt have them, i added them, maybe i shouldnt have" -> "lets do b an f hard." Reverted
+  `is_easy_key()` to the true-open-shape set only (C/D/E/G/A major, Am/Dm/Em minor -- 8 keys, not 14), built
+  directly from the SAME `_CAGED_MAJOR_SHAPES`/`_CAGED_MINOR_SHAPES` dicts `capo_and_shape_key()` uses, so the
+  two rules can never drift apart again. Real consequence: F/B songs now get their own capo conversion
+  instead of being waved through, and the already-run real backfill against the owner's YouTube channel added
+  a few F/B songs to the live EASY CHORD playlist under the old rule -- cleanup pending.
+- The capo math itself (`capo_and_shape_key`, `parse_chord_label`, `transpose_chord_label`) was run against 6
+  real songs from the catalog (Alone, Billie Jean, Back in the Saddle, All for Love, Ain't Talkin' 'Bout Love,
+  Bridge Over Troubled Water) as a throwaway spike before writing it into real code -- every chord in every
+  song transposed cleanly, confirming the formula holds on real data, not just the 10-key verification table.
+
+## 2026-09-23: a real GUI "won't close" investigation, done properly this time -- and a real playlist bug
+
+- Owner, sharply: "you have never got this fixed.. you have alwasy closed it for me, not a fix." Fair: every
+  earlier occurrence was either genuinely fixed in code, waved off as a WM glitch, or just force-closed from
+  the terminal -- never actually watched happen live. This time: checked the real process (all 8 threads
+  idling normally, not stuck), the real system load (5.67-7.95 on a 4-core box -- this session's own
+  round3-vetting job plus a concurrent Demucs render had been starving the GUI of CPU for hours), and, after
+  deprioritizing those, sent a REAL `WM_DELETE_WINDOW`-equivalent close request directly at the X11 level
+  (`wmctrl -i -c`) to test the app's own close handling independent of mouse-click delivery. That test's
+  result was contaminated (the window manager itself rejected it for missing a timestamp, logging "buggy
+  application" warnings) and had to be retracted rather than reported as real evidence. Also statically
+  audited every `self._running` set/reset site in `gui.py` against the owner's own "longer it runs" hypothesis
+  -- all of them clear the flag before any refresh/dialog call that could throw, consistent with the existing
+  9-22 fix; found no new code bug that way. Real, hard tooling limits hit along the way: `ptrace` is blocked
+  in this sandbox (can't live-trace the process), and synthetic close/click events aren't trustworthy evidence
+  here. Ultimately just sent a clean `SIGTERM` at the owner's explicit go-ahead so they weren't blocked
+  further, told the owner exactly what was and wasn't established, and gave one concrete next step: launch via
+  terminal instead of the desktop icon next time, so a real Python exception (if there is one) would be
+  visible instead of buried in the desktop's own giant shared `.xsession-errors` log.
+- Real, separate bug found while checking why some playlist thumbnails looked off (they were fine -- confirmed
+  via the real API that thumbnails ARE present on every playlist checked, likely just YouTube's normal
+  propagation delay for freshly-created ones): `_split_artists()`'s plain comma-split had turned "Crosby,
+  Stills, Nash & Young" into three broken playlists ("Crosby", "Stills", "Nash & Young") on the owner's real
+  channel, because a band's own name and a genuine multi-artist collaboration string look identical. Fixed
+  with a small curated exception list (also covers Emerson Lake & Palmer, Blood Sweat & Tears, Earth Wind &
+  Fire, none of which have hit this yet but all share the same shape). `scripts/fix_playlist_data_20260923.py`
+  merges the three broken playlists' videos into one correct one (leaves the broken ones on YouTube, not
+  deleted -- a deliberate, reversible choice) and removes any F/B-key song from EASY CHORD/3-/4-CHORD now that
+  `is_easy_key()` no longer counts them as easy.
+
+## 2026-09-23: first real EASY CHORD (capo) render, and the Key/BPM badge's real "too faint" bug
+
+- Built out the rest of the capo-conversion pipeline from the same day's design spec:
+  `chord_theory.transpose_chord_track()` (re-spells a whole `ChordTrack`'s events and renames its `key` to the
+  shape actually fretted) and `pipeline.build_capo_variant(work_dir, audio_path_override=None)`, which builds a
+  sibling `<slug>-capo` work dir (title suffixed "EasyChords", chords transposed, images copied not
+  regenerated -- zero new AI/Replicate spend) and renders it via `run_pipeline(start_stage="render")`.
+- Used it to render a real first demo, Bridge Over Troubled Water (Eb major -> capo 1, D shapes), for the
+  owner to actually watch -- not just a described design. Hit a real, general problem doing it: the song's own
+  recorded `audio_path` pointed into a batch-staging folder the owner had since emptied, and this particular
+  song predates `run_pipeline()`'s own local-audio-copy fix, so even `load_redo_inputs()`'s fallback had
+  nothing to find. Resolved for this one demo by querying the owner's own Plex library database directly for
+  the same recording and confirming the file actually exists on disk before using it
+  (`audio_path_override=`) -- `build_capo_variant()` takes this override generally, but the underlying
+  "original audio genuinely gone" problem is still open for any other pre-fix song that needs a capo variant.
+  Settings/Redo-checkbox/backfill triggers from the design spec are still not wired up -- `build_capo_variant()`
+  is currently only callable directly.
+- Separately, owner: "speanking of the key/bpm thast too faint. it needs to be just a little bit brighter."
+  The real cause wasn't the color (already the same bright accent color as everything else) -- `draw_chord_bar()`
+  drew the Key/BPM badge as plain text straight onto the video frame with NO background panel at all, the only
+  piece of chord-bar text that didn't sit on one (every other element -- NOW/NEXT, the whole bar, the timeline
+  lane -- already does). Fixed by giving it the same panel_fill/rounded-rectangle treatment as the rest of the
+  bar, which fixes contrast against ANY background image, not just the specific one that prompted the report.
+
+## 2026-09-23: running the playlist cleanup + backfill live surfaced two more real bugs
+
+- Retried `scripts/fix_playlist_data_20260923.py` after the earlier session's `RATE_LIMIT_EXCEEDED` (daily
+  quota) cleared. First re-run hit a genuinely different failure: `playlistItems().list()` 404'd as
+  `playlistNotFound` on the very first video added to the freshly-created merge-target playlist -- the same
+  propagation-lag class of bug `add_video_to_playlist_with_retry()` was already built to absorb (2026-09-18),
+  except this one-off script called the raw, unwrapped `add_video_to_playlist()` instead. Fixed by making
+  the retry wrapper public (`_add_video_to_playlist_with_retry` -> `add_video_to_playlist_with_retry`, all 4
+  internal call sites and 3 tests renamed too) and switching the script to use it.
+- Re-ran again: the merge succeeded (6 videos moved into the correct "Crosby, Stills, Nash & Young"
+  playlist), then the F/B-removal loop crashed on a second real, different bug: `remove_video_from_playlist()`
+  called `playlistItems().list(videoId=...)` for a video that no longer exists on YouTube at all, which 404s
+  as `videoNotFound` -- a different failure mode than "not a member" (which 200s with an empty items list).
+  Fixed by catching that 404 and treating a gone video the same as "not a member" (nothing to remove, not an
+  error). Third run completed clean: removed 2 more stale EASY CHORD memberships (comfortably-numb B minor,
+  diamonds-on-the-soles-of-her-shoes F major), for 4 total across all three attempts (baba-o-riley and
+  bed-of-roses were removed in the crashed second run before it died, and stuck).
+- Then ran `scripts/backfill_channel_organization.py` for the first time since the 3-/4-CHORD playlists
+  existed. Organized only 3 songs (a-change-is-gonna-come, a-day-in-the-life, against-the-wind) before hitting
+  the real daily API quota again -- unsurprising given the same day's own merge/cleanup calls, plus everything
+  else already run against this channel today, had already spent a meaningful chunk of the 10,000-unit daily
+  cap. Stopped cleanly as designed; re-running after the midnight-Pacific reset picks up exactly where it left
+  off (idempotent, `organize_video()` checks membership before adding).

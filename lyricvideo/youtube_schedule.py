@@ -35,10 +35,11 @@ import re
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
+from .chord_theory import load_easy_chord_capo_marker
 from .models import load_song
 from .pipeline import slugify
 from .youtube import reserved_publish_datetimes, upload_video
-from .youtube_metadata import generate_video_metadata
+from .youtube_metadata import build_easy_chord_title, generate_video_metadata
 from .youtube_state import YoutubeState, save_youtube_state
 
 log = logging.getLogger("playalongvideoproduction")
@@ -189,7 +190,19 @@ def schedule_upload(
     song = load_song(work_dir / "lyrics_timed.json")
     full_lyrics = "\n".join(line.text for line in song.lines)
     artist = _load_artist(work_dir)
-    title, description, tags = generate_video_metadata(anthropic_client, song.title, artist, full_lyrics)
+    # An EASY CHORD (capo) variant (owner, 2026-09-23: "should maybe have that in the upload file too")
+    # gets its own deterministic title and a fixed description sentence, keeping the two versions of a
+    # song clearly separate everywhere, not just in the filename. Claude is given the CLEAN original
+    # title (never the "EasyChords"-suffixed one) so its description prompt never mentions the suffix.
+    capo_info = load_easy_chord_capo_marker(work_dir)
+    metadata_title = capo_info["original_title"] if capo_info else song.title
+    title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics)
+    if capo_info is not None:
+        title = build_easy_chord_title(capo_info["original_title"], artist, capo_info["capo_fret"])
+        description = (
+            f"EASY CHORDS version -- Capo {capo_info['capo_fret']}, play it in {capo_info['shape_key']} shapes "
+            f"(original key: {capo_info['original_key']}).\n\n{description}"
+        )
     support_text = getattr(settings, "support_description_text", "").strip()
     if support_text:
         description = f"{description}\n\n{support_text}"

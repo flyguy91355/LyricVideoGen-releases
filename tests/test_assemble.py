@@ -262,6 +262,56 @@ def test_assemble_video_draws_chord_legend_with_computed_current_label(tmp_path,
     assert draw_calls == [(["G", "D"], "D")]
 
 
+def test_assemble_video_draws_capo_badge_when_capo_is_given(tmp_path, monkeypatch, test_font_path):
+    """Owner, 2026-09-23: "i want the CAPO 3 under the chords finger position area" -- an EASY CHORD (capo
+    conversion) video only; assemble_video() must never draw this badge unless a real capo run asks for it."""
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    draw_calls = []
+    monkeypatch.setattr(assemble_module, "draw_capo_badge", lambda frame, capo, font_path, **kwargs: draw_calls.append(capo) or frame)
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 1.0, "G")])
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, chord_track, tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        chord_legend_labels=["G"], countdown_beats=0, capo=3,
+    )
+    calls["make_frame"](0.5)
+
+    assert draw_calls == [3]
+
+
+def test_assemble_video_does_not_draw_a_capo_badge_by_default(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    draw_calls = []
+    monkeypatch.setattr(assemble_module, "draw_capo_badge", lambda frame, capo, font_path, **kwargs: draw_calls.append(capo) or frame)
+
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 1.0, "G")])
+    out_path = tmp_path / "final.mp4"
+
+    assemble_module.assemble_video(
+        lines, chord_track, tmp_path, tmp_path / "audio.wav", out_path, font_path=test_font_path,
+        chord_legend_labels=["G"], countdown_beats=0,
+    )
+    calls["make_frame"](0.5)
+
+    assert draw_calls == [None]
+
+
 def test_assemble_video_draws_support_overlay_within_the_lead_window_before_the_end(
     tmp_path, monkeypatch, test_font_path,
 ):

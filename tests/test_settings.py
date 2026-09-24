@@ -38,6 +38,12 @@ def test_settings_defaults_match_current_hardcoded_render_behavior():
     assert s.support_description_text == ""
 
 
+def test_easy_chord_capo_video_settings_default_off():
+    # Owner, 2026-09-23: matches this app's existing cost-conscious convention (e.g. "Generate
+    # new images" on Redo also defaults off) -- an opt-in toggle for a real, if free, extra render.
+    assert Settings().generate_easy_chord_versions is False
+
+
 def test_youtube_settings_defaults():
     s = Settings()
     assert s.youtube_auto_upload is False

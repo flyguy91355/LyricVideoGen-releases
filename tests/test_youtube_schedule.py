@@ -2,6 +2,7 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from lyricvideo.chord_theory import save_easy_chord_capo_marker
 from lyricvideo.models import LyricLine, Song, Word, save_song
 from lyricvideo.youtube_schedule import (
     compute_next_publish_slot,
@@ -430,6 +431,83 @@ def test_schedule_upload_tolerates_a_missing_song_info_json(tmp_path):
 
     assert video_id == "vidabc"
     assert "performed by" not in client.messages.prompt_text().lower()
+
+
+# --- EASY CHORD (capo) variants get their own deterministic title/description marker ------------------
+
+def _make_capo_song_work_dir(tmp_path, artist: str = "Simon and Garfunkel") -> Path:
+    work_dir = tmp_path / "bridge-over-troubled-water-capo"
+    work_dir.mkdir()
+    song = Song(
+        title="Bridge Over Troubled Water EasyChords", audio_path="song.mp3",
+        lines=[LyricLine(words=[Word(word="hello"), Word(word="there")])],
+    )
+    save_song(song, work_dir / "lyrics_timed.json")
+    (work_dir / "bridge-over-troubled-water-easychords.mp4").write_bytes(b"fake video bytes")
+    import json
+    (work_dir / "song_info.json").write_text(
+        json.dumps({
+            "title": "Bridge Over Troubled Water EasyChords", "artist": artist,
+            "duration": 200.0, "alt_titles": [],
+        }),
+        encoding="utf-8",
+    )
+    save_easy_chord_capo_marker(
+        work_dir, capo_fret=1, shape_key="D", original_key="Eb major",
+        original_title="Bridge Over Troubled Water",
+    )
+    return work_dir
+
+
+def test_schedule_upload_uses_the_easy_chord_title_and_description_for_a_capo_variant(tmp_path):
+    """Owner, 2026-09-23: "it must have EASY CHORDS in the title and description" -- and separately,
+    "should maybe have that in the upload file too" (the marker must actually be read here, not just at
+    render time)."""
+    work_dir = _make_capo_song_work_dir(tmp_path)
+    settings = SimpleNamespace(
+        youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False,
+        youtube_upload_times="15:00",
+    )
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
+
+    body = client._videos.insert_kwargs["body"]
+    assert body["snippet"]["title"] == "Bridge Over Troubled Water - Simon and Garfunkel - (EASY CHORDS Play Along - Capo 1)"
+    assert body["snippet"]["description"].startswith(
+        "EASY CHORDS version -- Capo 1, play it in D shapes (original key: Eb major).\n\n"
+    )
+    assert "A great song." in body["snippet"]["description"]   # the AI-authored part is still there, just prefixed
+
+
+def test_schedule_upload_gives_claude_the_clean_original_title_for_a_capo_variant(tmp_path):
+    """The "EasyChords"-suffixed filename title must never leak into the description-writing prompt."""
+    work_dir = _make_capo_song_work_dir(tmp_path)
+    settings = SimpleNamespace(
+        youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False,
+        youtube_upload_times="15:00",
+    )
+    client = _FakeAnthropicClient()
+
+    schedule_upload(_FakeYoutubeClient(), client, work_dir, settings)
+
+    assert "EasyChords" not in client.messages.prompt_text()
+    assert "Bridge Over Troubled Water" in client.messages.prompt_text()
+
+
+def test_schedule_upload_uses_the_normal_title_for_an_ordinary_song(tmp_path):
+    work_dir = _make_song_work_dir(tmp_path, artist="Pink Floyd")
+    settings = SimpleNamespace(
+        youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False,
+        youtube_upload_times="15:00",
+    )
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
+
+    body = client._videos.insert_kwargs["body"]
+    assert "EASY CHORDS" not in body["snippet"]["title"]
+    assert not body["snippet"]["description"].startswith("EASY CHORDS version")
 
 
 def test_seven_uploads_with_five_publish_times_fill_five_today_then_two_tomorrow():

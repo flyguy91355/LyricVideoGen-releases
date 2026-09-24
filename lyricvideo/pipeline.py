@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import bisect
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +28,9 @@ from .lyric_arbiter import arbitrate
 from .lyric_audio_match import drop_unsung_leading_lines, drop_unsung_trailing_lines, score_lyrics_against_transcript
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .owner_lyrics import owner_lyrics_lines
+from .chord_theory import (  # noqa: F401 -- ordered_unique_chords re-exported: every existing `pipeline.ordered_unique_chords` caller keeps working unchanged
+    capo_and_shape_key, is_easy_key, ordered_unique_chords, save_easy_chord_capo_marker, transpose_chord_track,
+)
 from .cleared_log import record_cleared, record_removed
 from .redo_log import note_redo_finished, note_redo_started
 from .models import ChordTrack, LyricLine, Song, Word, load_song, save_song
@@ -36,11 +39,15 @@ from .precision import blend, choose_alignment, match_words
 from .sync import decide_alignment, sync_agreement
 from .settings import Settings
 from .owner_verified import verification
-from .timing_gate import SEARCH_SECONDS, check_saved_song, hold_if_timing_fails, is_gate_concern, settle_alignment
+from .timing_gate import (
+    check_saved_song, heard_text_near_line, hold_if_timing_fails, is_gate_concern, percent_display, settle_alignment,
+)
 from .transcribe import load_transcript_segments, load_transcript_text, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
 STAGES = ["identify", "separate", "fetch_lyrics", "align", "detect_chords", "images", "render"]
+
+log = logging.getLogger("playalongvideoproduction")
 
 
 def slugify(title: str) -> str:
@@ -61,16 +68,6 @@ def song_end_time(song: Song) -> float:
     return max(ends, default=0.0)
 
 
-def ordered_unique_chords(chord_track: ChordTrack) -> list[str]:
-    """Every distinct chord label in the song, in first-seen order across ALL
-    events (sung or instrumental) -- backs the chord fingering legend, which
-    shows one diagram per chord regardless of whether it happens during vocals.
-    'N' (no-chord) is excluded -- there's nothing to finger."""
-    labels: list[str] = []
-    for event in chord_track.events:
-        if event.label != "N" and event.label not in labels:
-            labels.append(event.label)
-    return labels
 
 
 def default_font() -> str:
@@ -136,6 +133,27 @@ def list_uploadable_songs(work_root: Path) -> list[str]:
     (no transcript), is left out. Read-only: a live video is never written to here."""
     root = Path(work_root)
     return [name for name in list_rendered_songs(root) if _passes_for_upload(root / name)]
+
+
+def list_easy_chord_backfill_candidates(work_root: Path) -> list[str]:
+    """Names of work_root's already-passing songs whose own key is hard (not is_easy_key) and that don't
+    already have a `<slug>-capo` sibling folder -- backs the one-time "Generate EASY CHORD Versions"
+    catch-up action (owner, 2026-09-23: "this idea will give me hundreds of new songs"; trigger 3 of 3 from
+    the design spec). A song's own capo variant is naturally excluded here too, without special-casing it --
+    its OWN key is the easy shape key it was converted to, so it never passes the is_easy_key check itself."""
+    root = Path(work_root)
+    candidates = []
+    for name in list_uploadable_songs(root):
+        if (root / f"{name}-capo").exists():
+            continue
+        try:
+            song = load_song(root / name / "lyrics_timed.json")
+        except Exception:
+            continue
+        if is_easy_key(song.chord_track.key):
+            continue
+        candidates.append(name)
+    return candidates
 
 
 def _passes_for_upload(song_dir: Path) -> bool:
@@ -274,22 +292,14 @@ def whisper_lines_for(work_dir: Path, model=None) -> list[str]:
     as the lyrics editor already does. `model` is injectable, same as whisper_text_for()/transcribe_vocals()."""
     work_dir = Path(work_dir)
     whisper_text_for(work_dir, model=model)  # ensures transcript.json (text/segments/words) is cached
-    heard = sorted(
-        (HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)),
-        key=lambda hw: hw.start,
-    )
-    starts = [hw.start for hw in heard]
+    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
     song = load_song(work_dir / "lyrics_timed.json")
 
     lines = []
     for line in song.lines:
         if not line.words:
             continue
-        low = line.words[0].start_time - SEARCH_SECONDS
-        high = line.words[-1].end_time + SEARCH_SECONDS
-        nearby = heard[bisect.bisect_left(starts, low):bisect.bisect_right(starts, high)]
-        text = " ".join(hw.word.strip() for hw in nearby if hw.word.strip())
-        lines.append(text or "(nothing heard)")
+        lines.append(heard_text_near_line(line.words, heard) or "(nothing heard)")
     return lines
 
 
@@ -387,7 +397,8 @@ def _build_arbiter(work_dir: Path, anthropic_client):
 
 
 def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=None, needed=None):
-    """(per-word times, timing concern). Uses Whisper's word times (when a transcript exists) to CHECK where the
+    """(per-word times, timing concern, real sync share [None if too little was heard to judge]). Uses Whisper's
+    word times (when a transcript exists) to CHECK where the
     whole-song alignment put each line and, if it drifted, to redo the alignment one bounded window at a time
     (align.align_words_anchored). Both are computed from one model pass; sync.decide_alignment picks. A song whose
     timing still cannot be trusted comes back with a non-empty concern so it is set aside for the owner's review.
@@ -409,7 +420,9 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
             )
         if result.concern:
             print(f"WARNING: {result.concern}", file=sys.stderr)
-        return [(min(a, audio_duration), min(b, audio_duration)) for a, b in result.times], result.concern
+        # share (owner, 2026-09-23: "i want to know how close it is when actually creating a video") -- the
+        # real achieved sync percentage, not just pass/fail; None when too little was heard to judge at all.
+        return [(min(a, audio_duration), min(b, audio_duration)) for a, b in result.times], result.concern, result.report.share
 
     loudness: list[float] = []
     try:  # Whisper hallucinates words in silence; they must not anchor a line (a read failure just keeps them)
@@ -483,16 +496,21 @@ def held_before_video(work_dir: Path) -> bool:
     return (Path(work_dir) / HELD_MARKER).exists()
 
 
-def _record_finished(work_dir: Path, song: Song) -> None:
+def _record_finished(work_dir: Path, song: Song, share: float | None = None) -> None:
     """Completes the redo record started by backup_song_outputs (a no-op for a brand-new song) and updates the running list
-    of cleared / removed songs (cleared_log.py)."""
+    of cleared / removed songs (cleared_log.py). `share` (owner, 2026-09-23: "i want to know how close it is when
+    actually creating a video") is the real achieved sync percentage from THIS run's own align stage -- None when
+    align didn't run this invocation (a low-level --stage resume past it) or too little was heard to judge; either
+    way the note falls back to the old plain text rather than claiming a number that isn't real. A REMOVED song's
+    note is the full concern text, which already states its own percentage -- only the cleared branch needed one."""
     try:
         note_redo_finished(work_dir, concern=song.lyrics_accuracy_concern)
         try:
             if song.lyrics_accuracy_concern:
                 record_removed(work_dir.name, song.lyrics_accuracy_concern[:300])
             else:
-                record_cleared(work_dir.name, "passed the lyric and timing checks")
+                note = f"passed the lyric and timing checks at {percent_display(share)}" if share is not None else "passed the lyric and timing checks"
+                record_cleared(work_dir.name, note)
         except Exception as e:
             print(f"WARNING: could not update the cleared-songs record ({type(e).__name__}: {e})", file=sys.stderr)
     except Exception as e:
@@ -520,8 +538,20 @@ def run_pipeline(
     font_path: str | None = None,
     settings: Settings | None = None,
     progress_callback: Callable[[str], None] | None = None,
-) -> Path:
+    end_stage: str = "render",
+    capo: int | None = None,
+) -> Path | None:
+    """`end_stage` (owner, 2026-09-22: vetting a candidate song's real timing-gate share -- deep_review-style,
+    or the most-popular-songs picker -- must never reach detect_chords/images/render, which cost real
+    Replicate/Claude money this kind of check has no business spending) stops the run right after the named
+    stage; every later stage, including detect_chords, is never entered. Returns None instead of the (nonexistent)
+    video path whenever the run stops before render actually happens; the default ("render") reproduces every
+    existing caller's behavior exactly, always returning the finished mp4's path.
+
+    `capo` (owner, 2026-09-23) is passed straight to assemble_video() -- None (the default) draws no badge at
+    all; an EASY CHORD variant's own build passes its real capo fret so the CAPO N badge appears only there."""
     start_idx = STAGES.index(start_stage)
+    end_idx = STAGES.index(end_stage)
     # None (the CLI's default, and every call before this feature existed) means
     # "use every one of Settings' own defaults" -- which are themselves exactly
     # today's hardcoded values, so this is a no-op for anyone not using the GUI's
@@ -618,10 +648,10 @@ def run_pipeline(
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
-    if start_idx <= STAGES.index("separate"):
+    if start_idx <= STAGES.index("separate") <= end_idx:
         report("separate")
         vocals_path = separate_vocals(audio_path, work_dir, expected_seconds=song_seconds())
-    elif start_idx <= STAGES.index("detect_chords") and not stems_look_complete(
+    elif start_idx <= STAGES.index("detect_chords") and end_idx >= STAGES.index("align") and not stems_look_complete(
         vocals_path, instrumental_stem_path, song_seconds(),
     ):
         # Resuming past separation, but the stems the align/detect_chords
@@ -638,7 +668,7 @@ def run_pipeline(
             print("The saved vocal stems are missing or shorter than the song; running Demucs again.")
         vocals_path = separate_vocals(audio_path, work_dir, expected_seconds=song_seconds())
 
-    if start_idx <= STAGES.index("fetch_lyrics"):
+    if start_idx <= STAGES.index("fetch_lyrics") <= end_idx:
         report("fetch_lyrics")
         info_data = json.loads(info_path.read_text(encoding="utf-8"))
         owner_lines = owner_lyrics_lines(work_dir)
@@ -702,7 +732,8 @@ def run_pipeline(
             encoding="utf-8",
         )
 
-    if start_idx <= STAGES.index("align"):
+    timing_share = None       # real achieved sync %, only known once align actually runs this invocation
+    if start_idx <= STAGES.index("align") <= end_idx:
         report("align")
         lyrics_data = json.loads(lyrics_path.read_text(encoding="utf-8"))
         if isinstance(lyrics_data, list):
@@ -730,7 +761,7 @@ def run_pipeline(
         audio_duration = waveform.shape[1] / sample_rate
         flat_words = [w.word for line in parsed_lines for w in line.words]
         line_times = lyrics_data.get("line_times") if isinstance(lyrics_data, dict) else None
-        word_times, timing_concern = _align_lyrics(
+        word_times, timing_concern, timing_share = _align_lyrics(
             vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=line_times,
             needed=settings.timing_pass_percent / 100 if settings is not None else None,
         )
@@ -749,15 +780,18 @@ def run_pipeline(
         save_song(song, timed_path)
         if timing_concern and is_gate_concern(timing_concern):
             _hold_before_video(work_dir, final_path, song, timing_concern)          # raises HeldBeforeVideo
-    else:
+    elif start_idx > STAGES.index("align"):
         song = load_song(timed_path)
+    # else: end_stage stops before align even starts (e.g. a vetting-only "identify"/"separate"/"fetch_lyrics"
+    # run) -- `song` is intentionally left unset here; every block below that would use it is itself gated by
+    # end_idx and the function returns before any of them can run.
 
-    if start_idx <= STAGES.index("detect_chords"):
+    if start_idx <= STAGES.index("detect_chords") <= end_idx:
         report("detect_chords")
         song.chord_track = detect_chords(instrumental_stem_path, **detect_kwargs)
         save_song(song, timed_path)
 
-    if start_idx <= STAGES.index("images"):
+    if start_idx <= STAGES.index("images") <= end_idx:
         report("images")
         anthropic_client = anthropic.Anthropic()
         replicate_token = os.environ.get("REPLICATE_API_TOKEN", "")
@@ -813,19 +847,106 @@ def run_pipeline(
         # resort only after every real generation attempt has already failed.
         substitute_fallback_images(image_paths)
 
-    if start_idx <= STAGES.index("render"):
+    if start_idx <= STAGES.index("render") <= end_idx:
         report("render")
         assemble_video(
             song.lines, song.chord_track, images_dir, audio_path, final_path,
             font_path or default_font(),
             chord_legend_labels=ordered_unique_chords(song.chord_track),
+            capo=capo,
             **assemble_kwargs,
         )
         (work_dir / HELD_MARKER).unlink(missing_ok=True)        # the video exists now (Render Anyway, or a Redo that passes)
 
-    _record_finished(work_dir, song)
+        # Owner, 2026-09-23: "have a easy chord setting, so if i have that checked it will convert to easy
+        # chord?" -- "any video make." Every future Generate/Redo/Batch run that lands in a hard key also
+        # gets its own EASY CHORD (capo) variant when this is on. Never for an already-easy key (nothing to
+        # convert -- build_capo_variant would itself return None, but checking here too avoids even trying).
+        # A problem building the variant must never make an otherwise-successful primary video look like it
+        # failed (same reasoning as the existing YouTube-upload failure handling) -- caught and logged, not raised.
+        if settings is not None and settings.generate_easy_chord_versions and not is_easy_key(song.chord_track.key):
+            try:
+                build_capo_variant(work_dir)
+            except Exception as e:
+                log.warning("Could not build the EASY CHORD (capo) variant for %s: %s", work_dir, e)
+
+    if end_idx < STAGES.index("render"):
+        # Stopped early (a vetting-only call): no video was made, so there is no redo/cleared-log entry to
+        # write and nothing done-worthy to report -- returning None (rather than a nonexistent path) is the
+        # caller's own signal that this call never intended to produce a video.
+        return None
+
+    _record_finished(work_dir, song, share=timing_share)
     report("done")
     return final_path
+
+
+def build_capo_variant(work_dir: Path, audio_path_override: Path | str | None = None) -> Path | None:
+    """Builds and renders a sibling `<work_dir.name>-capo` work dir: the same song's lyrics,
+    timing, and images, converted to easy open-chord shapes via a capo -- see
+    docs/superpowers/specs/2026-09-23-capo-easy-chord-videos-design.md ("EASY CHORD Play Along
+    videos"). No new AI/Replicate spend: images are copied from the original, never regenerated,
+    and only the render stage runs.
+
+    Returns None (nothing built) if `work_dir` has no finished `lyrics_timed.json` yet, or if the
+    song's own key is already easy (capo_and_shape_key) -- there's nothing to convert. Idempotent:
+    a second call just re-renders the same `-capo` dir.
+
+    `audio_path_override` is for the case load_redo_inputs() can't resolve on its own -- a song
+    recorded before run_pipeline() kept its own local audio copy, whose original external
+    audio_path has since been cleaned up from its batch-staging folder. The normal case (a local
+    copy exists, or the original path is still there) needs no override."""
+    work_dir = Path(work_dir)
+    timed_path = work_dir / "lyrics_timed.json"
+    if not timed_path.exists():
+        return None
+    song = load_song(timed_path)
+    result = capo_and_shape_key(song.chord_track.key)
+    if result is None:
+        return None
+    capo_fret, shape_key = result
+
+    info_path = work_dir / "song_info.json"
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    original_title = info["title"]
+
+    capo_work_dir = work_dir.parent / f"{work_dir.name}-capo"
+    capo_work_dir.mkdir(parents=True, exist_ok=True)
+
+    capo_info = {**info, "title": f"{original_title} EasyChords"}
+    (capo_work_dir / "song_info.json").write_text(json.dumps(capo_info), encoding="utf-8")
+    save_easy_chord_capo_marker(
+        capo_work_dir, capo_fret=capo_fret, shape_key=shape_key,
+        original_key=song.chord_track.key, original_title=original_title,
+    )
+
+    capo_song = Song(
+        title=capo_info["title"],
+        audio_path=song.audio_path,
+        vocal_stem_path=song.vocal_stem_path,
+        instrumental_stem_path=song.instrumental_stem_path,
+        lines=song.lines,
+        chord_track=transpose_chord_track(song.chord_track, capo_fret, shape_key),
+        image_cache=song.image_cache,
+        lyrics_source=song.lyrics_source,
+        lyrics_accuracy_concern=song.lyrics_accuracy_concern,
+    )
+    save_song(capo_song, capo_work_dir / "lyrics_timed.json")
+
+    images_dir = work_dir / "images"
+    capo_images_dir = capo_work_dir / "images"
+    if images_dir.exists() and not capo_images_dir.exists():
+        shutil.copytree(images_dir, capo_images_dir)
+
+    if audio_path_override is not None:
+        audio_path = Path(audio_path_override)
+    else:
+        audio_path, _resolved_title = load_redo_inputs(work_dir)
+
+    return run_pipeline(
+        audio_path, capo_work_dir, title=capo_info["title"],
+        start_stage="render", end_stage="render", capo=capo_fret,
+    )
 
 
 def main() -> None:

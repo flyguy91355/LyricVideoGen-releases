@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image
 
-from lyricvideo.chord_diagram import _legend_layout, draw_chord_legend, draw_single_chord_diagram
+from lyricvideo.chord_diagram import _LEGEND_MAX_HEIGHT_FRAC, _legend_layout, draw_capo_badge, draw_chord_legend, draw_single_chord_diagram
 from lyricvideo.chord_shapes import get_chord_shape
 
 
@@ -185,3 +185,41 @@ def test_draw_chord_legend_respects_a_custom_size_scale(test_font_path):
     ))
 
     assert not np.array_equal(small, large)
+
+
+# --- capo badge (owner, 2026-09-23: "i want the CAPO 3 under the chords finger position area") ----------------
+
+def test_draw_capo_badge_renders_without_error(test_font_path):
+    bg = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    frame = draw_capo_badge(bg, 3, test_font_path, frame_size=(1920, 1080))
+    assert frame.size == (1920, 1080)
+
+
+def test_draw_capo_badge_changes_pixels_versus_plain_background(test_font_path):
+    bg = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    frame = np.array(draw_capo_badge(bg, 3, test_font_path, frame_size=(1920, 1080)))
+    plain = np.array(bg)
+    assert not np.array_equal(frame, plain)
+
+
+def test_draw_capo_badge_does_not_mutate_input_frame(test_font_path):
+    bg = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    draw_capo_badge(bg, 3, test_font_path, frame_size=(1920, 1080))
+    assert bg.getextrema() == ((20, 20), (20, 20), (20, 20))
+
+
+def test_draw_capo_badge_hidden_when_capo_is_none():
+    bg = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    frame = draw_capo_badge(bg, None, "unused.ttf", frame_size=(1920, 1080))
+    assert np.array_equal(np.array(frame), np.array(bg))
+
+
+def test_draw_capo_badge_sits_below_the_legends_own_reserved_height(test_font_path):
+    """Never overlaps the chord-fingering legend above it, whatever size that legend actually drew at."""
+    bg = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    frame = np.array(draw_capo_badge(bg, 3, test_font_path, frame_size=(1920, 1080)))
+
+    reserved_for_legend = int(1080 * _LEGEND_MAX_HEIGHT_FRAC)
+    above = frame[:reserved_for_legend, :]
+    plain_above = np.array(bg)[:reserved_for_legend, :]
+    assert np.array_equal(above, plain_above)

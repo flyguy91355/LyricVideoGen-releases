@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
 
-from lyricvideo.models import LyricLine, Song, Word, save_song
+from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Song, Word, save_song
 from lyricvideo.youtube import is_video_in_playlist
+from lyricvideo.youtube_playlists import _split_artists
 from lyricvideo.youtube_state import YoutubeState, save_youtube_state
 
 
@@ -82,14 +83,20 @@ class _FakeAnthropicClient:
         self.messages = _FakeMessages(text)
 
 
-def _make_work_dir(tmp_path: Path, artist: str, genre: str = "", video_id: str = "vid123") -> Path:
+def _make_work_dir(
+    tmp_path: Path, artist: str, genre: str = "", video_id: str = "vid123", key: str = "", chords: list[str] = (),
+) -> Path:
     work_dir = tmp_path / "my-song"
     work_dir.mkdir()
     info = {"title": "My Song", "artist": artist, "duration": 200.0, "alt_titles": []}
     if genre:
         info["genre"] = genre
     (work_dir / "song_info.json").write_text(json.dumps(info), encoding="utf-8")
-    song = Song(title="My Song", audio_path="song.mp3", lines=[LyricLine(words=[Word(word="hello")])])
+    events = [ChordEvent(start=float(i), end=float(i + 1), label=label) for i, label in enumerate(chords)]
+    song = Song(
+        title="My Song", audio_path="song.mp3", lines=[LyricLine(words=[Word(word="hello")])],
+        chord_track=ChordTrack(key=key, events=events),
+    )
     save_song(song, work_dir / "lyrics_timed.json")
     save_youtube_state(work_dir, YoutubeState(video_id=video_id, uploaded_at="2026-09-10T15:00:00", title="My Song"))
     return work_dir
@@ -138,6 +145,21 @@ def test_organize_video_adds_to_every_listed_artists_playlist(tmp_path, monkeypa
         assert is_video_in_playlist(client, playlist_ids[f"artist:{artist}"], "vid123")
 
 
+def test_split_artists_splits_a_genuine_multi_artist_collaboration():
+    assert _split_artists("Bryan Adams, Sting, Rod Stewart") == ["Bryan Adams", "Sting", "Rod Stewart"]
+
+
+def test_split_artists_keeps_a_band_whose_own_name_has_a_comma_in_it():
+    """Owner, 2026-09-23: "Crosby, Stills, Nash & Young" got split into three broken playlists -- "Crosby",
+    "Stills", "Nash & Young" -- because the split logic can't tell a band's own name from a real
+    multi-artist collaboration list. It's one band; it must never split."""
+    assert _split_artists("Crosby, Stills, Nash & Young") == ["Crosby, Stills, Nash & Young"]
+    assert _split_artists("Crosby, Stills & Nash") == ["Crosby, Stills & Nash"]
+    assert _split_artists("Emerson, Lake & Palmer") == ["Emerson, Lake & Palmer"]
+    assert _split_artists("Blood, Sweat & Tears") == ["Blood, Sweat & Tears"]
+    assert _split_artists("Earth, Wind & Fire") == ["Earth, Wind & Fire"]
+
+
 def test_organize_video_classifies_and_caches_genre_when_blank(tmp_path, monkeypatch):
     _patch_state(monkeypatch)
     work_dir = _make_work_dir(tmp_path, artist="Lynyrd Skynyrd")  # no genre yet
@@ -162,6 +184,94 @@ def test_organize_video_does_not_reclassify_when_genre_already_cached(tmp_path, 
 
     from lyricvideo.youtube_playlists import organize_video
     organize_video(client, _FakeAnthropicClient(), work_dir)  # must not raise
+
+
+def test_organize_video_adds_an_easy_key_song_to_the_easy_chord_playlist(tmp_path, monkeypatch):
+    """Owner, 2026-09-23: "i want all the videos that have easy chords already in the same playlist."""
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock", key="C major")
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
+
+    assert is_video_in_playlist(client, playlist_ids["easy_chord"], "vid123")
+
+
+def test_organize_video_does_not_add_a_hard_key_song_to_the_easy_chord_playlist(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock", key="Db major")
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
+
+    assert "easy_chord" not in playlist_ids
+
+
+def test_organize_video_does_not_add_a_song_with_no_detected_key_to_the_easy_chord_playlist(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock")   # no key set
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
+
+    assert "easy_chord" not in playlist_ids
+
+
+def test_organize_video_adds_a_three_chord_song_to_the_three_chord_playlist(tmp_path, monkeypatch):
+    """Owner, 2026-09-23: "lets do 2 more.. 3 chord songs and 4 chord songs and easy chords" -- then "3 and 4
+    chord still has to have the easy chord rule": chord count alone isn't enough, the song's key must also be
+    a natural tonic."""
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock", key="C major", chords=["G", "C", "D"])
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
+
+    assert is_video_in_playlist(client, playlist_ids["three_chord"], "vid123")
+    assert "four_chord" not in playlist_ids
+
+
+def test_organize_video_adds_a_four_chord_song_to_the_four_chord_playlist(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(
+        tmp_path, artist="Pink Floyd", genre="Classic Rock", key="C major", chords=["G", "C", "D", "Em"],
+    )
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
+
+    assert is_video_in_playlist(client, playlist_ids["four_chord"], "vid123")
+    assert "three_chord" not in playlist_ids
+
+
+def test_organize_video_does_not_add_a_three_chord_song_in_a_hard_key_to_the_three_chord_playlist(tmp_path, monkeypatch):
+    """Owner, 2026-09-23: "3 and 4 chord still has to have the easy chord rule"."""
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock", key="Db major", chords=["Db", "Gb", "Ab"])
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
+
+    assert "three_chord" not in playlist_ids
+
+
+def test_organize_video_does_not_add_a_five_chord_song_to_either_chord_count_playlist(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(
+        tmp_path, artist="Pink Floyd", genre="Classic Rock", key="C major", chords=["G", "C", "D", "Em", "Am"],
+    )
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
+
+    assert "three_chord" not in playlist_ids and "four_chord" not in playlist_ids
 
 
 def test_organize_video_is_idempotent_on_a_second_run(tmp_path, monkeypatch):
@@ -230,7 +340,7 @@ def test_add_video_to_playlist_with_retry_succeeds_after_a_transient_playlist_no
     created can briefly 404 as playlistNotFound on the very next
     playlistItems() call -- a known Google API propagation lag, not a
     genuine problem."""
-    from lyricvideo.youtube_playlists import _add_video_to_playlist_with_retry
+    from lyricvideo.youtube_playlists import add_video_to_playlist_with_retry
 
     calls = []
 
@@ -243,7 +353,7 @@ def test_add_video_to_playlist_with_retry_succeeds_after_a_transient_playlist_no
     slept = []
     monkeypatch.setattr("lyricvideo.youtube_playlists.time.sleep", lambda s: slept.append(s))
 
-    _add_video_to_playlist_with_retry("client", "PL1", "vid123")  # must not raise
+    add_video_to_playlist_with_retry("client", "PL1", "vid123")  # must not raise
 
     assert len(calls) == 3
     assert len(slept) == 2  # slept between attempts, not after the final success
@@ -256,9 +366,9 @@ def test_add_video_to_playlist_with_retry_gives_up_after_max_attempts(monkeypatc
     )
     monkeypatch.setattr("lyricvideo.youtube_playlists.time.sleep", lambda s: None)
 
-    from lyricvideo.youtube_playlists import _add_video_to_playlist_with_retry
+    from lyricvideo.youtube_playlists import add_video_to_playlist_with_retry
     try:
-        _add_video_to_playlist_with_retry("client", "PL1", "vid123")
+        add_video_to_playlist_with_retry("client", "PL1", "vid123")
         assert False, "expected an HttpError"
     except Exception as e:
         assert e.status_code == 404
@@ -278,9 +388,9 @@ def test_add_video_to_playlist_with_retry_reraises_an_unrelated_error_immediatel
         lambda s: (_ for _ in ()).throw(AssertionError("should not sleep for a non-404 error")),
     )
 
-    from lyricvideo.youtube_playlists import _add_video_to_playlist_with_retry
+    from lyricvideo.youtube_playlists import add_video_to_playlist_with_retry
     try:
-        _add_video_to_playlist_with_retry("client", "PL1", "vid123")
+        add_video_to_playlist_with_retry("client", "PL1", "vid123")
         assert False, "expected an HttpError"
     except Exception as e:
         assert e.status_code == 429

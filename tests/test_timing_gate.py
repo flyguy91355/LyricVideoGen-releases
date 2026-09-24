@@ -5,14 +5,16 @@ by a check that let a repeated chorus excuse a misplaced line. Song text is inve
 from dataclasses import replace
 
 from lyricvideo.anchors import HeardWord
-from lyricvideo.models import LyricLine, Song, Word, load_song, save_song
+from lyricvideo.models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 import pytest
 
 from lyricvideo.owner_verified import mark_verified, upload_label, verification
-from lyricvideo.pipeline import list_flagged_songs, list_pending_uploads, list_uploadable_songs
+from lyricvideo.pipeline import (
+    list_easy_chord_backfill_candidates, list_flagged_songs, list_pending_uploads, list_uploadable_songs,
+)
 from lyricvideo.timing_gate import (
-    check_saved_song, check_sync, hidden_note, hold_if_timing_fails, pick_by_sync, scan_songs, settle_alignment,
-    use_pass_share_from,
+    check_saved_song, check_sync, heard_text_near_line, hidden_note, hold_if_timing_fails, pick_by_sync,
+    scan_songs, settle_alignment, use_pass_share_from,
 )
 
 
@@ -50,6 +52,22 @@ def placed(shift_by_line=None, shift_all=0.0):
             s = TRUE[len(out)] + shift_all + shift_by_line.get(k, 0.0)
             out.append((s, s + 0.3))
     return out
+
+
+def test_heard_text_near_line_returns_words_within_search_seconds_of_the_lines_own_span():
+    line_words = [Word("hello", 10.0, 10.4), Word("there", 10.5, 11.0)]
+    heard = [
+        HeardWord("hello", 10.05, 10.4),
+        HeardWord("there", 10.55, 11.0),
+        HeardWord("faraway", 10.0 - 100, 10.0 - 99),   # far outside the window
+    ]
+
+    assert heard_text_near_line(line_words, heard) == "hello there"
+
+
+def test_heard_text_near_line_is_empty_for_a_blank_line_or_nothing_heard_nearby():
+    assert heard_text_near_line([], [HeardWord("hello", 10.0, 10.4)]) == ""
+    assert heard_text_near_line([Word("hello", 10.0, 10.4)], []) == ""
 
 
 def test_a_song_placed_on_the_singing_passes():
@@ -244,19 +262,21 @@ def test_a_render_with_three_lines_of_twenty_a_second_late_is_set_aside_even_tho
     _, truth = _twenty_lines()
     late = [(s + 1.2, e + 1.2) if (k // 4) in (3, 9, 15) else (s, e) for k, (s, e) in enumerate(truth)]
 
-    times, concern = _render_with(monkeypatch, tmp_path, whole=late, anchored=late)
+    times, concern, share = _render_with(monkeypatch, tmp_path, whole=late, anchored=late)
 
     assert "85%" in concern and "not precise enough" in concern
     assert times == late                                            # still rendered, just not trusted
+    assert share == pytest.approx(0.85)                             # 17 of 20 lines in sync -- how close it really was
 
 
 def test_a_render_takes_whichever_alignment_is_in_sync_and_is_not_set_aside(monkeypatch, tmp_path):
     _, truth = _twenty_lines()
     drifted = [(s + 3.0 * max(0, k // 4 - 9), e + 3.0 * max(0, k // 4 - 9)) for k, (s, e) in enumerate(truth)]
 
-    times, concern = _render_with(monkeypatch, tmp_path, whole=drifted, anchored=truth)
+    times, concern, share = _render_with(monkeypatch, tmp_path, whole=drifted, anchored=truth)
 
     assert concern == "" and times == truth
+    assert share == 1.0
 
 
 def test_a_song_held_by_the_check_is_recorded_as_removed_from_the_cleared_list(tmp_path, monkeypatch):
@@ -314,7 +334,7 @@ def test_a_render_uses_the_bar_it_is_given(monkeypatch, tmp_path):
     _, truth = _twenty_lines()
     late = [(s + 1.2, e + 1.2) if (k // 4) in (3, 9, 15) else (s, e) for k, (s, e) in enumerate(truth)]      # 85% in sync
 
-    _, concern = _render_with(monkeypatch, tmp_path, whole=late, anchored=late, needed=0.85)
+    _, concern, _ = _render_with(monkeypatch, tmp_path, whole=late, anchored=late, needed=0.85)
 
     assert concern == ""
 
@@ -327,6 +347,18 @@ def test_lowering_the_bar_releases_a_song_the_check_held_and_the_cleared_list_ta
     assert hold_if_timing_fails(tmp_path / "s", needed=0.80) == ""
     assert load_song(tmp_path / "s" / "lyrics_timed.json").lyrics_accuracy_concern == ""
     assert [e["slug"] for e in cleared_log.cleared_songs()] == ["s"]
+
+
+def test_the_release_note_records_the_real_achieved_percentage_not_just_the_bar_it_passed(tmp_path):
+    """Owner, 2026-09-23: "i want to know how close it is when actually creating a video" -- releasing a song
+    against a bar well below what it actually achieved (80%) must still show the real 80%, not the 70% bar."""
+    from lyricvideo import cleared_log
+    _save(tmp_path / "s", placed({1: 1.0, 6: -1.0}))   # 80% achieved, same fixture as the failing-note test above
+
+    hold_if_timing_fails(tmp_path / "s", needed=0.90)    # fails first, so there's a concern to release below
+    hold_if_timing_fails(tmp_path / "s", needed=0.70)    # passes a bar well below what it actually achieved
+
+    assert "80%" in cleared_log.history()[-1]["note"]
 
 
 def test_raising_the_bar_holds_a_song_that_used_to_pass_and_names_the_new_bar(tmp_path):
@@ -389,6 +421,32 @@ def test_the_upload_list_follows_the_bar(tmp_path):
     assert list_uploadable_songs(tmp_path) == ["ninety"]
     use_pass_share_from(lambda: 0.95)
     assert list_uploadable_songs(tmp_path) == []
+
+
+# --- the EASY CHORD (capo) backfill list: passing + hard-key + not already converted ------------------------------
+
+def _set_key(work_root, name, key: str) -> None:
+    song_dir = work_root / name
+    save_song(replace(load_song(song_dir / "lyrics_timed.json"), chord_track=ChordTrack(key=key)), song_dir / "lyrics_timed.json")
+
+
+def test_easy_chord_backfill_lists_only_a_passing_hard_key_song(tmp_path):
+    _rendered(tmp_path, "hard", placed())
+    _set_key(tmp_path, "hard", "Eb major")
+    _rendered(tmp_path, "easy", placed())
+    _set_key(tmp_path, "easy", "C major")
+    _rendered(tmp_path, "failing", placed({1: 1.0, 6: -1.0}))
+    _set_key(tmp_path, "failing", "Eb major")
+
+    assert list_easy_chord_backfill_candidates(tmp_path) == ["hard"]
+
+
+def test_easy_chord_backfill_excludes_a_song_already_converted(tmp_path):
+    _rendered(tmp_path, "hard", placed())
+    _set_key(tmp_path, "hard", "Eb major")
+    (tmp_path / "hard-capo").mkdir()   # already has its own capo variant -- don't offer it again
+
+    assert list_easy_chord_backfill_candidates(tmp_path) == []
 
 
 def test_the_note_under_the_upload_list_says_how_many_videos_are_hidden_and_below_what():

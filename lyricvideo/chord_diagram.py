@@ -211,3 +211,49 @@ def draw_chord_legend(
 
     composited = Image.alpha_composite(frame.convert("RGBA"), overlay)
     return composited.convert("RGB")
+
+
+_CAPO_BADGE_GAP_FRAC = 0.015     # clear space below the legend's own reserved height before the badge starts
+_CAPO_BADGE_PAD_X = 18
+_CAPO_BADGE_PAD_Y = 10
+
+
+def draw_capo_badge(
+    frame: Image.Image,
+    capo: int | None,
+    font_path: str,
+    *,
+    frame_size: tuple[int, int],
+    accent_color: tuple[int, int, int] = ACCENT_COLOR_DEFAULT,
+    text_color: tuple[int, int, int] = TEXT_COLOR_DEFAULT,
+    panel_color: tuple[int, int, int] = PANEL_COLOR_DEFAULT,
+    panel_alpha: int = _PANEL_ALPHA,
+) -> Image.Image:
+    """A small "CAPO N" panel, same rounded-box/accent-color language as the chord bar's own NOW/NEXT boxes
+    and the countdown panel -- for an EASY CHORD (capo-converted) video only (owner, 2026-09-23: "i want the
+    CAPO 3 under the chords finger position area"). `capo=None` (a song that was never capo-converted) draws
+    nothing at all -- this badge only ever appears on a capo variant. Positioned just below the chord
+    legend's own guaranteed-not-to-exceed height (_LEGEND_MAX_HEIGHT_FRAC), left-aligned with it, so it never
+    overlaps the legend regardless of how many chords that song has. Returns a new image; `frame` is not
+    mutated (matches draw_chord_legend's own copy-on-write style)."""
+    if capo is None:
+        return frame
+
+    w, h = frame_size
+    margin_x = int(w * _LEGEND_MARGIN_FRAC)
+    y = int(h * _LEGEND_MAX_HEIGHT_FRAC) + int(h * _CAPO_BADGE_GAP_FRAC)
+
+    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = load_font(font_path, int(h * 0.022))
+    label = f"CAPO {capo}"
+    text_w = draw.textlength(label, font=font)
+    text_h = font.size
+
+    box = (margin_x, y, margin_x + text_w + 2 * _CAPO_BADGE_PAD_X, y + text_h + 2 * _CAPO_BADGE_PAD_Y)
+    draw.rounded_rectangle(
+        box, radius=int(_CAPO_BADGE_PAD_Y * 0.8), fill=(*panel_color, panel_alpha), outline=(*accent_color, 255), width=2,
+    )
+    draw.text((margin_x + _CAPO_BADGE_PAD_X, y + _CAPO_BADGE_PAD_Y), label, font=font, fill=(*text_color, 255))
+
+    return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")

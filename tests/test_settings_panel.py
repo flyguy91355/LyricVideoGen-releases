@@ -32,6 +32,7 @@ def _raw_defaults() -> dict:
         "show_chord_legend": True,
         "chord_legend_size": 100.0,
         "chord_diagram_panel_alpha": 235.0,
+        "generate_easy_chord_versions": False,
         "youtube_auto_upload": False,
         "youtube_client_secrets_path": "",
         "youtube_privacy": "public",

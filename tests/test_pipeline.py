@@ -5,9 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from lyricvideo.chord_theory import load_easy_chord_capo_marker
 from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Song, Word, load_song, save_song
 from lyricvideo.pipeline import (
     run_pipeline,
+    build_capo_variant,
     list_flagged_songs,
     list_redoable_songs,
     list_pending_uploads,
@@ -79,6 +81,35 @@ def test_run_pipeline_reports_progress_per_stage(tmp_path, monkeypatch):
     assert reported == [
         "identify", "separate", "fetch_lyrics", "align", "detect_chords", "images", "render", "done",
     ]
+
+
+def test_run_pipeline_end_stage_stops_before_the_named_stage(tmp_path, monkeypatch):
+    """Owner request, 2026-09-22: vetting a candidate song's real timing-gate share (deep_review-style, or the
+    most-popular-songs picker) needs identify/separate/fetch_lyrics/align to run for real, but must NEVER reach
+    detect_chords/images/render -- those cost real Replicate/Claude money this check has no business spending.
+    `end_stage="align"` stops right after align: no chord detection, no image generation, no render call."""
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    chord_calls, image_calls, render_calls = [], [], []
+    monkeypatch.setattr("lyricvideo.pipeline.detect_chords", lambda *a, **k: chord_calls.append(1))
+    monkeypatch.setattr("lyricvideo.pipeline.get_or_generate_image", lambda *a, **k: image_calls.append(1))
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", lambda *a, **k: render_calls.append(1))
+
+    reported = []
+    result = run_pipeline(Path("audio.mp3"), work_dir, end_stage="align", progress_callback=reported.append)
+
+    assert reported == ["identify", "separate", "fetch_lyrics", "align"]
+    assert chord_calls == [] and image_calls == [] and render_calls == []
+    assert result is None
+
+
+def test_run_pipeline_end_stage_default_still_runs_every_stage(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+
+    out_path = run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert out_path is not None and out_path.name == "test-song.mp4"
 
 
 def test_run_pipeline_uses_auto_identified_title_when_none_given(tmp_path, monkeypatch):
@@ -797,9 +828,11 @@ def test_prepare_images_for_fresh_regeneration_returns_none_when_no_images_dir(t
 def test_run_pipeline_no_settings_argument_uses_all_defaults(tmp_path, monkeypatch):
     """Backward-compatibility contract: omitting settings entirely must call
     detect_chords/assemble_video with exactly the same Settings-derived values
-    as before this feature existed. chord_legend_labels is the one exception --
-    it's derived from the song's own chord_track, not from Settings, so it's
-    always passed regardless of whether settings is None."""
+    as before this feature existed. chord_legend_labels and capo are the two
+    exceptions -- neither is derived from Settings (chord_legend_labels comes from
+    the song's own chord_track; capo is run_pipeline's own direct argument, added
+    2026-09-23 for the EASY CHORD capo-conversion feature), so both are always
+    passed regardless of whether settings is None."""
     _patch_common(monkeypatch, tmp_path)
     captured = {}
 
@@ -817,7 +850,7 @@ def test_run_pipeline_no_settings_argument_uses_all_defaults(tmp_path, monkeypat
     run_pipeline(Path("audio.mp3"), work_dir)
 
     assert captured["detect_chords_kwargs"] == {}
-    assert captured["assemble_video_kwargs"] == {"chord_legend_labels": ["C"]}
+    assert captured["assemble_video_kwargs"] == {"chord_legend_labels": ["C"], "capo": None}
 
 
 def test_run_pipeline_settings_reach_detect_chords(tmp_path, monkeypatch):
@@ -896,6 +929,38 @@ def test_run_pipeline_passes_ordered_unique_chords_to_assemble_video(tmp_path, m
     run_pipeline(Path("audio.mp3"), work_dir)
 
     assert captured["kwargs"]["chord_legend_labels"] == ["G", "D"]
+
+
+def test_run_pipeline_passes_capo_through_to_assemble_video(tmp_path, monkeypatch):
+    """Owner, 2026-09-23: the EASY CHORD (capo-conversion) video feature -- run_pipeline() needs to hand its
+    own `capo` argument straight to assemble_video() so the CAPO N badge only ever appears on that variant."""
+    _patch_common(monkeypatch, tmp_path)
+    captured = {}
+
+    def spying_assemble_video(*args, **kwargs):
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", spying_assemble_video)
+
+    work_dir = tmp_path / "work"
+    run_pipeline(Path("audio.mp3"), work_dir, capo=3)
+
+    assert captured["kwargs"]["capo"] == 3
+
+
+def test_run_pipeline_capo_defaults_to_none(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    captured = {}
+
+    def spying_assemble_video(*args, **kwargs):
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", spying_assemble_video)
+
+    work_dir = tmp_path / "work"
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert captured["kwargs"]["capo"] is None
 
 
 def test_run_pipeline_explains_a_song_with_no_lyric_text_instead_of_dying_in_the_aligner(tmp_path, monkeypatch):
@@ -1579,6 +1644,25 @@ def test_a_finished_run_with_no_concern_is_recorded_as_cleared(tmp_path, monkeyp
     assert [e["slug"] for e in cleared_songs()] == ["work"]
 
 
+def test_a_finished_run_records_the_real_achieved_percentage_not_just_a_flat_pass_message(tmp_path, monkeypatch):
+    """Owner, 2026-09-23: "i want to know how close it is when actually creating a video" -- a flat "it passed"
+    note says nothing about whether a song squeaked by or breezed through."""
+    from lyricvideo.cleared_log import history
+    from lyricvideo.timing_gate import Settled, SyncReport
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.settle_alignment",
+        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None: Settled(
+            preferred, candidates[preferred], SyncReport(0.923, 0, 0, 0), earlier_concern,
+        ),
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert "92.3%" in history()[-1]["note"]
+
+
 def test_a_finished_run_with_a_concern_is_recorded_as_removed_with_the_reason(tmp_path, monkeypatch):
     from lyricvideo.cleared_log import cleared_songs, history
 
@@ -1689,3 +1773,148 @@ def test_a_song_held_before_its_video_is_listed_for_review_but_never_for_upload(
 
     assert list_flagged_songs(work_root) == ["held-song"]
     assert list_pending_uploads(work_root) == []
+
+
+def _write_original_song_for_capo(work_dir, key="Eb major", title="Bridge Over Troubled Water", with_images=True):
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "song_info.json").write_text(
+        json.dumps({"title": title, "artist": "Simon and Garfunkel", "duration": 295.8, "alt_titles": []}),
+        encoding="utf-8",
+    )
+    line = LyricLine(words=[Word(word="hello", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    song = Song(
+        title=title,
+        audio_path="/gone/staging/audio.m4a",
+        lines=[line],
+        chord_track=ChordTrack(
+            events=[ChordEvent(0.0, 2.0, "Eb"), ChordEvent(2.0, 4.0, "Cm7")], key=key, bpm=83.4,
+        ),
+    )
+    save_song(song, work_dir / "lyrics_timed.json")
+    if with_images:
+        images_dir = work_dir / "images"
+        images_dir.mkdir()
+        (images_dir / "hello.png").write_bytes(b"fake-png-bytes")
+    return song
+
+
+def test_build_capo_variant_returns_none_for_an_already_easy_key_song(tmp_path):
+    work_dir = tmp_path / "work" / "some-song"
+    _write_original_song_for_capo(work_dir, key="C major")
+
+    assert build_capo_variant(work_dir) is None
+    assert not (tmp_path / "work" / "some-song-capo").exists()
+
+
+def test_build_capo_variant_returns_none_with_no_lyrics_timed_json_yet(tmp_path):
+    work_dir = tmp_path / "work" / "some-song"
+    work_dir.mkdir(parents=True)
+
+    assert build_capo_variant(work_dir) is None
+
+
+def test_build_capo_variant_builds_the_capo_dir_and_renders_it(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work" / "bridge-over-troubled-water"
+    _write_original_song_for_capo(work_dir, key="Eb major", title="Bridge Over Troubled Water")
+    override_audio = tmp_path / "real-plex-copy.m4a"
+
+    out_path = build_capo_variant(work_dir, audio_path_override=override_audio)
+
+    capo_work_dir = tmp_path / "work" / "bridge-over-troubled-water-capo"
+    assert out_path == capo_work_dir / "bridge-over-troubled-water-easychords.mp4"
+
+    capo_info = json.loads((capo_work_dir / "song_info.json").read_text(encoding="utf-8"))
+    assert capo_info["title"] == "Bridge Over Troubled Water EasyChords"
+    assert capo_info["artist"] == "Simon and Garfunkel"        # copied, unchanged
+
+    capo_song = load_song(capo_work_dir / "lyrics_timed.json")
+    assert capo_song.chord_track.key == "D major"              # Eb major -> capo 1, D shapes
+    assert [e.label for e in capo_song.chord_track.events] == ["D", "Bm7"]
+    assert capo_song.lines[0].text == "hello"                  # lyrics/timing untouched
+
+    assert (capo_work_dir / "images" / "hello.png").exists()   # reused, not regenerated
+
+    marker = load_easy_chord_capo_marker(capo_work_dir)
+    assert marker == {
+        "capo_fret": 1, "shape_key": "D", "original_key": "Eb major",
+        "original_title": "Bridge Over Troubled Water",
+    }
+
+
+def test_run_pipeline_builds_the_easy_chord_variant_when_setting_is_on_and_key_is_hard(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.detect_chords",
+        lambda instrumental_stem_path, **kwargs: ChordTrack(
+            events=[ChordEvent(0.0, 10.0, "Eb")], key="Eb major", bpm=100.0,
+        ),
+    )
+    calls = []
+    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir: calls.append(work_dir))
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir, settings=Settings(generate_easy_chord_versions=True))
+
+    assert calls == [work_dir]
+
+
+def test_run_pipeline_does_not_build_the_easy_chord_variant_when_the_setting_is_off(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.detect_chords",
+        lambda instrumental_stem_path, **kwargs: ChordTrack(
+            events=[ChordEvent(0.0, 10.0, "Eb")], key="Eb major", bpm=100.0,
+        ),
+    )
+    calls = []
+    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir: calls.append(work_dir))
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir, settings=Settings(generate_easy_chord_versions=False))
+
+    assert calls == []
+
+
+def test_run_pipeline_does_not_build_the_easy_chord_variant_for_an_already_easy_key_song(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)   # detect_chords stub here already returns "C major" -- easy
+    calls = []
+    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir: calls.append(work_dir))
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir, settings=Settings(generate_easy_chord_versions=True))
+
+    assert calls == []
+
+
+def test_run_pipeline_logs_but_does_not_raise_when_the_easy_chord_variant_build_fails(tmp_path, monkeypatch):
+    """A capo-variant build problem must never make an otherwise-successful video generation look like it
+    failed -- same reasoning as the existing YouTube-upload failure handling."""
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.detect_chords",
+        lambda instrumental_stem_path, **kwargs: ChordTrack(
+            events=[ChordEvent(0.0, 10.0, "Eb")], key="Eb major", bpm=100.0,
+        ),
+    )
+
+    def _boom(work_dir):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", _boom)
+    work_dir = tmp_path / "work"
+
+    out_path = run_pipeline(Path("audio.mp3"), work_dir, settings=Settings(generate_easy_chord_versions=True))
+
+    assert out_path is not None and out_path.name == "test-song.mp4"  # the real video's own result, unaffected
+
+
+def test_build_capo_variant_is_idempotent(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work" / "bridge-over-troubled-water"
+    _write_original_song_for_capo(work_dir, key="Eb major")
+
+    first = build_capo_variant(work_dir, audio_path_override=tmp_path / "audio.m4a")
+    second = build_capo_variant(work_dir, audio_path_override=tmp_path / "audio.m4a")
+
+    assert first == second

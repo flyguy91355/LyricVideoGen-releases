@@ -375,6 +375,10 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._slider("chord_diagram_panel_alpha", "Chord chart background opacity", 0, 255, 51,
                      lambda v: f"{int(v / 255 * 100)}%")
 
+        self._section("EASY CHORD (capo) videos")
+        self._check("generate_easy_chord_versions",
+                     "Also generate an EASY CHORD (capo) version for hard-key songs")
+
         self._section("Image pacing")
         self._slider("image_min_hold_seconds", "Minimum image hold (instrumental sections)", 0.5, 8.0, 15,
                      lambda v: f"{v:.1f}s")

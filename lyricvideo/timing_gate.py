@@ -57,8 +57,10 @@ def pass_share() -> float:
         return PASS_SHARE
 
 
-def _percent(share: float) -> str:
-    """"80%", but "89.7%" -- a score that rounds up to the bar must never read like a pass."""
+def percent_display(share: float) -> str:
+    """"80%", but "89.7%" -- a score that rounds up to the bar must never read like a pass. Public (not
+    module-private) since pipeline.py's cleared-song note (owner, 2026-09-23: "i want to know how close it
+    is") uses the identical formatting for the real achieved percentage."""
     return f"{share * 100:.1f}".rstrip("0").rstrip(".") + "%"
 
 
@@ -103,9 +105,24 @@ class SyncReport:
         shown = ", ".join(str(n) for n in self.out_of_sync_lines[:_SHOWN_LINES])
         more = ", ..." if len(self.out_of_sync_lines) > _SHOWN_LINES else ""
         return (
-            f"SET ASIDE FOR REVIEW -- the lyric timing is not precise enough: only {_percent(self.share)} of the lines start "
-            f"within half a second of where they are sung ({_percent(self.needed)} are needed); lines {shown}{more} are off. {tail}"
+            f"SET ASIDE FOR REVIEW -- the lyric timing is not precise enough: only {percent_display(self.share)} of the lines start "
+            f"within half a second of where they are sung ({percent_display(self.needed)} are needed); lines {shown}{more} are off. {tail}"
         )
+
+
+def heard_text_near_line(line_words: list, heard: list[HeardWord]) -> str:
+    """The words Whisper heard within +-SEARCH_SECONDS of a lyric line's own placed span -- the exact window
+    check_sync() searches when scoring that line. `line_words` are Word objects (start_time/end_time set); an
+    empty line, or one with nothing heard nearby, returns "". Shared by the GUI's Whisper Text review popup
+    (pipeline.whisper_lines_for) and deep_review's diagnosis, so both read the identical evidence."""
+    if not line_words:
+        return ""
+    low = line_words[0].start_time - SEARCH_SECONDS
+    high = line_words[-1].end_time + SEARCH_SECONDS
+    ordered = sorted(heard, key=lambda hw: hw.start)
+    starts = [hw.start for hw in ordered]
+    nearby = ordered[bisect.bisect_left(starts, low):bisect.bisect_right(starts, high)]
+    return " ".join(hw.word.strip() for hw in nearby if hw.word.strip())
 
 
 def check_sync(
@@ -224,7 +241,7 @@ def hold_if_timing_fails(song_dir: Path, needed: float | None = None) -> str:
     if report.passes:
         if existing:
             save_song(replace(song, lyrics_accuracy_concern=""), timed_path)
-            record_cleared(song_dir.name, f"passes the {report.needed:.0%} timing check")
+            record_cleared(song_dir.name, f"passes the {report.needed:.0%} timing check at {percent_display(report.share)}")
         return ""
     if report.concern != existing:
         save_song(replace(song, lyrics_accuracy_concern=report.concern), timed_path)

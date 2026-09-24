@@ -10,7 +10,7 @@ try:
 except ImportError:
     from moviepy import AudioFileClip, CompositeAudioClip, VideoClip  # moviepy >= 2.0 dropped .editor
 
-from .chord_diagram import draw_chord_legend
+from .chord_diagram import draw_capo_badge, draw_chord_legend
 from .layout import build_image_timeline, build_scene
 from .models import ChordTrack, LyricLine, current_chord_at
 from .render import (
@@ -71,6 +71,7 @@ def assemble_video(
     support_overlay_text: str = "",
     support_overlay_scale: float = 1.0,
     support_overlay_lead_seconds: float = 20.0,
+    capo: int | None = None,
 ) -> None:
     image_cache: dict[str, Image.Image] = {}
     audio_clip = AudioFileClip(str(audio_path))
@@ -184,6 +185,10 @@ def assemble_video(
             frame, chord_legend_labels or [], current.label if current is not None else None, font_path,
             frame_size=frame_size, show_chord_legend=show_chord_legend, size_scale=chord_legend_scale,
             accent_color=accent_color, text_color=text_color, dim_text_color=dim_text_color,
+            panel_color=panel_color, panel_alpha=chord_diagram_panel_alpha,
+        )
+        frame = draw_capo_badge(
+            frame, capo, font_path, frame_size=frame_size, accent_color=accent_color, text_color=text_color,
             panel_color=panel_color, panel_alpha=chord_diagram_panel_alpha,
         )
         # Owner request, 2026-09-11: only the last support_overlay_lead_seconds

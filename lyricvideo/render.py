@@ -465,6 +465,15 @@ def draw_chord_bar(
         badge = "   ·   ".join(parts)
         bx, by = badge_xy
         badge_w = draw.textlength(badge, font=small_font)
+        # Real owner complaint, 2026-09-23: "too faint... needs to be just a little bit
+        # brighter" -- unlike every other piece of chord-bar text, this badge was drawn
+        # straight onto the video frame with no panel behind it, so it could wash out
+        # against a bright background image. Same panel_fill/rounded-rectangle language
+        # as the rest of this bar restores guaranteed contrast regardless of what's
+        # playing behind it.
+        pad_x, pad_y = 14, 8
+        badge_box = (bx - badge_w - pad_x, by - pad_y, bx + pad_x, by + small_font.size + pad_y)
+        draw.rounded_rectangle(badge_box, radius=10, fill=panel_fill)
         draw.text((bx - badge_w, by), badge, font=small_font, fill=(*accent_color, 255))
 
     composited = Image.alpha_composite(frame.convert("RGBA"), overlay)

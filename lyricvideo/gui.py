@@ -36,6 +36,7 @@ from .pipeline import (
     STAGES,
     HeldBeforeVideo,
     run_pipeline,
+    build_capo_variant,
     slugify as _slugify,
     list_flagged_songs,
     needs_review,
@@ -43,6 +44,7 @@ from .pipeline import (
     list_pending_uploads,
     list_rendered_songs,
     list_uploadable_songs,
+    list_easy_chord_backfill_candidates,
     load_redo_inputs,
     backup_song_outputs,
     prepare_images_for_fresh_regeneration,
@@ -394,6 +396,7 @@ class LyricVideoGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.redo_song_var = tk.StringVar()
         self.redo_new_images_var = tk.BooleanVar(value=False)
+        self.redo_easy_chord_var = tk.BooleanVar(value=False)
         self.retry_upload_song_var = tk.StringVar()
         self.batch_folder_var = tk.StringVar(value=load_last_batch_folder())
         self._batch_items: list = []  # list[BatchItem] once resolved
@@ -509,6 +512,9 @@ class LyricVideoGUI:
         ctk.CTkCheckBox(
             redo_controls, text="Generate new images", variable=self.redo_new_images_var,
         ).pack(side="left", padx=8)
+        ctk.CTkCheckBox(
+            redo_controls, text="Easy Chords (capo)", variable=self.redo_easy_chord_var,
+        ).pack(side="left", padx=8)
         self.redo_button = ctk.CTkButton(redo_controls, text="Redo", command=self._on_redo, width=80)
         self.redo_button.pack(side="left", padx=8)
 
@@ -556,6 +562,28 @@ class LyricVideoGUI:
             pending_controls, text="Upload Selected", command=self._on_upload_selected_pending, width=140,
         )
         self.upload_selected_button.pack(side="left", padx=8)
+
+        def _add_easy_chord_select_all(header: ctk.CTkFrame) -> None:
+            self.easy_chord_select_all_var = tk.BooleanVar(value=True)
+            ctk.CTkCheckBox(
+                header, text="Select All", variable=self.easy_chord_select_all_var,
+                command=self._on_toggle_easy_chord_backfill_select_all,
+            ).pack(side="right", padx=8)
+
+        self._easy_chord_backfill_vars: dict[str, tk.BooleanVar] = {}
+        easy_chord_content, self._invalidate_easy_chord_backfill_list = self._make_collapsible_section(
+            left, "Generate EASY CHORD Versions (existing songs)", header_extra=_add_easy_chord_select_all,
+            on_first_expand=self._refresh_easy_chord_backfill_list,
+        )
+        self.easy_chord_backfill_list_frame = ctk.CTkScrollableFrame(easy_chord_content, height=SONG_LIST_HEIGHT)
+        self.easy_chord_backfill_list_frame.pack(fill="x", padx=8, pady=(0, 4))
+        easy_chord_controls = ctk.CTkFrame(easy_chord_content, fg_color="transparent")
+        easy_chord_controls.pack(fill="x", padx=8, pady=(0, 8))
+        self.generate_easy_chord_backfill_button = ctk.CTkButton(
+            easy_chord_controls, text="Generate Selected", command=self._on_generate_selected_easy_chord_backfill,
+            width=140,
+        )
+        self.generate_easy_chord_backfill_button.pack(side="left", padx=8)
 
         batch_frame = ctk.CTkFrame(left)
         batch_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -1325,14 +1353,16 @@ class LyricVideoGUI:
             return
 
         generate_new_images = self.redo_new_images_var.get()
+        easy_chord = self.redo_easy_chord_var.get()
         if not messagebox.askyesno(
             "Redo song",
             f'Redo "{title}" using the current program?\n\n'
             "This re-syncs chords/lyrics with today's code and re-renders the "
             "video, overwriting it in place -- the current video and timing "
             "data are backed up first. "
-            + ("New AI images will be generated." if generate_new_images
-               else "Existing images will be reused (no AI cost)."),
+            + ("New AI images will be generated. " if generate_new_images
+               else "Existing images will be reused (no AI cost). ")
+            + ("An EASY CHORD (capo) version will also be built." if easy_chord else ""),
         ):
             return
 
@@ -1352,6 +1382,7 @@ class LyricVideoGUI:
         thread = threading.Thread(
             target=self._run_worker,
             args=(audio_path, song_dir, title, "fetch_lyrics"),
+            kwargs={"force_easy_chord": easy_chord},
             daemon=True,
         )
         thread.start()
@@ -1517,6 +1548,105 @@ class LyricVideoGUI:
             lines.extend(f"  {slug}: {reason}" for slug, reason in results["failed"])
         messagebox.showinfo("Retry upload results", "\n".join(lines))
 
+    def _on_toggle_easy_chord_backfill_select_all(self) -> None:
+        value = self.easy_chord_select_all_var.get()
+        for var in self._easy_chord_backfill_vars.values():
+            var.set(value)
+
+    def _on_generate_selected_easy_chord_backfill(self) -> None:
+        if self._running:
+            return
+        slugs = [slug for slug, var in self._easy_chord_backfill_vars.items() if var.get()]
+        if not slugs:
+            messagebox.showerror("No songs selected", "Check at least one song to generate an EASY CHORD version for.")
+            return
+        if not messagebox.askyesno(
+            "Generate EASY CHORD Versions",
+            f"Build an EASY CHORD (capo) version for {len(slugs)} song(s)?\n\n"
+            "Each one reuses its own images and audio and only re-renders -- no new AI cost.",
+        ):
+            return
+
+        self._running = True
+        self.generate_button.configure(state="disabled")
+        self.redo_button.configure(state="disabled")
+        self.batch_button.configure(state="disabled")
+        self.generate_easy_chord_backfill_button.configure(state="disabled")
+        self.status_var.set(f"Generating EASY CHORD versions (0/{len(slugs)})...")
+        self.progress_bar.set(0.0)
+        self._clear_log()
+
+        thread = threading.Thread(target=self._run_easy_chord_backfill_worker, args=(slugs,), daemon=True)
+        thread.start()
+        self.root.after(100, self._poll_queue)
+
+    def _run_easy_chord_backfill_worker(self, slugs: list[str]) -> None:
+        """Builds each selected song's EASY CHORD (capo) variant in turn -- one bad song (missing images,
+        corrupt chord track) is caught and logged, never aborting the rest, same convention as every other
+        batch operation in this app (_run_batch_worker above)."""
+        writer = _QueueWriter(self._queue)
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = writer, writer
+        results = {"succeeded": [], "failed": []}
+        try:
+            for index, slug in enumerate(slugs, start=1):
+                self._queue.put(("batch_file_start", (index, len(slugs), slug)))
+                try:
+                    build_capo_variant(PROJECT_ROOT / "work" / slug)
+                    print(f"{slug}: EASY CHORD version built.")
+                    results["succeeded"].append(slug)
+                except Exception as e:
+                    results["failed"].append((slug, f"{type(e).__name__}: {e}"))
+                    print(f"{slug}: FAILED -- {type(e).__name__}: {e}")
+                self._queue.put(("batch_item_done", None))
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+        self._queue.put(("easy_chord_backfill_done", results))
+
+    def _on_easy_chord_backfill_done(self, results: dict) -> None:
+        self._running = False
+        self.generate_button.configure(state="normal")
+        self.redo_button.configure(state="normal")
+        self.batch_button.configure(state="normal")
+        self.generate_easy_chord_backfill_button.configure(state="normal")
+        self.status_var.set("Ready")
+        self.progress_bar.set(1.0)
+        self._invalidate_easy_chord_backfill_list()
+        self._refresh_retry_upload_options()
+        lines = [f"Built {len(results['succeeded'])} EASY CHORD version(s)."]
+        if results["failed"]:
+            lines.append(f"{len(results['failed'])} failed:")
+            lines.extend(f"  {slug}: {reason}" for slug, reason in results["failed"])
+        messagebox.showinfo("EASY CHORD generation results", "\n".join(lines))
+
+    def _refresh_easy_chord_backfill_list(self) -> None:
+        """Rebuilds the EASY CHORD backfill checklist from the filesystem (never cached) -- a song leaves
+        this list the moment its own `-capo` folder exists, same "no separate bookkeeping" convention as
+        Pending YouTube Uploads."""
+        for child in self.easy_chord_backfill_list_frame.winfo_children():
+            child.destroy()
+        dismissed = load_dismissed("easy_chord_backfill")
+        select_all = self.easy_chord_select_all_var.get()
+        slugs = [s for s in list_easy_chord_backfill_candidates(PROJECT_ROOT / "work") if s not in dismissed]
+        self._easy_chord_backfill_vars = {}
+        for slug in slugs:
+            var = tk.BooleanVar(value=select_all)
+            self._easy_chord_backfill_vars[slug] = var
+            try:
+                self._build_song_list_row(
+                    self.easy_chord_backfill_list_frame, "easy_chord_backfill", slug,
+                    lambda row, var=var: ctk.CTkCheckBox(row, text=slug, variable=var),
+                )
+            except Exception as e:
+                # See the identical guard in _populate_song_radio_list -- one bad row must never blank
+                # the whole list silently.
+                print(f"WARNING: could not build an EASY CHORD backfill row for {slug!r}: {type(e).__name__}: {e}",
+                      file=sys.stderr)
+        if not slugs:
+            ctk.CTkLabel(self.easy_chord_backfill_list_frame, text="(none)", text_color="gray60").pack(
+                anchor="w", padx=6, pady=6
+            )
+
     def _refresh_retry_upload_options(self) -> None:
         # invalidate(), not a direct rebuild: real owner complaint,
         # 2026-09-15 -- rebuilding a CLOSED, never-opened list of up to ~50
@@ -1552,6 +1682,8 @@ class LyricVideoGUI:
             )
         elif list_name == "pending":
             self._refresh_pending_uploads_list()
+        elif list_name == "easy_chord_backfill":
+            self._refresh_easy_chord_backfill_list()
 
     def _populate_song_radio_list(
         self, frame: ctk.CTkScrollableFrame, list_name: str, all_songs: list[str], variable: tk.StringVar,
@@ -2276,10 +2408,15 @@ class LyricVideoGUI:
         work_dir: Path,
         title: str | None = None,
         start_stage: str = "identify",
+        force_easy_chord: bool = False,
     ) -> None:
         writer = _QueueWriter(self._queue)
         old_stdout, old_stderr = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = writer, writer
+        # force_easy_chord (owner, 2026-09-23: a per-Redo "Easy Chords" checkbox) must work even when the
+        # global Settings.generate_easy_chord_versions toggle is off, and must never flip that toggle itself
+        # -- a copy via replace(), never a mutation of the shared self.settings object.
+        settings = replace(self.settings, generate_easy_chord_versions=True) if force_easy_chord else self.settings
         try:
             undismiss_song("flagged", work_dir.name)      # a Redo of a song removed from review brings it back
             out_path = run_pipeline(
@@ -2287,7 +2424,7 @@ class LyricVideoGUI:
                 work_dir,
                 title,
                 start_stage=start_stage,
-                settings=self.settings,
+                settings=settings,
                 progress_callback=lambda stage: self._queue.put(("stage", stage)),
             )
             _maybe_upload_to_youtube(work_dir, self.settings)
@@ -2429,6 +2566,9 @@ def _dispatch_queue_message(self, kind: str, payload) -> None:
         self._refresh_retry_upload_options()
     elif kind == "batch_done":
         self._on_batch_done(payload)
+        raise _StopPolling
+    elif kind == "easy_chord_backfill_done":
+        self._on_easy_chord_backfill_done(payload)
         raise _StopPolling
 
 

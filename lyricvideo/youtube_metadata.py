@@ -38,6 +38,16 @@ def build_play_along_title(song_title: str, artist: str) -> str:
     return f"{base} - (Play Along Lyrics & Chords)"
 
 
+def build_easy_chord_title(song_title: str, artist: str, capo_fret: int) -> str:
+    """Deterministic YouTube title for an EASY CHORD (capo) variant -- same "never Claude-authored" policy
+    as build_play_along_title(), with the capo fret called out so this upload is never mistaken for the
+    original hard-key one (owner, 2026-09-23: "it must have EASY CHORDS in the title... keeps the versions
+    separate"). `song_title` must be the CLEAN original title, not the "EasyChords"-suffixed filename title."""
+    known_artist = artist.strip()
+    base = f"{song_title} - {known_artist}" if known_artist else song_title
+    return f"{base} - (EASY CHORDS Play Along - Capo {capo_fret})"
+
+
 def generate_video_metadata(
     anthropic_client, song_title: str, artist: str, full_lyrics: str, model: str = "claude-sonnet-5",
 ) -> tuple[str, str, list[str]]:

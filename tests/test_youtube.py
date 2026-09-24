@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from lyricvideo.youtube import (
     add_video_to_playlist, create_playlist, find_playlist_by_id, get_video_snippet, is_quota_exceeded_error,
     is_video_in_playlist, is_video_public, list_new_comments, post_reply, post_top_level_comment,
-    reserved_publish_datetimes, update_video_description, upload_video, video_exists,
+    remove_video_from_playlist, reserved_publish_datetimes, update_video_description, upload_video, video_exists,
 )
 
 
@@ -239,17 +239,44 @@ class _FakePlaylistsResource:
 class _FakePlaylistItemsResource:
     def __init__(self):
         self.insert_kwargs = None
+        self.deleted_item_ids: list[str] = []
         self.members: dict[str, set[str]] = {}
+        self._item_ids: dict[tuple[str, str], str] = {}
+        self._next_item_id = 0
+        self.gone_video_ids: set[str] = set()   # deleted directly on YouTube -- list() 404s, not an empty result
 
     def list(self, part, playlistId, videoId):
-        is_member = videoId in self.members.get(playlistId, set())
-        return _FakeExecutable({"items": [{"id": "item1"}] if is_member else []})
+        if videoId in self.gone_video_ids:
+            from googleapiclient.errors import HttpError
+
+            resp = SimpleNamespace(status=404, reason="Not Found")
+            content = (
+                b'{"error": {"code": 404, "errors": [{"message": "Video not found.", '
+                b'"domain": "youtube.playlistItem", "reason": "videoNotFound"}]}}'
+            )
+            raise HttpError(resp, content)
+        if videoId not in self.members.get(playlistId, set()):
+            return _FakeExecutable({"items": []})
+        item_id = self._item_ids.get((playlistId, videoId), "item1")  # a member set up directly in a test fixture
+        return _FakeExecutable({"items": [{"id": item_id}]})
 
     def insert(self, **kwargs):
         self.insert_kwargs = kwargs
         snippet = kwargs["body"]["snippet"]
-        self.members.setdefault(snippet["playlistId"], set()).add(snippet["resourceId"]["videoId"])
-        return _FakeExecutable({"id": "item-new"})
+        playlist_id, video_id = snippet["playlistId"], snippet["resourceId"]["videoId"]
+        self.members.setdefault(playlist_id, set()).add(video_id)
+        self._next_item_id += 1
+        item_id = f"item{self._next_item_id}"
+        self._item_ids[(playlist_id, video_id)] = item_id
+        return _FakeExecutable({"id": item_id})
+
+    def delete(self, id):
+        self.deleted_item_ids.append(id)
+        for (playlist_id, video_id), item_id in list(self._item_ids.items()):
+            if item_id == id:
+                self.members[playlist_id].discard(video_id)
+                del self._item_ids[(playlist_id, video_id)]
+        return _FakeExecutable({})
 
 
 class _FakePlaylistYoutubeClient:
@@ -317,6 +344,42 @@ def test_add_video_to_playlist_is_a_noop_when_already_a_member():
     add_video_to_playlist(client, "PL1", "vid1")
 
     assert client._playlist_items.insert_kwargs is None
+
+
+def test_remove_video_from_playlist_removes_a_real_member():
+    """Owner, 2026-09-23: cleaning up songs that were added to EASY CHORD under the old (wider) is_easy_key
+    rule, now that F/B no longer count as easy."""
+    client = _FakePlaylistYoutubeClient()
+    add_video_to_playlist(client, "PL1", "vid1")
+
+    removed = remove_video_from_playlist(client, "PL1", "vid1")
+
+    assert removed is True
+    assert is_video_in_playlist(client, "PL1", "vid1") is False
+
+
+def test_remove_video_from_playlist_is_a_noop_when_not_a_member():
+    client = _FakePlaylistYoutubeClient()
+
+    removed = remove_video_from_playlist(client, "PL1", "vid1")
+
+    assert removed is False
+    assert client._playlist_items.deleted_item_ids == []
+
+
+def test_remove_video_from_playlist_is_a_noop_when_the_video_was_deleted_on_youtube():
+    """Real incident, 2026-09-23, running scripts/fix_playlist_data_20260923.py live: a video listed in a
+    song's own youtube_state.json no longer existed on YouTube at all, and playlistItems().list() 404s as
+    videoNotFound for a gone video -- a different failure mode than "not a member" (which 200s with an empty
+    items list). A video that's gone is obviously not a member of anything either -- nothing to remove,
+    not an error."""
+    client = _FakePlaylistYoutubeClient()
+    client._playlist_items.gone_video_ids.add("vid1")
+
+    removed = remove_video_from_playlist(client, "PL1", "vid1")
+
+    assert removed is False
+    assert client._playlist_items.deleted_item_ids == []
 
 
 def test_video_exists_true_when_the_video_id_is_still_live():

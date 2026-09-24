@@ -208,6 +208,24 @@ def test_draw_chord_bar_hides_key_bpm_badge_when_disabled(test_font_path):
     assert not np.array_equal(shown, hidden)
 
 
+def test_draw_chord_bar_key_bpm_badge_has_a_background_panel_for_contrast(test_font_path):
+    """Real owner complaint, 2026-09-23: the Key/BPM badge is "too faint" -- unlike every
+    other chord-bar element (NOW/NEXT boxes, the whole bar, the timeline lane), it was
+    drawn as plain accent-colored text straight onto the video frame with no panel behind
+    it, so it could wash out against a bright background image. A pixel just inside the
+    badge's own left padding (never a glyph stroke, always inside its panel) must now
+    differ from a bright plain background -- proof a panel is actually drawn there."""
+    bg = Image.new("RGB", FRAME_SIZE, (250, 250, 250))
+    chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C")], key="C major", bpm=120.0)
+
+    frame = np.array(draw_chord_bar(bg, chord_track, t=0.5, font_path=test_font_path))
+
+    layout = compute_chord_bar_layout(FRAME_SIZE)
+    bx, by = layout["badge_xy"]
+    sample = frame[by + 4, bx - 6]
+    assert tuple(int(c) for c in sample) != (250, 250, 250)
+
+
 def test_draw_chord_bar_respects_custom_timeline_window(test_font_path):
     bg = Image.new("RGB", FRAME_SIZE, (20, 20, 20))
     # A chord far enough out that only a wide window includes any of it.

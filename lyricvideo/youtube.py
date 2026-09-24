@@ -86,6 +86,30 @@ def add_video_to_playlist(youtube_client, playlist_id: str, video_id: str) -> No
     youtube_client.playlistItems().insert(part="snippet", body=body).execute()
 
 
+def remove_video_from_playlist(youtube_client, playlist_id: str, video_id: str) -> bool:
+    """Removes video_id from playlist_id if present. Returns whether anything was actually removed (False if
+    it wasn't a member to begin with) so a cleanup script can report real counts rather than assuming every
+    attempt did something -- owner, 2026-09-23: cleaning up songs added to EASY CHORD under the old, wider
+    is_easy_key rule before F/B were walked back to hard.
+
+    A video deleted directly on YouTube makes this same list() call 404 as videoNotFound instead of 200ing
+    with an empty items list (real incident, 2026-09-23, running the cleanup script live) -- a gone video is
+    obviously not a member of anything either, so that's treated the same as "not a member," not an error."""
+    from googleapiclient.errors import HttpError
+
+    try:
+        response = youtube_client.playlistItems().list(part="id", playlistId=playlist_id, videoId=video_id).execute()
+    except HttpError as e:
+        if e.status_code == 404:
+            return False
+        raise
+    items = response.get("items", [])
+    if not items:
+        return False
+    youtube_client.playlistItems().delete(id=items[0]["id"]).execute()
+    return True
+
+
 def _all_uploaded_video_ids(youtube_client) -> list[str]:
     """Every video id ever uploaded to the connected channel, oldest first,
     via its own uploads playlist (the standard way to enumerate a channel's
