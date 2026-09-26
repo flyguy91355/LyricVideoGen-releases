@@ -4177,3 +4177,9 @@ tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this sam
   (private + publish date) videos were converted; all 22 re-read from YouTube as already in the new layout, still private with
   their publish dates and tags. The 67 public videos are untouched; Bridge Over Troubled Water (public, published by the owner)
   still carries the test layout B (owner's full block on top). `--status scheduled|public|all` selects which; backups in reports/.
+- Sign-off reworded at the owner's request ("enjoying Play Along Videos and that they're helping ..."): now "I hope you're
+  enjoying the Play Along Videos channel and that these videos are helping you grow as a musician. Thanks for playing along!"
+  (option B of two offered; the owner had misread a "they're" in my message as "you're" -- it was about the videos, not him).
+  Changing a template's wording later needs the OLD text removed first, so `description_body()` now takes several old pieces
+  and `update_support_description.py` has a repeatable `--old-text`; all 22 scheduled videos re-read as converted, each with
+  exactly one new sign-off.

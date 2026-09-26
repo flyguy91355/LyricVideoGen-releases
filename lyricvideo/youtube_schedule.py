@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
@@ -199,12 +200,14 @@ def render_description(template: str, description: str) -> str:
     return "\n\n".join(part for part in (top, description.strip(), bottom) if part)
 
 
-def description_body(description: str, old_support_text: str, template: str) -> str:
-    """The song's own description text with the old bottom "Support:" line and any part of the current template
-    taken out -- what scripts/update_support_description.py re-renders, so a video already in the new layout comes
-    out unchanged and an old-style one is converted."""
+def description_body(description: str, old_support_text: str | Sequence[str], template: str) -> str:
+    """The song's own description text with the old support text (one string, or several -- e.g. the very old
+    bottom "Support:" line AND the previous sign-off sentence) and any part of the current template taken out --
+    what scripts/update_support_description.py re-renders, so a video already in the new layout comes out
+    unchanged and an old-style one is converted."""
+    olds = [old_support_text] if isinstance(old_support_text, str) else list(old_support_text)
     text = description
-    for piece in (old_support_text.strip(), *_template_parts(template)):
+    for piece in (*(old.strip() for old in olds), *_template_parts(template)):
         if piece:
             text = text.replace(piece, "")
     return re.sub(r"\n{3,}", "\n\n", text).strip()

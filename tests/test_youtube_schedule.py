@@ -670,3 +670,20 @@ def test_schedule_upload_renders_the_support_template_around_the_description(tmp
     assert client._videos.insert_kwargs["body"]["snippet"]["description"] == (
         f"{_TOP}\n\nA great song. It is about hope.\n\n{_BOTTOM}"
     )
+
+
+def test_description_body_can_strip_several_old_pieces_at_once():
+    """Changing the sign-off wording later: the previous sentence AND the very old "Support:" line both go."""
+    text = f"A song.\n\n{_OLD}\n\nOld sign-off."
+
+    assert description_body(text, [_OLD, "Old sign-off."], _TEMPLATE) == "A song."
+
+
+def test_swapping_the_sign_off_leaves_exactly_one_new_sign_off():
+    old_template = f"{_TOP}\n{{description}}\nOld sign-off."
+    new_template = f"{_TOP}\n{{description}}\nNew sign-off."
+    rendered_old = render_description(old_template, "A song.")
+
+    body = description_body(rendered_old, [_OLD, "Old sign-off."], new_template)
+
+    assert render_description(new_template, body) == f"{_TOP}\n\nA song.\n\nNew sign-off."
