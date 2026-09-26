@@ -238,12 +238,12 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    `render.draw_support_overlay()` optionally burns a small semi-transparent "support this channel" watermark
    into the LAST `Settings.support_overlay_lead_seconds` (default 20s) only -- never the countdown -- upper-RIGHT
    below the Key/BPM badge (HISTORY 9-11). `Settings.support_overlay_text` (blank = off) drives only the overlay;
-   the separate `Settings.support_description_text` (blank = off; a multi-line box in Settings) is placed by
-   `schedule_upload()` right after the YouTube description's FIRST sentence (`place_support_text`, HISTORY 9-26) --
+   the separate `Settings.support_description_text` (blank = off; multi-line box) is a TEMPLATE -- text above, the
+   marker `{description}`, text below -- rendered by `schedule_upload()` via `render_description` (HISTORY 9-26) --
    deliberately two fields, since a video frame is never clickable but the description needs the real `https://`
    link. Field labels in `settings_panel.py` must stay short (one long label once broke the WHOLE panel; see
-   `_add()`). `scripts/update_support_description.py` (manual, re-runnable, backs up first, `--only`/`--dry-run`)
-   moves it on already-uploaded videos; `backfill_support_overlay_description.py` is the older append-only one.
+   `_add()`). `scripts/update_support_description.py` (manual, re-runnable, backs up first, `--only`/`--status`/
+   `--dry-run`) re-renders already-uploaded videos; `backfill_support_overlay_description.py` is the older one.
    `build_scene()`'s `scroll_progress` (how far the current line's own
    on-screen scroll animation has advanced) uses `_plausible_line_end()` --
    the same outlier-capped end as `_plausible_sung_intervals()` -- instead of

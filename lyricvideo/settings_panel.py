@@ -432,7 +432,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._text("support_overlay_text", "Overlay text (blank = off)")
         self._slider("support_overlay_size", "Overlay size", 50, 200, 30, lambda v: f"{int(v)}%")
         self._slider("support_overlay_lead_seconds", "Show during the last...", 5, 60, 55, lambda v: f"{int(v)}s")
-        self._multiline_text("support_description_text", "Description text (blank = off)")
+        self._multiline_text("support_description_text", "Description layout (blank = off)")
 
         self._section("Chord detection")
         self._check("snap_chords_to_key", "Bias detected chords toward the song key")

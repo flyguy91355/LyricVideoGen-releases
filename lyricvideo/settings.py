@@ -79,9 +79,11 @@ class Settings:
                                                  # many seconds before the song ends -- not the
                                                  # whole video (owner request, 2026-09-11: less
                                                  # intrusive, and catches a viewer near the end)
-    support_description_text: str = ""  # "" = no line appended to the YouTube description --
-                                         # independent of support_overlay_text; should contain
-                                         # the real https:// link, e.g. "Support: https://ko-fi.com/you"
+    support_description_text: str = ""  # "" = the YouTube description is left as the AI wrote it -- independent of
+                                         # support_overlay_text. A small TEMPLATE (youtube_schedule.render_description):
+                                         # text ABOVE the song description, the marker {description}, text BELOW;
+                                         # with no marker the whole block goes below. Put the real https:// link in
+                                         # it, e.g. "Tips: https://ko-fi.com/you\n{description}\nThank you!"
 
     # --- Chord detection (detect_chords.py) -------------------------------
     snap_chords_to_key: bool = True

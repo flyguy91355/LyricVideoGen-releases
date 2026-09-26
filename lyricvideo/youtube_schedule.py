@@ -174,54 +174,40 @@ def compute_next_publish_slot(
         candidate_date += timedelta(days=1)
 
 
-# A "sentence end" for placing the support block: . ! or ? (plus any closing quote/bracket) followed by whitespace.
-_SENTENCE_END_RE = re.compile(r"[.!?]+[\"'”’)\]]*(?=\s)")
-# A period after one of these (or after a lone capital, like "J. Cole") is not the end of a sentence.
-_NOT_A_SENTENCE_END = {"dr", "mr", "mrs", "ms", "jr", "sr", "st", "vs", "feat", "ft", "vol", "no", "etc", "inc", "co"}
+DESCRIPTION_PLACEHOLDER = "{description}"
 
 
-def _first_sentence_end(text: str) -> int | None:
-    """Index just past the first sentence's closing punctuation, or None when there is no second sentence
-    (the description is one sentence, or has no sentence break at all)."""
-    for match in _SENTENCE_END_RE.finditer(text):
-        word = re.search(r"([A-Za-z]+)$", text[:match.start()])
-        token = word.group(1) if word else ""
-        if match.group().startswith(".") and (
-            token.lower() in _NOT_A_SENTENCE_END or (len(token) == 1 and token.isupper())
-        ):
-            continue
-        return match.end() if text[match.end():].strip() else None
-    return None
+def _template_parts(template: str) -> tuple[str, str]:
+    """(top, bottom) of a support template: the text before and after the {description} marker. A template with
+    no marker is all "bottom" -- the block simply goes below the description, as it always used to."""
+    template = template.strip()
+    if DESCRIPTION_PLACEHOLDER in template:
+        top, bottom = template.split(DESCRIPTION_PLACEHOLDER, 1)
+        return top.strip(), bottom.strip()
+    return "", template
 
 
-def place_support_text(description: str, support_text: str) -> str:
-    """Puts the owner's support block (Settings.support_description_text, one or several lines) right after the
-    description's FIRST sentence, so it shows without clicking "...more" -- owner, 2026-09-26, after comparing how
-    real play-along channels word and place their ask (lines 1-3, never the bottom). A one-sentence description
-    just gets the block after it. Blank support text changes nothing; a description that already contains the
-    block is returned untouched, so re-running is harmless."""
-    block = support_text.strip()
-    body = description.strip()
-    if not block:
+def render_description(template: str, description: str) -> str:
+    """Builds the final YouTube description from Settings.support_description_text -- a small template (owner,
+    2026-09-26): what goes ABOVE the song description, the marker {description}, and what goes BELOW, e.g. a
+    one-line tip link plus a "click more" teaser on top and a thank-you underneath. Blank template: the description
+    unchanged. See CLAUDE_HISTORY 2026-09-26 for why the ask sits on top (only ~100-150 characters show before
+    "...more") and why a teaser line points people to the song info below."""
+    if not template.strip():
         return description
-    if not body:
-        return block
-    if block in body:
-        return description
-    end = _first_sentence_end(body)
-    if end is None:
-        return f"{body}\n\n{block}"
-    return f"{body[:end].rstrip()}\n\n{block}\n\n{body[end:].strip()}"
+    top, bottom = _template_parts(template)
+    return "\n\n".join(part for part in (top, description.strip(), bottom) if part)
 
 
-def move_support_text(description: str, old_support_text: str, new_support_text: str) -> str:
-    """For videos already on YouTube: removes the old support line (wherever it sits -- it was appended at the
-    bottom) and places the new block after the first sentence. Running it twice gives the same result."""
-    cleaned = description
-    if old_support_text.strip():
-        cleaned = cleaned.replace(old_support_text.strip(), "")
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return place_support_text(cleaned, new_support_text)
+def description_body(description: str, old_support_text: str, template: str) -> str:
+    """The song's own description text with the old bottom "Support:" line and any part of the current template
+    taken out -- what scripts/update_support_description.py re-renders, so a video already in the new layout comes
+    out unchanged and an old-style one is converted."""
+    text = description
+    for piece in (old_support_text.strip(), *_template_parts(template)):
+        if piece:
+            text = text.replace(piece, "")
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def schedule_upload(
@@ -255,7 +241,7 @@ def schedule_upload(
         )
     support_text = getattr(settings, "support_description_text", "").strip()
     if support_text:
-        description = place_support_text(description, support_text)
+        description = render_description(support_text, description)
     video_path = work_dir / f"{slugify(song.title)}.mp4"
 
     if settings.youtube_privacy == "public":

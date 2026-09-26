@@ -591,107 +591,82 @@ def test_schedule_upload_never_uploads_a_video_whose_metadata_could_not_be_gener
     assert not (work_dir / "youtube_state.json").exists()
 
 
-# --- where the support block goes (owner, 2026-09-26): right after the description's FIRST sentence, so it shows
-# without clicking "...more" -- real play-along channels put their ask in lines 1-3, not at the bottom -----------
-from lyricvideo.youtube_schedule import move_support_text, place_support_text  # noqa: E402
+# --- the support text is a small TEMPLATE (owner, 2026-09-26): what goes above the song description, the marker
+# {description}, and what goes below. A layout the owner can edit in Settings, not a fixed rule in code. ------------
+from lyricvideo.youtube_schedule import description_body, render_description  # noqa: E402
 
-_BLOCK = (
-    "I hope you're enjoying the Play Alongs and that they're helping you grow as a musician.\n"
-    "Tips are never expected, but always appreciated ☕\n"
-    "https://ko-fi.com/playalongvideos"
-)
-
-
-def test_place_support_text_goes_right_after_the_first_sentence():
-    description = '"Blackbird" is a classic song by The Beatles. It was written by Paul McCartney. It has chords.'
-
-    assert place_support_text(description, _BLOCK) == (
-        '"Blackbird" is a classic song by The Beatles.\n\n' + _BLOCK
-        + "\n\nIt was written by Paul McCartney. It has chords."
-    )
+_TOP = '☕ Tips are never expected, but always appreciated: https://ko-fi.com/playalongvideos\n▼ Click "more" for the song info ▼'
+_BOTTOM = "I hope you're enjoying the Play Alongs and that they're helping you grow as a musician. Thanks for playing along!"
+_TEMPLATE = f"{_TOP}\n{{description}}\n{_BOTTOM}"
+_OLD = "Support: https://ko-fi.com/playalongvideos"
 
 
-def test_place_support_text_goes_after_a_single_sentence_description():
-    assert place_support_text("Just one sentence.", _BLOCK) == "Just one sentence.\n\n" + _BLOCK
+def test_render_description_puts_the_top_the_song_text_and_the_bottom_in_order():
+    assert render_description(_TEMPLATE, "A great song. More.") == f"{_TOP}\n\nA great song. More.\n\n{_BOTTOM}"
 
 
-def test_place_support_text_does_not_split_on_abbreviations_or_initials():
-    description = "Recorded with Dr. Dre feat. J. Cole in 1999. Then a second sentence."
-
-    assert place_support_text(description, _BLOCK) == (
-        "Recorded with Dr. Dre feat. J. Cole in 1999.\n\n" + _BLOCK + "\n\nThen a second sentence."
-    )
+def test_render_description_without_a_marker_puts_the_whole_block_below_the_description():
+    assert render_description("Support: https://x", "A great song.") == "A great song.\n\nSupport: https://x"
 
 
-def test_place_support_text_splits_after_a_question_or_exclamation_mark():
-    assert place_support_text("What a song! It is great.", _BLOCK) == "What a song!\n\n" + _BLOCK + "\n\nIt is great."
+def test_render_description_leaves_the_description_alone_when_the_template_is_blank():
+    assert render_description("", "A song.") == "A song."
+    assert render_description("  \n ", "A song.") == "A song."
 
 
-def test_place_support_text_keeps_a_closing_quote_with_its_sentence():
-    assert place_support_text('He sings "Hello." Then more.', _BLOCK) == 'He sings "Hello."\n\n' + _BLOCK + "\n\nThen more."
+def test_render_description_supports_a_top_only_and_a_bottom_only_template():
+    assert render_description("Top line\n{description}", "Body.") == "Top line\n\nBody."
+    assert render_description("{description}\nBottom line", "Body.") == "Body.\n\nBottom line"
 
 
-def test_place_support_text_puts_the_block_after_an_easy_chords_intro_line():
-    description = "EASY CHORDS version -- Capo 3, play it in D shapes (original key: F).\n\nA great song. More."
-
-    assert place_support_text(description, _BLOCK) == (
-        "EASY CHORDS version -- Capo 3, play it in D shapes (original key: F).\n\n" + _BLOCK + "\n\nA great song. More."
-    )
+def test_render_description_with_an_empty_description_gives_just_the_template_text():
+    assert render_description(_TEMPLATE, "") == f"{_TOP}\n\n{_BOTTOM}"
 
 
-def test_place_support_text_leaves_the_description_alone_when_the_support_text_is_blank():
-    assert place_support_text("A song. More.", "") == "A song. More."
-    assert place_support_text("A song. More.", "   \n ") == "A song. More."
+def test_render_description_keeps_an_easy_chords_intro_line_with_the_song_text():
+    body = "EASY CHORDS version -- Capo 3, play it in D shapes (original key: F).\n\nA great song."
+
+    assert render_description(_TEMPLATE, body) == f"{_TOP}\n\n{body}\n\n{_BOTTOM}"
 
 
-def test_place_support_text_returns_just_the_block_for_an_empty_description():
-    assert place_support_text("", _BLOCK) == _BLOCK
+def test_description_body_strips_the_old_bottom_support_line():
+    assert description_body(f"A great song. More.\n\n{_OLD}", _OLD, _TEMPLATE) == "A great song. More."
 
 
-def test_place_support_text_is_idempotent():
-    once = place_support_text("A song. More.", _BLOCK)
+def test_description_body_strips_a_description_already_rendered_with_the_template():
+    rendered = render_description(_TEMPLATE, "A great song. More.")
 
-    assert place_support_text(once, _BLOCK) == once
-
-
-def test_move_support_text_replaces_the_old_bottom_line_with_the_new_block_after_the_first_sentence():
-    old = "Support: https://ko-fi.com/playalongvideos"
-    live = f'"Blackbird" is a classic. Written by Paul McCartney. Great for guitarists.\n\n{old}'
-
-    moved = move_support_text(live, old, _BLOCK)
-
-    assert moved == '"Blackbird" is a classic.\n\n' + _BLOCK + "\n\nWritten by Paul McCartney. Great for guitarists."
-    assert old not in moved
+    assert description_body(rendered, _OLD, _TEMPLATE) == "A great song. More."
 
 
-def test_move_support_text_is_a_no_op_the_second_time():
-    old = "Support: https://ko-fi.com/playalongvideos"
-    moved = move_support_text(f"A song. More.\n\n{old}", old, _BLOCK)
+def test_rendering_after_extracting_the_body_is_stable():
+    """What the update script relies on: a video already in the new layout comes out unchanged."""
+    rendered = render_description(_TEMPLATE, "A great song. More.")
 
-    assert move_support_text(moved, old, _BLOCK) == moved
-
-
-def test_move_support_text_adds_the_block_to_a_description_that_never_had_the_old_line():
-    assert move_support_text("A song. More.", "Support: https://x", _BLOCK) == "A song.\n\n" + _BLOCK + "\n\nMore."
+    assert render_description(_TEMPLATE, description_body(rendered, _OLD, _TEMPLATE)) == rendered
 
 
-def test_schedule_upload_places_the_support_block_after_the_first_sentence(tmp_path):
-    class _TwoSentenceMessages:
+def test_description_body_leaves_a_description_that_never_had_any_support_text_alone():
+    assert description_body("Just a song.", _OLD, _TEMPLATE) == "Just a song."
+
+
+def test_schedule_upload_renders_the_support_template_around_the_description(tmp_path):
+    class _Messages:
         def create(self, **kwargs):
             return _FakeAnthropicResponse("DESCRIPTION: A great song. It is about hope.\nTAGS: a, b")
 
     class _Client:
-        messages = _TwoSentenceMessages()
+        messages = _Messages()
 
     work_dir = _make_song_work_dir(tmp_path)
     settings = SimpleNamespace(
         youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False,
-        youtube_upload_times="15:00", support_description_text=_BLOCK,
+        youtube_upload_times="15:00", support_description_text=_TEMPLATE,
     )
     client = _FakeYoutubeClient(video_id="vid1")
 
     schedule_upload(client, _Client(), work_dir, settings)
 
     assert client._videos.insert_kwargs["body"]["snippet"]["description"] == (
-        "A great song.\n\n" + _BLOCK + "\n\nIt is about hope."
+        f"{_TOP}\n\nA great song. It is about hope.\n\n{_BOTTOM}"
     )

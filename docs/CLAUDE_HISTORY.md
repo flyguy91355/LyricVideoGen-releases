@@ -4163,3 +4163,17 @@ tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this sam
   a Save from that stale panel would also write the old text back). Existing videos: `scripts/update_support_description.py`
   (backs up snippets to `reports/`, idempotent, stops cleanly on quota). Blackbird only first, at the owner's request ("i want
   to see it first"); the other uploaded videos wait for his go-ahead.
+- Follow-up, same day: the first layout (ask after the description's FIRST sentence) put the ko-fi link at character 216-261,
+  behind "...more" -- the "shows without clicking more" claim was wrong. Research on placement (read directly): YouTube Help says
+  the first few lines should describe the video; TubeBuddy says keywords in the first 150 characters and links/CTAs "not in the
+  first 150"; Sprout Social says only ~100-150 characters show above the fold; other blogs say the opposite (CTA first);
+  play-along channels mostly lead with the ask (lines 1-3); no public data on how many viewers click "...more". Owner's ideas:
+  a "(song description below)" pointer and "something to draw people to click more". Result: `support_description_text` became
+  a TEMPLATE (`youtube_schedule.render_description`: text above, `{description}`, text below) and the layout is a one-line tip
+  link (link at character 51, line 1) + `▼ Click "more" for the song info ▼`, then the song description, then the warm
+  sign-off ("I hope you're enjoying the Play Alongs ... Thanks for playing along!"). `description_body()` strips the old
+  "Support:" line / the template so `scripts/update_support_description.py` is idempotent.
+- Rollout, at the owner's direction ("do schedule videos, bridge is already public (i did that manually)"): the 22 scheduled
+  (private + publish date) videos were converted; all 22 re-read from YouTube as already in the new layout, still private with
+  their publish dates and tags. The 67 public videos are untouched; Bridge Over Troubled Water (public, published by the owner)
+  still carries the test layout B (owner's full block on top). `--status scheduled|public|all` selects which; backups in reports/.
