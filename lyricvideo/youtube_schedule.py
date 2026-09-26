@@ -37,6 +37,8 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from .chord_theory import load_easy_chord_capo_marker
+from .key_decision import KeyNotConfirmed, confirmed_key_for_upload
+from .key_note import song_key_line
 from .models import load_song
 from .pipeline import slugify
 from .youtube import reserved_publish_datetimes, upload_video
@@ -226,6 +228,9 @@ def schedule_upload(
     lyrics_timed.json rather than trusting anything passed in ahead of
     time, so it's always working from the actual finished video."""
     now = now or datetime.now().astimezone()
+    # Owner, 2026-09-26: nothing goes out without the song's real key. Raises KeyNotConfirmed for a song whose key was never
+    # checked or is waiting for the owner; the same settled key is what the description states.
+    settled_key = confirmed_key_for_upload(work_dir)
     song = load_song(work_dir / "lyrics_timed.json")
     full_lyrics = "\n".join(line.text for line in song.lines)
     artist = _load_artist(work_dir)
@@ -237,11 +242,18 @@ def schedule_upload(
     metadata_title = capo_info["original_title"] if capo_info else song.title
     title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics)
     if capo_info is not None:
+        if capo_info["original_key"] != settled_key:
+            raise KeyNotConfirmed(
+                f"{work_dir.parent.name}: this EASY CHORD video was made for the key {capo_info['original_key']} but the song's key "
+                f"is now {settled_key} -- make the EASY CHORD version again before uploading it."
+            )
         title = build_easy_chord_title(capo_info["original_title"], artist, capo_info["capo_fret"])
         description = (
             f"EASY CHORDS version -- Capo {capo_info['capo_fret']}, play it in {capo_info['shape_key']} shapes "
             f"(original key: {capo_info['original_key']}).\n\n{description}"
         )
+    else:
+        description = f"{song_key_line(settled_key)}\n\n{description}"
     support_text = getattr(settings, "support_description_text", "").strip()
     if support_text:
         description = render_description(support_text, description)

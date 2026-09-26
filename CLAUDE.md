@@ -144,6 +144,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    template matching 9-13 (HISTORY). Needs old TF/Keras/sklearn, no 3.12
    wheels — **`.venv` runs on Python 3.11**; see
    `requirements.txt` pins first. Only chord source, no tab/sheet.
+   **Key check** (`key_decision.py`, HISTORY 9-26; owner: the video and description MUST show the song's real key): after detect_chords, `settle_song_key()` sets `chord_track.key` -- the chord-based estimate (`key_estimate.py`; right for 73/80 verified songs, the old average-pitch guess 55/80) must AGREE with a Claude second opinion that picks among its candidate keys (`key_opinion.py`); else the song is HELD before images/video and shown in Flagged with **Set Key** (`key_owner.json`, always wins, survives Redo; Render Anyway resumes at images/render). `key_decision.json` records it. `schedule_upload` refuses a song without a settled key (`KeyNotConfirmed`), opens the description with `🎸 Song key: X` and checks an EASY video's marker key matches; `build_capo_variant` needs a settled key and proves its chords are the song's shifted by the capo (`capo_track_matches`); unsettled songs stay out of the pending lists (`key_needs_attention`; uploaded songs untouched). `scripts/settle_keys.py` (dry run; `--apply`) re-checks made-but-not-uploaded songs; `scripts/add_key_note.py` puts `📌 Song key: X (not Y as shown in the video)` on live descriptions. `is_quota_exceeded_error` also treats HTTP 403 `quotaExceeded` as a quota stop.
 6. **images** — `imagery.py`: one Claude call summarizes the whole song's gist
    once (`summarize_song_gist`), then each *unique* lyric line AND each
    instrumental-stretch caption (`layout.instrumental_image_captions()` -- the
@@ -230,11 +231,7 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    little LONGER than that chord's raw span, never out of sync with the
    music. `build_scene()`'s Ken Burns window during an instrumental stretch
    paces to that block's own span (not a single absorbed chord's), so a
-   merged block's pan doesn't reset partway through. Any image swap (line-to-
-   line included) now crossfades over `Settings.image_transition_seconds`
-   (default 0.25s) via `render.crossfade_backgrounds()` instead of a cut,
-   capped to 40% of either neighbor segment's own length so a
-   briefly-held image never spends its whole visible life mid-fade.
+   merged block's pan doesn't reset partway through. Any image swap crossfades over `Settings.image_transition_seconds` (0.25s, `render.crossfade_backgrounds()`), capped to 40% of either neighbor segment's length.
    `render.draw_support_overlay()` optionally burns a small semi-transparent "support this channel" watermark
    into the LAST `Settings.support_overlay_lead_seconds` (default 20s) only -- never the countdown -- upper-RIGHT
    below the Key/BPM badge (HISTORY 9-11). `Settings.support_overlay_text` (blank = off) drives only the overlay;
@@ -244,28 +241,9 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    link. Field labels in `settings_panel.py` must stay short (one long label once broke the WHOLE panel; see
    `_add()`). `scripts/update_support_description.py` (manual, re-runnable, backs up first, `--only`/`--status`/
    `--old-text`/`--dry-run`) re-renders already-uploaded videos; `backfill_support_overlay_description.py` is the older one.
-   `build_scene()`'s `scroll_progress` (how far the current line's own
-   on-screen scroll animation has advanced) uses `_plausible_line_end()` --
-   the same outlier-capped end as `_plausible_sung_intervals()` -- instead of
-   the line's raw `end_time` (HISTORY 9-10). Word-highlight timing (`word_sung`/`word_active`) keys
-   only on a word's own start time, never a duration, and is unaffected.
-   `build_scene()`'s CURRENT-LINE TEXT is also gated on `_in_a_line()`
-   (HISTORY 9-10): once past a line's own plausible end, "current"
-   advances to the NEXT line early rather than blanking it -- shown as the
-   same unsung preview the pre-first-line intro already used (9-15); past
-   the last line it still blanks. That preview itself stays hidden until
-   `Settings.lyric_preview_lead_seconds` (default 3.0s) before the line's
-   own start -- no lyrics through most of an intro or solo.
-   The scrolling timeline lane's per-segment chord label (`render.py`'s
-   `_lane_label_font`) shrinks to fit a short-duration chord's narrow box
-   instead of being skipped entirely when it doesn't fit at the default
-   size -- floored at 18pt. If even that
-   doesn't fit, the label is now omitted entirely (`_lane_label_visible`) --
-   the colored block itself still draws, so a chord change stays visible,
-   but the text no longer overflows into the neighboring segment's own
-   label (HISTORY 9-10). No song title or artist text is drawn into the frame
-   anywhere (owner, 9-09) — only the chord bar, Key/BPM badge, and
-   chord legend were added to the frame.
+   `scroll_progress` uses `_plausible_line_end()` (the outlier-capped end `_plausible_sung_intervals()` uses), not the raw `end_time` (HISTORY 9-10); word-highlight timing keys only on a word's own start.
+   CURRENT-LINE text is gated on `_in_a_line()` (HISTORY 9-10): past a line's plausible end, "current" advances early to the NEXT line as the same unsung preview the pre-first-line intro uses (9-15); past the last line it blanks. A preview stays hidden until `Settings.lyric_preview_lead_seconds` (3.0s) before its line -- no lyrics through an intro or solo.
+   A timeline-lane chord label shrinks (floor 18pt, `_lane_label_font`) to fit a short chord's box, else is omitted (`_lane_label_visible`) -- the colored block still draws (HISTORY 9-10). No song title/artist text is drawn into the frame (owner, 9-09); only the chord bar, Key/BPM badge and chord legend are added.
 
 ## Redo an Existing Song
 
@@ -317,16 +295,7 @@ and allow-listed archive extraction/copy
 (`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
 `CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
 `work/`, `.venv/`). `self.top_frame` (the update banner's `before=` anchor) must be
-`.pack()`-managed (HISTORY 9-09). `gui.py` checks once on
-launch (background thread) and
-shows a clickable banner if a newer release exists; clicking it opens a
-modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
-`focus_force`, plus a brief `-topmost` toggle -- `lift`/`focus_force` alone
-aren't reliably honored by every Linux WM)
-with the release notes and an Apply Update button (confirms first,
-then downloads/reinstalls-deps-if-changed/copies/writes the new
-VERSION) then a Relaunch Now button. No severity tiering, no
-periodic re-check, no manual "Check Now" -- see the spec for why.
+`.pack()`-managed (HISTORY 9-09). `gui.py` checks once on launch (background thread) and shows a clickable banner if a newer release exists; it opens a modal dialog (centered, `transient`+`grab_set`+`lift`+`focus_force` plus a brief `-topmost` toggle -- not every Linux WM honors `lift`/`focus_force` alone) with the notes, an Apply Update button (confirms, downloads, reinstalls deps if changed, copies, writes VERSION) then Relaunch Now. No severity tiering, periodic re-check or manual "Check Now" -- see the spec.
 The Apply Update confirmation (`_on_apply_update_clicked`'s `askyesno`) is a SEPARATE dialog and needs the same
 `parent=self._update_dialog_window`/topmost treatment (HISTORY 9-10).
 Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs both launchers; releases repo is public).
@@ -341,14 +310,7 @@ against a stale release reverting newer commits (HISTORY, 9-13).
 
 `Settings.render_kwargs()` centralizes resolution/color unpacking for
 `assemble_video()` (an unknown resolution label falls back to 1080p with a
-warning, never a KeyError); `run_pipeline()` builds on it. `lyricvideo/settings_preview.py`
-(owner, 9-09) renders a synthetic sample frame (fake lyric line + fake
-chord track, no real song/network/AI image) at the chosen output resolution using
-that same mapping, then downscales it for on-screen display. `gui.py`'s Settings
-column is now preview pane (fixed, on top) + the scrollable `SettingsPanel` (which
-also gained a confirmed "Reset to Defaults" button that repopulates every control
-from `Settings()` in one on_change firing);
-main window 1600x1000 (review rows: two button rows). **`SettingsPanel` never writes to disk
+warning, never a KeyError); `run_pipeline()` builds on it. `settings_preview.py` (9-09) renders a synthetic sample frame (fake line + chord track, no real song/AI image) at the chosen resolution via that same mapping, downscaled for the Settings preview (fixed pane over the scrollable `SettingsPanel`, whose confirmed "Reset to Defaults" repopulates every control in one on_change firing); main window 1600x1000 (review rows: two button rows). **`SettingsPanel` never writes to disk
 except via its own "Save Settings" button** (HISTORY 9-10) -- `self._baseline` (the settings
 on disk) is compared field-by-field against the live widgets on every
 change; any field that differs gets a small "●" marker directly on its own label
@@ -530,12 +492,7 @@ failing every remaining song (9-17). EASY/3-/4-CHORD use `is_easy_key`
 re-spelled via `capo_and_shape_key()`, `draw_capo_badge()` shows CAPO N under
 the legend, Key badge the original key (`key_label`); Settings/Redo/backfill/upload triggers exist -- `easy_chord_capo.json` backs the title/description.
 
-This feature is complete and tested; the interactive OAuth `connect()` flow
-and live comment/engagement-comment posting have run live against the
-real channel (9-18).
-`load_credentials()` returns `None` ("not connected") for a stored token
-that's expired with no refresh token. Approving a pending engagement comment
-checks `is_video_public()` first, like the comment-reading path (9-18).
+Complete and tested; the OAuth `connect()` flow and live comment/engagement-comment posting have run against the real channel (9-18). `load_credentials()` is `None` for a token expired with no refresh token; Approve checks `is_video_public()` first.
 
 ## Tests
 

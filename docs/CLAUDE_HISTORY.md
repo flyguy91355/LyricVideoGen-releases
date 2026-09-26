@@ -4183,3 +4183,116 @@ tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this sam
   Changing a template's wording later needs the OLD text removed first, so `description_body()` now takes several old pieces
   and `update_support_description.py` has a repeatable `--old-text`; all 22 scheduled videos re-read as converted, each with
   exactly one new sign-off.
+
+## 2026-09-26: key correction notes on the 5 pre-fix EASY CHORD videos -- and a wider key-detection problem
+
+- The 5 uploaded EASY CHORD videos rendered before the 9-23 22:32 "show the original key" fix still show the SHAPE key in their
+  Key badge (owner declined re-rendering them). At his direction each got a "Correction" paragraph at the top of its YouTube
+  description naming the badge value and the song's original key (owner: "MUST be the original key to the song ... make sure you're
+  correct on each song's error and original key"). No other uploaded/queued EASY CHORD video is affected (the other 38 were
+  rendered after the fix).
+- Checking each note against independent sources (Musicnotes, Tunebat) and the video's own detected chords found two notes were
+  WRONG because the program's stored `original_key` was wrong: All for Love (marker F# minor; chords D 48%/G 26%/A 11%/Em 10% and
+  Musicnotes/Tunebat say D major) and All Along the Watchtower (marker Eb major, the relative major; chords Cm 41%/Ab 30%/Bb 25% =
+  C minor, consistent with Hendrix tuning down a half step; Tunebat's "Ab major" is also off). Both notes and the "EASY CHORDS
+  version" line were rewritten (All for Love: capo 2, C shapes, D major; Watchtower: capo 1, Bm shapes, C minor). The other three
+  (A Change Is Gonna Come Bb major, Baba O'Riley F major, Bridge Over Troubled Water Eb major) match the sources.
+- The marker files (`easy_chord_capo.json`) and lyrics_timed.json still hold the wrong keys for those two; the EASY/3-/4-chord
+  playlists key off the shape key, so nothing was changed there. All for Love did not need a capo at all (D major is already easy).
+- Wider audit (chord-weight key estimate vs `chord_track.key`, script kept in the session scratchpad): 76 of 214 songs with a chord
+  track disagree, 28 of the 93 songs on YouTube -- 15 unrelated-key disagreements, 10 relative major/minor, 3 parallel. Examples
+  that look wrong: Billie Jean (shows Gb major, chords = F# minor), Great Balls of Fire (shows C minor, chords C/F/G7 = C major,
+  an EASY CHORD video), Cracklin' Rosie (shows Eb minor, chords imply Db major, an EASY CHORD video), Bohemian Rhapsody (Eb vs Bb).
+  The audit is a heuristic, not proof -- some flags may be mine. Nothing else was changed on YouTube.
+
+
+## 2026-09-26: the key check -- chord-based key + second opinion, held for the owner otherwise; nothing uploads without it
+
+- Owner's rule after the EASY-note audit: the Key badge in the video AND the description MUST be the song's original key. Source-
+  checking every uploaded song (Musicnotes / Tunebat / Hooktheory / the video's own chords) found 32 of 92 showing a wrong key (21 live
+  or scheduled, 11 no longer on YouTube). Cause: `detect_chords` took the key from the average pitch of the whole recording
+  (`chord_theory.estimate_key`), which was right for only 55 of the 80 songs with a verified key; nothing checked it against a source.
+  The chords themselves do not depend on the key (only the badge, sharp/flat spelling and the EASY capo choice do); for the 21 live
+  wrong-key videos the chord names matched Hooktheory's charts for 13, four more looked consistent, 2 had real doubts (Wind of Change
+  shows D where the chart has Dm; Cocaine has no A), Lookin' Out My Back Door's chords are the chart's a half step low (recording is at
+  standard pitch), 5 had no chart to compare. The EASY CHORD chords are exactly the regular chords shifted by the capo (checked
+  event by event on all 45), so they are as right as the regular ones; only their key label and the capo's simplicity followed the key.
+- Design measured before building (80 songs of known key): chord-implied key (diatonic fit + tonic-chord and first/last-chord
+  weights 0.75/0.25) 73/80 exact; Claude asked cold for the published key 40/80 (often a semitone or fifth off); Claude choosing among
+  the chords' 4 candidate keys 61/78; requiring the two to AGREE gave 60 auto-confirmed of which 58 right, 20 sent to the owner
+  (chords were right on 15 of those) and the two auto-wrong ones were modal/modulating songs (Dreams, Head Over Feet). So agreement is
+  the confirmation and everything else waits for the owner (`key_owner.json`).
+- The EASY capo is still picked from the key (`capo_and_shape_key`); the median EASY video has 78% easy open chords (min 50%), so no
+  easy-share threshold was added -- the proof added is `capo_track_matches` (same events, every chord exactly the capo lower).
+- Dry run of `scripts/settle_keys.py` on the 466 work folders: 94 already uploaded (untouched), 251 with no chords yet, 59 already
+  right, 18 corrected, 44 needing the owner's key.
+- Found while writing `scripts/add_key_note.py`: today's YouTube "quota used up" error is HTTP 403 `quotaExceeded` (documented at
+  developers.google.com/youtube/v3/docs/errors), but `is_quota_exceeded_error` only knew 429 and 400 `uploadLimitExceeded`, so the app
+  never recognised it as a quota stop. Fixed and tested. Also found (not fixed here): the local mp4 of two SCHEDULED EASY videos
+  (Baba O'Riley, Bed of Roses) is cut short -- 82 s / 80 s of picture against 5-6 minutes of audio -- and that file is what YouTube
+  holds; the owner moved their schedule. Moondance and All I Wanna Do Is Make Love To You have the same defect locally.
+- Sync complaint (owner: "chord bar off by a beat or so on a lot of songs") investigated in the same session: no timing setting differs
+  from the 9-21 snapshot (min_chord_seconds 0.2 and seventh chords are his own); the audio in a finished video is delayed by exactly the
+  count-in the frames use (two videos have a 3-beat count-in from the 9-20/21 slider accident); detected chord starts line up with the
+  music's own harmonic changes (median offset 0.00 s, 17 of 19 songs within 0.3 s). No systematic offset found; needs named songs.
+
+### Verbatim archive: passages condensed in CLAUDE.md for the size budget (2026-09-26)
+
+1. The scrolling timeline lane's per-segment chord label (`render.py`'s
+   `_lane_label_font`) shrinks to fit a short-duration chord's narrow box
+   instead of being skipped entirely when it doesn't fit at the default
+   size -- floored at 18pt. If even that
+   doesn't fit, the label is now omitted entirely (`_lane_label_visible`) --
+   the colored block itself still draws, so a chord change stays visible,
+   but the text no longer overflows into the neighboring segment's own
+   label (HISTORY 9-10). No song title or artist text is drawn into the frame
+   anywhere (owner, 9-09) — only the chord bar, Key/BPM badge, and
+   chord legend were added to the frame.
+
+2. `build_scene()`'s `scroll_progress` (how far the current line's own
+   on-screen scroll animation has advanced) uses `_plausible_line_end()` --
+   the same outlier-capped end as `_plausible_sung_intervals()` -- instead of
+   the line's raw `end_time` (HISTORY 9-10). Word-highlight timing (`word_sung`/`word_active`) keys
+   only on a word's own start time, never a duration, and is unaffected.
+
+3. `build_scene()`'s CURRENT-LINE TEXT is also gated on `_in_a_line()`
+   (HISTORY 9-10): once past a line's own plausible end, "current"
+   advances to the NEXT line early rather than blanking it -- shown as the
+   same unsung preview the pre-first-line intro already used (9-15); past
+   the last line it still blanks. That preview itself stays hidden until
+   `Settings.lyric_preview_lead_seconds` (default 3.0s) before the line's
+   own start -- no lyrics through most of an intro or solo.
+
+4. Any image swap (line-to-
+   line included) now crossfades over `Settings.image_transition_seconds`
+   (default 0.25s) via `render.crossfade_backgrounds()` instead of a cut,
+   capped to 40% of either neighbor segment's own length so a
+   briefly-held image never spends its whole visible life mid-fade.
+
+5. This feature is complete and tested; the interactive OAuth `connect()` flow
+and live comment/engagement-comment posting have run live against the
+real channel (9-18).
+`load_credentials()` returns `None` ("not connected") for a stored token
+that's expired with no refresh token. Approving a pending engagement comment
+checks `is_video_public()` first, like the comment-reading path (9-18).
+
+6. `lyricvideo/settings_preview.py`
+(owner, 9-09) renders a synthetic sample frame (fake lyric line + fake
+chord track, no real song/network/AI image) at the chosen output resolution using
+that same mapping, then downscales it for on-screen display. `gui.py`'s Settings
+column is now preview pane (fixed, on top) + the scrollable `SettingsPanel` (which
+also gained a confirmed "Reset to Defaults" button that repopulates every control
+from `Settings()` in one on_change firing);
+main window 1600x1000 (review rows: two button rows).
+
+7. `gui.py` checks once on
+launch (background thread) and
+shows a clickable banner if a newer release exists; clicking it opens a
+modal dialog (centered over the main window, `transient`+`grab_set`+`lift`+
+`focus_force`, plus a brief `-topmost` toggle -- `lift`/`focus_force` alone
+aren't reliably honored by every Linux WM)
+with the release notes and an Apply Update button (confirms first,
+then downloads/reinstalls-deps-if-changed/copies/writes the new
+VERSION) then a Relaunch Now button. No severity tiering, no
+periodic re-check, no manual "Check Now" -- see the spec for why.
+

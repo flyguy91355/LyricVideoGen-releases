@@ -12,7 +12,7 @@ import traceback
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 import anthropic
 import customtkinter as ctk
@@ -20,6 +20,8 @@ import httpx
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 
+from .key_decision import KEY_HOLD_PREFIX, key_state, load_decision, load_owner_key, save_owner_key
+from .key_estimate import candidate_keys, estimate_key_from_chords
 from .venv import venv_python
 from .batch import (
     find_audio_files,
@@ -145,6 +147,15 @@ def _uploads_remaining_today(settings: Settings) -> int:
     return max(0, settings.youtube_max_uploads_per_day - load_uploads_today())
 
 
+def _stage_to_resume(song_dir: Path) -> str:
+    """Where a held song's video is made from: a song held for its timing has no chords yet ("detect_chords"); one held
+    for its key already has them saved ("images" -- no chord detection again, and the images stage only buys what is
+    missing); a song that already has a video only needs it made again ("render", e.g. after Set Key corrected its key)."""
+    if song_video_path(song_dir) is not None:
+        return "render"
+    return "images" if load_decision(song_dir) is not None else "detect_chords"
+
+
 def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     """Uploads work_dir's finished video to YouTube if auto-upload is on,
     YouTube is connected, and this song has never been (verifiably) uploaded
@@ -181,6 +192,8 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
             return  # flagged -- see the "Flagged for Lyrics Review" panel
     except Exception:
         pass  # missing/corrupt file must never block an otherwise-normal upload
+    if key_state(work_dir) != "confirmed":
+        return  # its key is unchecked or waiting for the owner -- never uploaded (see Set Key in the review panel)
 
     try:
         youtube_client = build("youtube", "v3", credentials=credentials)
@@ -1986,6 +1999,13 @@ class LyricVideoGUI:
         except Exception:
             pass
         uploaded = load_youtube_state(PROJECT_ROOT / "work" / slug) is not None
+        key_waiting = not uploaded and key_state(PROJECT_ROOT / "work" / slug) != "confirmed"
+        if key_waiting:
+            decision = load_decision(PROJECT_ROOT / "work" / slug)
+            key_concern = decision.concern() if decision else (
+                f"{KEY_HOLD_PREFIX} this song's key has not been checked yet. Set Key to confirm it, then make the video again."
+            )
+            concern = f"{concern}\n{key_concern}".strip()
         row = ctk.CTkFrame(self.flagged_songs_frame)
         row.pack(fill="x", pady=4)
         ctk.CTkLabel(row, text=slug, anchor="w", font=ctk.CTkFont(weight="bold")).pack(
@@ -2047,6 +2067,48 @@ class LyricVideoGUI:
             decisions, text="✕ Remove", width=90, fg_color="gray30", hover_color="gray20",
             command=lambda: self._on_remove_flagged(slug),
         ).pack(side="left")
+        if key_waiting:  # its own row: the two above are already as wide as a narrow window allows
+            key_row = ctk.CTkFrame(row, fg_color="transparent")
+            key_row.pack(fill="x", padx=6, pady=(0, 6))
+            ctk.CTkButton(
+                key_row, text="🎵 Set Key", width=100, fg_color="#2b7a3d", hover_color="#236232",
+                command=lambda: self._on_set_key_flagged(slug),
+            ).pack(side="left")
+
+    def _on_set_key_flagged(self, slug: str) -> None:
+        """Set Key (owner, 2026-09-26): the owner's own answer for a song whose key was not settled by the chords and the second
+        opinion agreeing. Saved as key_owner.json (it always wins, and survives a Redo); the owner can then make the video."""
+        if self._running:
+            return
+        song_dir = PROJECT_ROOT / "work" / slug
+        decision = load_decision(song_dir)
+        guess, options = "", ""
+        try:
+            chords = load_song(song_dir / "lyrics_timed.json").chord_track
+            estimate = estimate_key_from_chords(chords)
+            guess = estimate.name if estimate else ""
+            options = ", ".join(candidate_keys(chords))
+        except Exception:
+            pass
+        said = f"The chords say {decision.chord_key}. The second opinion says {decision.published_key or 'nothing'}.\n\n" if decision else ""
+        typed = simpledialog.askstring(
+            "Set the song's key",
+            f'{said}What key is "{slug}" in (the original key of the song)?\nLikely keys: {options or "unknown"}\n\n'
+            "Type it like: D major   or   F# minor",
+            initialvalue=guess, parent=self.root,
+        )
+        if typed is None:
+            return
+        try:
+            key = save_owner_key(song_dir, typed)
+        except ValueError as e:
+            messagebox.showerror("Not a key", str(e))
+            return
+        self._invalidate_flagged_list()
+        if messagebox.askyesno(
+            "Make the video?", f'"{slug}" is set to {key}.\n\nMake the video now with this key? (Images already bought are reused.)',
+        ):
+            self._on_render_anyway_flagged(slug, confirm=False)
 
     def _on_edit_lyrics_flagged(self, slug: str) -> None:
         self._open_lyrics_editor(slug)
@@ -2203,13 +2265,20 @@ class LyricVideoGUI:
         self.redo_button.configure(state="normal")
         self.batch_button.configure(state="normal")
         self._refresh_retry_upload_options()
+        if concern.startswith(KEY_HOLD_PREFIX):
+            messagebox.showinfo(
+                "Held for the key",
+                f"No video was made yet.\n\n{concern}\n\nIt is in Flagged for Lyrics Review: use Set Key to give the song's "
+                "key, then make the video.",
+            )
+            return
         messagebox.showinfo(
             "Held for review",
             f"No video was made.\n\n{concern}\n\nIt is in Flagged for Lyrics Review: edit the lyrics and Redo it, or use "
             "Render Anyway to make the video and watch it.",
         )
 
-    def _on_render_anyway_flagged(self, slug: str) -> None:
+    def _on_render_anyway_flagged(self, slug: str, confirm: bool = True) -> None:
         """Makes the video for a song that was held before it (owner, 2026-09-21), from the timing already worked out
         (resumes at the chords stage). It stays flagged; the owner can then watch it and Mark Verified."""
         if self._running:
@@ -2223,7 +2292,7 @@ class LyricVideoGUI:
         if not audio_path.is_file():
             messagebox.showerror("Original audio file not found", f'"{title}" was generated from:\n{audio_path}\n\nThat file no longer exists.')
             return
-        if not messagebox.askyesno(
+        if confirm and not messagebox.askyesno(
             "Render anyway",
             f'Make the video for "{title}" anyway?\n\nIt did not reach the timing pass mark, so it was held before the video. '
             "This makes the video from the timing already worked out (about 15-25 minutes; new AI images are generated only "
@@ -2238,7 +2307,7 @@ class LyricVideoGUI:
         self.progress_bar.set(0.0)
         self._clear_log()
         self._last_work_dir = song_dir
-        threading.Thread(target=self._run_worker, args=(audio_path, song_dir, title, "detect_chords"), daemon=True).start()
+        threading.Thread(target=self._run_worker, args=(audio_path, song_dir, title, _stage_to_resume(song_dir)), daemon=True).start()
         self.root.after(100, self._poll_queue)
 
     def _song_label(self, list_name: str, song: str) -> str:

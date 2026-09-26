@@ -180,6 +180,25 @@ def transpose_chord_track(chord_track: ChordTrack, capo_fret: int, shape_key: st
     return ChordTrack(events=events, key=key, bpm=chord_track.bpm)
 
 
+def capo_track_matches(original: ChordTrack, capo_track: ChordTrack, capo_fret: int) -> bool:
+    """True when `capo_track` really is `original` played with a capo on `capo_fret`: the same events at the same times,
+    every chord exactly `capo_fret` semitones lower with the same quality ("N" stays "N"). The EASY CHORD version's chords
+    are never separately detected, so this is the whole proof they are the song's own chords."""
+    if len(original.events) != len(capo_track.events):
+        return False
+    for a, b in zip(original.events, capo_track.events):
+        if (a.start, a.end) != (b.start, b.end):
+            return False
+        pa, pb = parse_chord_label(a.label), parse_chord_label(b.label)
+        if pa is None or pb is None:
+            if a.label != b.label:
+                return False
+            continue
+        if pb != ((pa[0] - capo_fret) % 12, pa[1]):
+            return False
+    return True
+
+
 EASY_CHORD_MARKER_FILENAME = "easy_chord_capo.json"
 
 

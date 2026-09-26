@@ -64,6 +64,12 @@ def _patch_common(monkeypatch, tmp_path):
             events=[ChordEvent(0.0, 10.0, "C")], key="C major", bpm=100.0,
         ),
     )
+    # The key check (key_decision.py) has its own tests; here the second opinion just agrees with the chords, as it does
+    # for most songs. Tests of a disagreement or a missing second opinion override this.
+    monkeypatch.setattr(
+        "lyricvideo.key_decision.ask_published_key",
+        lambda client, title, artist, candidates, chords, **k: candidates[0] if candidates else None,
+    )
     monkeypatch.setattr("lyricvideo.pipeline.summarize_song_gist", lambda *a, **k: "a fake song gist")
     monkeypatch.setattr("lyricvideo.pipeline.get_or_generate_image", lambda *a, **k: Path("x"))
     monkeypatch.setattr("lyricvideo.pipeline.assemble_video", lambda *a, **k: None)
@@ -695,6 +701,7 @@ def test_list_rendered_songs_includes_a_nested_easychords_variant_as_its_own_dis
 
     capo_dir = song_dir / "easychords"
     capo_dir.mkdir()
+    _settled(song_dir)                                                       # the EASY folder follows its song's key
     save_song(Song(title="Bridge Over Troubled Water EasyChords", audio_path="a.mp3"), capo_dir / "lyrics_timed.json")
     (capo_dir / "bridge-over-troubled-water-easychords.mp4").write_bytes(b"video")
 
@@ -703,12 +710,20 @@ def test_list_rendered_songs_includes_a_nested_easychords_variant_as_its_own_dis
     ]
 
 
+def _settled(song_dir):
+    """A rendered song whose key was settled -- what every song made since 2026-09-26 has (key_decision.py); without it a
+    song is held out of the upload lists."""
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    save_decision(song_dir, KeyDecision(status="confirmed", key="C major", source="agreed", chord_key="C major"))
+
+
 def test_list_pending_uploads_finds_a_rendered_song_with_no_youtube_state(tmp_path):
     work_root = tmp_path / "work"
     song_dir = work_root / "angie-rolling-stones"
     song_dir.mkdir(parents=True)
     save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
     (song_dir / "angie.mp4").write_bytes(b"video")
+    _settled(song_dir)
 
     assert list_pending_uploads(work_root) == ["angie-rolling-stones"]
 
@@ -727,6 +742,7 @@ def test_list_pending_uploads_includes_a_nested_easychords_variant_independently
     capo_dir.mkdir()
     save_song(Song(title="Bridge Over Troubled Water EasyChords", audio_path="a.mp3"), capo_dir / "lyrics_timed.json")
     (capo_dir / "bridge-over-troubled-water-easychords.mp4").write_bytes(b"video")   # capo variant not uploaded yet
+    _settled(song_dir)                                                       # the EASY folder follows its song's key
 
     assert list_pending_uploads(work_root) == ["bridge-over-troubled-water/easychords"]
 
@@ -774,6 +790,7 @@ def test_list_flagged_songs_excludes_a_song_with_no_concern(tmp_path):
     song_dir.mkdir(parents=True)
     save_song(Song(title="Angie", audio_path="a.mp3"), song_dir / "lyrics_timed.json")
     (song_dir / "angie.mp4").write_bytes(b"video")
+    _settled(song_dir)
 
     assert list_flagged_songs(work_root) == []
 
@@ -1668,6 +1685,7 @@ def test_list_pending_uploads_leaves_out_a_song_held_for_review(tmp_path):
         song_dir.mkdir(parents=True)
         save_song(Song(title=name, audio_path="a.mp3", lyrics_accuracy_concern=concern), song_dir / "lyrics_timed.json")
         (song_dir / f"{name}.mp4").write_bytes(b"video")
+        _settled(song_dir)
 
     assert list_pending_uploads(work_root) == ["good-song"]
 
@@ -1826,8 +1844,11 @@ def test_a_song_held_before_its_video_is_listed_for_review_but_never_for_upload(
     assert list_pending_uploads(work_root) == []
 
 
-def _write_original_song_for_capo(work_dir, key="Eb major", title="Bridge Over Troubled Water", with_images=True):
+def _write_original_song_for_capo(work_dir, key="Eb major", title="Bridge Over Troubled Water", with_images=True, confirmed=True):
+    from lyricvideo.key_decision import KeyDecision, save_decision
     work_dir.mkdir(parents=True, exist_ok=True)
+    if confirmed:                       # the EASY version is only ever built from a key that was settled (owner, 2026-09-26)
+        save_decision(work_dir, KeyDecision(status="confirmed", key=key, source="agreed", chord_key=key))
     (work_dir / "song_info.json").write_text(
         json.dumps({"title": title, "artist": "Simon and Garfunkel", "duration": 295.8, "alt_titles": []}),
         encoding="utf-8",
@@ -2046,3 +2067,189 @@ def test_run_pipeline_without_the_library_passes_none_and_prints_no_summary(tmp_
 
     assert seen and all(library is None for library in seen)
     assert "Image library:" not in capsys.readouterr().out
+
+
+# --- the song's key is settled (chords + second opinion agree, or the owner chooses) before any video (owner, 2026-09-26) ---
+
+def _disagreeing_second_opinion(monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.key_decision.ask_published_key",
+        lambda client, title, artist, candidates, chords, **k: next((c for c in candidates[1:]), None),
+    )
+
+
+def test_a_confirmed_key_is_what_the_video_and_the_saved_song_carry(tmp_path, monkeypatch):
+    from lyricvideo.key_decision import load_decision
+
+    _patch_common(monkeypatch, tmp_path)
+    seen = []
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", lambda lines, chord_track, *a, **k: seen.append(chord_track.key))
+    work_dir = tmp_path / "work"
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert seen == ["C major"]
+    assert load_song(work_dir / "lyrics_timed.json").chord_track.key == "C major"
+    assert load_decision(work_dir).confirmed
+
+
+def test_a_song_whose_key_is_in_doubt_is_held_before_images_and_video_and_not_marked_cleared(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.cleared_log import cleared_songs
+    from lyricvideo.key_decision import KEY_HOLD_PREFIX, load_decision
+    from lyricvideo.pipeline import HELD_MARKER, HeldBeforeVideo, song_video_path
+
+    _patch_common(monkeypatch, tmp_path)
+    _disagreeing_second_opinion(monkeypatch)
+    for name in ("summarize_song_gist", "get_or_generate_image", "assemble_video"):
+        monkeypatch.setattr(f"lyricvideo.pipeline.{name}", _must_not_run)
+    work_dir = tmp_path / "work"
+
+    with pytest.raises(HeldBeforeVideo) as held:
+        run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert held.value.concern.startswith(KEY_HOLD_PREFIX)
+    assert (work_dir / HELD_MARKER).exists() and song_video_path(work_dir) is None
+    assert not load_decision(work_dir).confirmed
+    assert cleared_songs() == []                                            # a held song is never "cleared for upload"
+
+
+def test_no_second_opinion_also_holds_the_song(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.pipeline import HeldBeforeVideo
+
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr("lyricvideo.key_decision.ask_published_key", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", _must_not_run)
+
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+
+def test_a_video_left_from_before_a_redo_is_moved_aside_when_the_new_key_is_held(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.pipeline import HeldBeforeVideo
+
+    _patch_common(monkeypatch, tmp_path)
+    _disagreeing_second_opinion(monkeypatch)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "test-song.mp4").write_bytes(b"the old video")
+
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert (work_dir / "test-song.previous.mp4").read_bytes() == b"the old video"
+
+
+def test_the_owners_key_lets_the_held_song_resume_at_images_and_be_rendered_with_that_key(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.key_decision import load_decision, save_owner_key
+    from lyricvideo.pipeline import HELD_MARKER, HeldBeforeVideo
+
+    _patch_common(monkeypatch, tmp_path)
+    _disagreeing_second_opinion(monkeypatch)
+    work_dir = tmp_path / "work"
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), work_dir)
+    save_owner_key(work_dir, "A minor")
+    seen = []
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", lambda lines, chord_track, *a, **k: seen.append(chord_track.key))
+
+    out = run_pipeline(Path("audio.mp3"), work_dir, start_stage="images")     # what Set Key -> make the video runs
+
+    assert out.name == "test-song.mp4" and seen == ["A minor"]
+    assert not (work_dir / HELD_MARKER).exists()
+    assert load_decision(work_dir).source == "owner"
+
+
+def test_resuming_a_key_held_song_without_choosing_a_key_holds_it_again(tmp_path, monkeypatch):
+    import pytest
+    from lyricvideo.pipeline import HeldBeforeVideo
+
+    _patch_common(monkeypatch, tmp_path)
+    _disagreeing_second_opinion(monkeypatch)
+    work_dir = tmp_path / "work"
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), work_dir)
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", _must_not_run)
+
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), work_dir, start_stage="images")
+
+
+def test_a_saved_song_with_no_key_decision_is_resumed_exactly_as_before(tmp_path, monkeypatch):
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    run_pipeline(Path("audio.mp3"), work_dir)
+    (work_dir / "key_decision.json").unlink()                                # an older song: no decision on file
+    _disagreeing_second_opinion(monkeypatch)                                 # ...and nothing here may consult one
+
+    out = run_pipeline(Path("audio.mp3"), work_dir, start_stage="render")
+
+    assert out.name == "test-song.mp4"
+
+
+def test_build_capo_variant_is_not_built_from_a_key_that_was_never_settled(tmp_path):
+    work_dir = tmp_path / "work" / "some-song"
+    _write_original_song_for_capo(work_dir, key="Eb major", confirmed=False)              # no key decision on file
+
+    assert build_capo_variant(work_dir) is None
+    assert not (work_dir / "easychords").exists()
+
+
+def test_build_capo_variant_is_not_built_while_the_key_is_still_in_review(tmp_path):
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    work_dir = tmp_path / "work" / "some-song"
+    _write_original_song_for_capo(work_dir, key="Eb major", confirmed=False)
+    save_decision(work_dir, KeyDecision(status="review", chord_key="Eb major", published_key="G major"))
+
+    assert build_capo_variant(work_dir) is None
+    assert not (work_dir / "easychords").exists()
+
+
+def test_build_capo_variant_refuses_chords_that_are_not_the_songs_own_shifted_by_the_capo(tmp_path, monkeypatch):
+    import pytest
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work" / "bridge-over-troubled-water"
+    _write_original_song_for_capo(work_dir)
+    monkeypatch.setattr("lyricvideo.pipeline.transpose_chord_track", lambda track, capo, shape: track)   # a broken transposition
+
+    with pytest.raises(RuntimeError, match="capo"):
+        build_capo_variant(work_dir)
+
+
+# --- a song whose key is unchecked or waiting for the owner is never offered for upload (owner, 2026-09-26) ---------------
+
+def _rendered_song(work_root, name):
+    song_dir = work_root / name
+    song_dir.mkdir(parents=True)
+    save_song(Song(title=name, audio_path="a.mp3"), song_dir / "lyrics_timed.json")
+    (song_dir / f"{name}.mp4").write_bytes(b"video")
+    return song_dir
+
+
+def test_a_rendered_song_whose_key_was_never_checked_is_flagged_and_not_pending(tmp_path):
+    work_root = tmp_path / "work"
+    _rendered_song(work_root, "unchecked-song")
+    _settled(_rendered_song(work_root, "settled-song"))
+
+    assert list_pending_uploads(work_root) == ["settled-song"]
+    assert list_flagged_songs(work_root) == ["unchecked-song"]
+
+
+def test_a_rendered_song_whose_key_waits_for_the_owner_is_flagged_and_not_pending(tmp_path):
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    work_root = tmp_path / "work"
+    save_decision(_rendered_song(work_root, "waiting-song"), KeyDecision(status="review", chord_key="D major", published_key="G major"))
+
+    assert list_pending_uploads(work_root) == []
+    assert list_flagged_songs(work_root) == ["waiting-song"]
+
+
+def test_a_song_already_on_youtube_is_left_alone_even_without_a_key_decision(tmp_path):
+    work_root = tmp_path / "work"
+    (_rendered_song(work_root, "live-song") / "youtube_state.json").write_text("{}", encoding="utf-8")
+
+    assert list_pending_uploads(work_root) == []
+    assert list_flagged_songs(work_root, include_uploaded=True) == []

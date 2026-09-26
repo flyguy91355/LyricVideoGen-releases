@@ -22,6 +22,13 @@ def _no_quota_block_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _keys_settled_by_default(monkeypatch):
+    # Every test in this file that is not about the key check assumes a song whose key is settled, as every song made since
+    # 2026-09-26 has; the key tests below override this with their own later monkeypatch.setattr on the same name.
+    monkeypatch.setattr("lyricvideo.gui.key_state", lambda work_dir: "confirmed")
+
+
+@pytest.fixture(autouse=True)
 def _no_upload_cap_by_default(monkeypatch):
     # Isolates every test in this file from whatever's actually on disk at
     # ~/.playalongvideoproduction/youtube_upload_count.json, and from ever
@@ -2288,3 +2295,100 @@ def test_run_worker_passes_fresh_images_through_to_run_pipeline(monkeypatch):
     LyricVideoGUI._run_worker(stub, Path("a.mp3"), Path("work/a"), "A", "fetch_lyrics", fresh_images=True)
 
     assert captured["fresh_images"] is True
+
+
+# --- the key check: nothing uploads without a settled key; Set Key + resuming (owner, 2026-09-26) ---------------------------
+
+def _settled_key(song_dir, key="C major"):
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    save_decision(song_dir, KeyDecision(status="confirmed", key=key, source="agreed", chord_key=key))
+
+
+def test_auto_upload_skips_a_song_whose_key_is_not_settled(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("lyricvideo.gui.key_state", lambda work_dir: "unchecked")
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: object())
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: calls.append("connect") or object())
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **k: calls.append("upload"))
+
+    _maybe_upload_to_youtube(tmp_path, Settings(youtube_auto_upload=True))        # no key decision on file: silently skipped
+
+    assert calls == []
+
+
+def test_a_key_hold_tells_the_owner_to_set_the_key(monkeypatch):
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda title, message, **kw: shown.append(message))
+    button = SimpleNamespace(configure=lambda **kw: None)
+    stub = _gui_stub(
+        status_var=SimpleNamespace(set=lambda v: None), generate_button=button, redo_button=button, batch_button=button,
+        _refresh_retry_upload_options=lambda: None,
+    )
+
+    LyricVideoGUI._on_held_before_video(stub, "Key check: the song's key needs your confirmation. The chords say D major; the second opinion says G major.")
+
+    assert "Set Key" in shown[0] and "edit the lyrics" not in shown[0]
+
+
+def test_stage_to_resume_depends_on_what_the_held_song_already_has(tmp_path):
+    from lyricvideo.gui import _stage_to_resume
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    from lyricvideo.models import Song, save_song
+    song = tmp_path / "some-song"
+    song.mkdir()
+    save_song(Song(title="Some Song", audio_path="a.mp3"), song / "lyrics_timed.json")
+    assert _stage_to_resume(song) == "detect_chords"                       # held for timing: no chords yet
+    save_decision(song, KeyDecision(status="review", chord_key="D major", published_key="G major"))
+    assert _stage_to_resume(song) == "images"                              # held for its key: chords are saved
+    (song / "some-song.mp4").write_bytes(b"video")
+    assert _stage_to_resume(song) == "render"                              # a video exists: only re-render it
+
+
+def _set_key_stub(tmp_path, monkeypatch, typed, make_video_now=True):
+    (tmp_path / "work" / "some-song").mkdir(parents=True)
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("lyricvideo.gui.simpledialog.askstring", lambda title, prompt, **kw: typed)
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, message, **kw: make_video_now)
+    errors, made = [], []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, message, **kw: errors.append(message))
+    return _gui_stub(
+        _running=False, _invalidate_flagged_list=lambda: None,
+        _on_render_anyway_flagged=lambda slug, confirm=True: made.append((slug, confirm)),
+    ), errors, made
+
+
+def test_set_key_saves_the_owners_key_and_offers_to_make_the_video(tmp_path, monkeypatch):
+    from lyricvideo.key_decision import load_owner_key
+    stub, errors, made = _set_key_stub(tmp_path, monkeypatch, "d major")
+
+    LyricVideoGUI._on_set_key_flagged(stub, "some-song")
+
+    assert load_owner_key(tmp_path / "work" / "some-song") == "D major" and errors == []
+    assert made == [("some-song", False)]                                  # already confirmed by the dialog just now
+
+
+def test_set_key_can_save_the_key_without_making_the_video_yet(tmp_path, monkeypatch):
+    from lyricvideo.key_decision import load_owner_key
+    stub, _errors, made = _set_key_stub(tmp_path, monkeypatch, "F# minor", make_video_now=False)
+
+    LyricVideoGUI._on_set_key_flagged(stub, "some-song")
+
+    assert load_owner_key(tmp_path / "work" / "some-song") == "F# minor" and made == []
+
+
+def test_set_key_refuses_something_that_is_not_a_key(tmp_path, monkeypatch):
+    from lyricvideo.key_decision import load_owner_key
+    stub, errors, made = _set_key_stub(tmp_path, monkeypatch, "lydian")
+
+    LyricVideoGUI._on_set_key_flagged(stub, "some-song")
+
+    assert load_owner_key(tmp_path / "work" / "some-song") is None and made == [] and errors
+
+
+def test_set_key_cancelled_changes_nothing(tmp_path, monkeypatch):
+    from lyricvideo.key_decision import load_owner_key
+    stub, errors, made = _set_key_stub(tmp_path, monkeypatch, None)
+
+    LyricVideoGUI._on_set_key_flagged(stub, "some-song")
+
+    assert load_owner_key(tmp_path / "work" / "some-song") is None and made == [] and errors == []

@@ -226,3 +226,16 @@ def test_easy_chord_capo_marker_is_none_for_an_ordinary_song(tmp_path):
 def test_easy_chord_capo_marker_is_none_for_a_corrupt_file(tmp_path):
     (tmp_path / "easy_chord_capo.json").write_text("not json", encoding="utf-8")
     assert load_easy_chord_capo_marker(tmp_path) is None
+
+
+def test_capo_track_matches_accepts_the_real_transposition_and_rejects_anything_else():
+    from lyricvideo.chord_theory import capo_track_matches
+    original = ChordTrack(events=[ChordEvent(0.0, 2.0, "Eb"), ChordEvent(2.0, 4.0, "Cm7"), ChordEvent(4.0, 5.0, "N")], key="Eb major", bpm=90.0)
+    good = transpose_chord_track(original, 1, "D")
+    assert capo_track_matches(original, good, 1)
+    assert not capo_track_matches(original, good, 2)                       # wrong capo for these shapes
+    wrong_chord = ChordTrack(events=[ChordEvent(0.0, 2.0, "D"), ChordEvent(2.0, 4.0, "Bm"), ChordEvent(4.0, 5.0, "N")], key="D major", bpm=90.0)
+    assert not capo_track_matches(original, wrong_chord, 1)                # Cm7 became Bm (quality lost)
+    shifted_time = ChordTrack(events=[ChordEvent(0.1, 2.0, "D"), ChordEvent(2.0, 4.0, "Bm7"), ChordEvent(4.0, 5.0, "N")], key="D major", bpm=90.0)
+    assert not capo_track_matches(original, shifted_time, 1)               # timing must be untouched
+    assert not capo_track_matches(original, ChordTrack(events=good.events[:2], key="D major", bpm=90.0), 1)   # an event went missing

@@ -186,8 +186,17 @@ def test_an_existing_concern_is_never_overwritten_and_a_song_with_no_transcript_
 
 # --- wiring: what the app does with the verdict ------------------------------------------------------------------
 
+
+def _settled(song_dir):
+    """A rendered song whose key was settled -- what every song made since 2026-09-26 has (key_decision.py); without it a
+    song is held out of the upload lists."""
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    save_decision(song_dir, KeyDecision(status="confirmed", key="C major", source="agreed", chord_key="C major"))
+
+
 def _rendered(work_root, name, times):
     _save(work_root / name, times)
+    _settled(work_root / name)
     (work_root / name / "t.mp4").write_bytes(b"video")           # the app looks for <slugified title>.mp4
 
 

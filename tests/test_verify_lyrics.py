@@ -172,7 +172,16 @@ def test_a_flag_run_redoes_songs_an_earlier_run_only_reported(tmp_path, monkeypa
 
 # --- upload hold (owner, 2026-09-19: "stop the uploads until the videos are analyzed") ------
 
+
+def _settled(song_dir):
+    """A rendered song whose key was settled -- what every song made since 2026-09-26 has (key_decision.py); without it a
+    song is held out of the upload lists."""
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    save_decision(song_dir, KeyDecision(status="confirmed", key="C major", source="agreed", chord_key="C major"))
+
+
 def add_video(work_dir):
+    _settled(work_dir)
     from lyricvideo.pipeline import slugify
 
     (work_dir / f"{slugify(work_dir.name)}.mp4").write_bytes(b"video")

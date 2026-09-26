@@ -20,6 +20,7 @@ from .anchors import HeardWord, combine_anchors, drop_words_in_silence, line_anc
 from .assemble import assemble_video
 from .combine import combine_alignment
 from .detect_chords import detect_chords
+from .key_decision import apply_saved_owner_key, key_needs_attention, load_decision, load_owner_key, settle_song_key
 from .fetch_lyrics import fetch_lyric_lines_verified
 from .identify import extract_metadata
 from .imagery import get_or_generate_image, is_fallback_image, substitute_fallback_images, summarize_song_gist
@@ -30,7 +31,7 @@ from .lyric_audio_match import drop_unsung_leading_lines, drop_unsung_trailing_l
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .owner_lyrics import owner_lyrics_lines
 from .chord_theory import (  # noqa: F401 -- ordered_unique_chords re-exported: every existing `pipeline.ordered_unique_chords` caller keeps working unchanged
-    capo_and_shape_key, is_easy_key, load_easy_chord_capo_marker, ordered_unique_chords, save_easy_chord_capo_marker, transpose_chord_track,
+    capo_and_shape_key, capo_track_matches, is_easy_key, load_easy_chord_capo_marker, ordered_unique_chords, save_easy_chord_capo_marker, transpose_chord_track,
 )
 from .cleared_log import record_cleared, record_removed
 from .redo_log import note_redo_finished, note_redo_started
@@ -218,6 +219,8 @@ def _held_for_review(song_dir: Path) -> bool:
     timed_path = song_dir / "lyrics_timed.json"
     if not timed_path.exists():
         return False
+    if key_needs_attention(song_dir):
+        return True                                 # its key is unchecked or waiting for the owner: never offered for upload
     if verification(song_dir):
         return False                                # the owner watched this version and approved it
     try:
@@ -254,6 +257,9 @@ def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[
         concern = song.lyrics_accuracy_concern
         if held_before_video(entry):
             flagged.append(slug)              # no video yet: Edit Lyrics / Redo / Render Anyway (whatever the mark is now)
+            continue
+        if key_needs_attention(entry):
+            flagged.append(slug)              # a video whose key is unchecked or waiting for the owner: Set Key
             continue
         if verification(entry):
             continue                                # approved by the owner: not up for review any more
@@ -543,6 +549,34 @@ def _hold_before_video(work_dir: Path, final_path: Path, song: Song, concern: st
     raise HeldBeforeVideo(concern)
 
 
+def _hold_for_key(work_dir: Path, final_path: Path, concern: str) -> None:
+    """Stops the run at the key check (owner, 2026-09-26: the key in the video and the description must be the song's real
+    one). Held BEFORE the images (no image bill) and the video. Unlike a timing hold this is NOT recorded as finished/cleared:
+    the song is simply waiting for the owner's key. The video of an earlier run is moved aside, as for a timing hold."""
+    if final_path.exists():
+        final_path.replace(final_path.with_name(final_path.stem + ".previous.mp4"))
+    (work_dir / HELD_MARKER).write_text(
+        json.dumps({"reason": concern, "at": datetime.now().astimezone().isoformat(timespec="seconds")}, indent=2),
+        encoding="utf-8",
+    )
+    raise HeldBeforeVideo(concern)
+
+
+def _key_client():
+    """A Claude client for the key's second opinion; None when there is no API key (the key then waits for the owner)."""
+    try:
+        return anthropic.Anthropic()
+    except Exception:
+        return None
+
+
+def _song_artist(info_path: Path) -> str:
+    try:
+        return str(json.loads(info_path.read_text(encoding="utf-8")).get("artist") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 def run_pipeline(
     audio_path: Path,
     work_dir: Path,
@@ -807,7 +841,23 @@ def run_pipeline(
     if start_idx <= STAGES.index("detect_chords") <= end_idx:
         report("detect_chords")
         song.chord_track = detect_chords(instrumental_stem_path, **detect_kwargs)
+        # The key comes from the chords AND a second opinion that must agree, else the owner's own answer (key_decision.py);
+        # a song whose key is in doubt stops here, before the images are bought and the video is made.
+        key_decision, song.chord_track = settle_song_key(
+            work_dir, song.chord_track, song.title, _song_artist(info_path), _key_client(),
+        )
         save_song(song, timed_path)
+        if not key_decision.confirmed:
+            _hold_for_key(work_dir, final_path, key_decision.concern())
+    elif start_idx > STAGES.index("detect_chords") and end_idx >= start_idx:
+        # Resumed past the chords (Set Key -> make the video, or a render-only run): the owner's key, if any, goes onto the
+        # saved chords; a song still waiting for its key stays held. A song with no key decision on file (made before the
+        # key check existed) is left exactly as it is.
+        if apply_saved_owner_key(work_dir, song):
+            save_song(song, timed_path)
+        saved = load_decision(work_dir)
+        if saved is not None and not saved.confirmed and load_owner_key(work_dir) is None:
+            _hold_for_key(work_dir, final_path, saved.concern())
 
     if start_idx <= STAGES.index("images") <= end_idx:
         report("images")
@@ -937,6 +987,12 @@ def build_capo_variant(work_dir: Path, audio_path_override: Path | str | None = 
     if not timed_path.exists():
         return None
     song = load_song(timed_path)
+    # Owner, 2026-09-26: the EASY version's capo and its stated original key come from the song's key, so it is only ever
+    # built from a key that was settled (key_decision.py). A song never checked, or still waiting for its key, gets none.
+    decision = load_decision(work_dir)
+    if decision is None or not decision.confirmed:
+        print(f"EASY CHORD version not built for {work_dir.name}: the song's key has not been confirmed yet.")
+        return None
     result = capo_and_shape_key(song.chord_track.key)
     if result is None:
         return None
@@ -956,13 +1012,16 @@ def build_capo_variant(work_dir: Path, audio_path_override: Path | str | None = 
         original_key=song.chord_track.key, original_title=original_title,
     )
 
+    capo_chords = transpose_chord_track(song.chord_track, capo_fret, shape_key)
+    if not capo_track_matches(song.chord_track, capo_chords, capo_fret):
+        raise RuntimeError(f"the EASY CHORD chords for {work_dir.name} are not the song's own chords shifted by capo {capo_fret}")
     capo_song = Song(
         title=capo_info["title"],
         audio_path=song.audio_path,
         vocal_stem_path=song.vocal_stem_path,
         instrumental_stem_path=song.instrumental_stem_path,
         lines=song.lines,
-        chord_track=transpose_chord_track(song.chord_track, capo_fret, shape_key),
+        chord_track=capo_chords,
         image_cache=song.image_cache,
         lyrics_source=song.lyrics_source,
         lyrics_accuracy_concern=song.lyrics_accuracy_concern,

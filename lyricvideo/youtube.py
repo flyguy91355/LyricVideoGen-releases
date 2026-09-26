@@ -208,10 +208,12 @@ def is_quota_exceeded_error(exc: Exception) -> bool:
         return False
     if exc.status_code == 429:
         return True
-    return exc.status_code == 400 and any(
-        detail.get("reason") == "uploadLimitExceeded" for detail in (exc.error_details or [])
-        if isinstance(detail, dict)
-    )
+    details = [d for d in (exc.error_details or []) if isinstance(d, dict)]
+    if exc.status_code == 403:
+        # The daily quota running out is HTTP 403 reason quotaExceeded (YouTube's documented error; real incident,
+        # 2026-09-26, when even plain reads were refused). Any OTHER 403 (comments disabled, forbidden...) is not a quota stop.
+        return any(d.get("reason") == "quotaExceeded" for d in details)
+    return exc.status_code == 400 and any(d.get("reason") == "uploadLimitExceeded" for d in details)
 
 
 def video_exists(youtube_client, video_id: str) -> bool:

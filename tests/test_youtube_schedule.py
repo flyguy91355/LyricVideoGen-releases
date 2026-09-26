@@ -2,6 +2,10 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from lyricvideo.key_decision import KeyDecision, KeyNotConfirmed, save_decision
+
 from lyricvideo.chord_theory import save_easy_chord_capo_marker
 from lyricvideo.models import LyricLine, Song, Word, save_song
 from lyricvideo.youtube_schedule import (
@@ -255,6 +259,7 @@ def _make_song_work_dir(tmp_path, artist: str | None = None) -> Path:
         lines=[LyricLine(words=[Word(word="hello"), Word(word="there")])],
     )
     save_song(song, work_dir / "lyrics_timed.json")
+    save_decision(work_dir, KeyDecision(status="confirmed", key="D major", source="agreed", chord_key="D major"))
     (work_dir / "my-song.mp4").write_bytes(b"fake video bytes")
     if artist is not None:
         import json
@@ -374,7 +379,7 @@ def test_schedule_upload_leaves_description_unchanged_when_support_description_t
     schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
 
     description = client._videos.insert_kwargs["body"]["snippet"]["description"]
-    assert description == "A great song."
+    assert description == "🎸 Song key: D major\n\nA great song."
 
 
 def test_schedule_upload_saves_youtube_state(tmp_path):
@@ -443,6 +448,7 @@ def _make_capo_song_work_dir(tmp_path, artist: str = "Simon and Garfunkel") -> P
         lines=[LyricLine(words=[Word(word="hello"), Word(word="there")])],
     )
     save_song(song, work_dir / "lyrics_timed.json")
+    save_decision(work_dir, KeyDecision(status="confirmed", key="Eb major", source="agreed", chord_key="Eb major"))
     (work_dir / "bridge-over-troubled-water-easychords.mp4").write_bytes(b"fake video bytes")
     import json
     (work_dir / "song_info.json").write_text(
@@ -668,7 +674,7 @@ def test_schedule_upload_renders_the_support_template_around_the_description(tmp
     schedule_upload(client, _Client(), work_dir, settings)
 
     assert client._videos.insert_kwargs["body"]["snippet"]["description"] == (
-        f"{_TOP}\n\nA great song. It is about hope.\n\n{_BOTTOM}"
+        f"{_TOP}\n\n🎸 Song key: D major\n\nA great song. It is about hope.\n\n{_BOTTOM}"
     )
 
 
@@ -687,3 +693,59 @@ def test_swapping_the_sign_off_leaves_exactly_one_new_sign_off():
     body = description_body(rendered_old, [_OLD, "Old sign-off."], new_template)
 
     assert render_description(new_template, body) == f"{_TOP}\n\nA song.\n\nNew sign-off."
+
+
+# --- the song's key: settled before any upload, stated the same everywhere (owner, 2026-09-26) -------------------------
+
+_PUBLIC_SETTINGS = dict(youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False, youtube_upload_times="15:00")
+
+
+def test_a_song_whose_key_was_never_checked_is_not_uploaded(tmp_path):
+    work_dir = _make_song_work_dir(tmp_path)
+    (work_dir / "key_decision.json").unlink()
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    with pytest.raises(KeyNotConfirmed):
+        schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    assert client._videos.insert_kwargs is None
+
+
+def test_a_song_whose_key_is_waiting_for_the_owner_is_not_uploaded(tmp_path):
+    work_dir = _make_song_work_dir(tmp_path)
+    save_decision(work_dir, KeyDecision(status="review", chord_key="D major", published_key="G major"))
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    with pytest.raises(KeyNotConfirmed):
+        schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    assert client._videos.insert_kwargs is None
+
+
+def test_the_description_opens_with_the_songs_settled_key(tmp_path):
+    work_dir = _make_song_work_dir(tmp_path)
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    assert client._videos.insert_kwargs["body"]["snippet"]["description"].startswith("🎸 Song key: D major\n\n")
+
+
+def test_an_easy_chord_description_states_the_songs_original_key(tmp_path):
+    work_dir = _make_capo_song_work_dir(tmp_path)
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    assert "(original key: Eb major)" in client._videos.insert_kwargs["body"]["snippet"]["description"]
+
+
+def test_an_easy_chord_video_built_for_a_different_key_than_the_songs_is_not_uploaded(tmp_path):
+    work_dir = _make_capo_song_work_dir(tmp_path)
+    save_decision(work_dir, KeyDecision(status="confirmed", key="Bb major", source="owner", chord_key="Eb major"))   # the key was corrected later
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    with pytest.raises(KeyNotConfirmed, match="EASY"):
+        schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    assert client._videos.insert_kwargs is None

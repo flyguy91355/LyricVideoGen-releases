@@ -582,3 +582,25 @@ def test_is_quota_exceeded_error_false_for_a_400_with_a_different_reason():
     resp = SimpleNamespace(status=400, reason="Bad Request")
     content = b'{"error": {"code": 400, "errors": [{"domain": "youtube.video", "reason": "invalidTitle"}]}}'
     assert is_quota_exceeded_error(HttpError(resp, content)) is False
+
+
+def _make_403(reason):
+    from googleapiclient.errors import HttpError
+
+    resp = SimpleNamespace(status=403, reason="Forbidden")
+    content = (
+        b'{"error": {"code": 403, "message": "x", "errors": [{"message": "x", "domain": "youtube.quota", "reason": "%s"}]}}'
+        % reason.encode()
+    )
+    return HttpError(resp, content)
+
+
+def test_is_quota_exceeded_error_true_for_a_403_quota_exceeded():
+    # Real incident, 2026-09-26: the daily quota ran out and YouTube answered HTTP 403 reason quotaExceeded (its documented
+    # quota error: developers.google.com/youtube/v3/docs/errors) -- not a 429 -- so it was never recognised as a quota stop.
+    assert is_quota_exceeded_error(_make_403("quotaExceeded")) is True
+
+
+def test_is_quota_exceeded_error_false_for_a_403_with_another_reason():
+    assert is_quota_exceeded_error(_make_403("commentsDisabled")) is False
+    assert is_quota_exceeded_error(_make_403("forbidden")) is False
