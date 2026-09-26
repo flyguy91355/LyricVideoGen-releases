@@ -241,6 +241,38 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         entry = ctk.CTkEntry(self, textvariable=var)
         self._add(name, label, entry)
 
+    def _multiline_text(self, name: str, label: str, height: int = 100) -> None:
+        """A several-line text box for a field whose value has line breaks (the YouTube support block). A
+        CTkEntry is one line only -- it would show the breaks as junk and lose them on edit. The Tk variable
+        stays the single source of truth (collect()/load_from() and the dirty tracking all go through it); the
+        box mirrors it both ways, and `syncing` stops the two writes from echoing each other."""
+        var = self._var(name, tk.StringVar)
+        box = ctk.CTkTextbox(self, height=height, wrap="word")
+        syncing = {"on": False}
+
+        def _box_to_var(_event=None) -> None:
+            if syncing["on"]:
+                return
+            text = box.get("1.0", "end-1c")
+            if text != var.get():
+                var.set(text)
+
+        def _var_to_box(*_args) -> None:
+            text = var.get()
+            if box.get("1.0", "end-1c") == text:
+                return
+            syncing["on"] = True
+            try:
+                box.delete("1.0", "end")
+                box.insert("1.0", text)
+            finally:
+                syncing["on"] = False
+
+        for event in ("<KeyRelease>", "<FocusOut>", "<<Paste>>", "<<Cut>>"):
+            box.bind(event, lambda e: box.after(1, _box_to_var))
+        var.trace_add("write", _var_to_box)
+        self._add(name, label, box)
+
     def _browse_font(self) -> None:
         f = filedialog.askopenfilename(parent=self, title="Choose a font",
                                        filetypes=[("Fonts", "*.ttf *.otf *.ttc"), ("All files", "*.*")])
@@ -271,6 +303,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
             return self._field_formatters[name](value)
         if isinstance(value, str) and not value.strip():
             return "(none)"
+        if isinstance(value, str) and "\n" in value:
+            return value.replace("\n", " ⏎ ")     # a multi-line value shown inside the one-line Save confirmation
         return str(value)
 
     def _dirty_fields(self) -> dict:
@@ -398,7 +432,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._text("support_overlay_text", "Overlay text (blank = off)")
         self._slider("support_overlay_size", "Overlay size", 50, 200, 30, lambda v: f"{int(v)}%")
         self._slider("support_overlay_lead_seconds", "Show during the last...", 5, 60, 55, lambda v: f"{int(v)}s")
-        self._text("support_description_text", "Description text (blank = off)")
+        self._multiline_text("support_description_text", "Description text (blank = off)")
 
         self._section("Chord detection")
         self._check("snap_chords_to_key", "Bias detected chords toward the song key")

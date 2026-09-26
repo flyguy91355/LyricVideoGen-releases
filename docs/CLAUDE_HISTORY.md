@@ -4139,3 +4139,27 @@ tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this sam
   `draft_comment_reply`, `classify_genre`, `draft_engagement_comment`) also runs on Sonnet 5 with thinking on by default and
   could in principle hit the same "no text" failure. The 117 image-prompt calls in the library contact-sheet run all
   succeeded, so it is not showing up there.
+
+## 2026-09-26: a soft "tips are appreciated" block in every YouTube description
+
+- Owner: ask for support in each description, under the ko-fi address, in wording that "must not sound like begging or
+  demands", and asked how other channels do it -- then, correcting the sample, "must be play along channels" (lesson
+  channels sell lessons/ads; they aren't comparable). Read 29 real play-along/karaoke descriptions from 10 channels via the
+  YouTube API (WebFetch cannot see YouTube descriptions): the pure tip asks are ONE short line in lines 1-3
+  ("Buy me a coffee ☕ 👉 link", "If you enjoy my videos ...", "Tip me ❤️", "Support me on Patreon"), never a paragraph; most
+  other asks are tied to a perk (tabs/PDF charts); several channels have no ask. Nothing pleads or explains costs.
+- Owner's own wording, polished: "I hope you're enjoying the Play Alongs and that they're helping you grow as a musician. /
+  Tips are never expected, but always appreciated ☕ / https://ko-fi.com/playalongvideos" ("career" -> "grow as a musician":
+  many viewers play as a hobby). Channel context at the time: created 2026-09-09, 23 subscribers, 2,468 views, 68 public videos.
+- Placement: right after the description's first sentence (`youtube_schedule.place_support_text`, abbreviation/initial aware),
+  not the bottom -- YouTube's own help says the first few lines are what viewers see first, and the old "Support: link" line at
+  the very end sat behind "...more". `move_support_text` swaps the old line for the new block on existing videos.
+- Links: YouTube's help says clickable external links in descriptions require the channel's "advanced features" (phone
+  verification); the descriptions already contain a full https:// address, so an unclickable ko-fi address most likely means
+  that is not enabled on the channel -- an owner action, not code. Descriptions cannot be coloured (bold/italic/strikethrough
+  only, per YouTube's description tips).
+- The Settings field became a real multi-line box (`SettingsPanel._multiline_text`): a one-line entry cannot hold line breaks.
+- Rollout: future uploads use it after the app restarts (the running app still has the old code and old in-memory settings --
+  a Save from that stale panel would also write the old text back). Existing videos: `scripts/update_support_description.py`
+  (backs up snippets to `reports/`, idempotent, stops cleanly on quota). Blackbird only first, at the owner's request ("i want
+  to see it first"); the other uploaded videos wait for his go-ahead.

@@ -157,3 +157,10 @@ def test_values_to_settings_rounds_the_library_score_to_three_places():
 
     assert s.use_image_library is True
     assert s.image_library_min_score == 0.3
+
+
+def test_values_to_settings_keeps_a_multi_line_support_description_intact():
+    raw = _raw_defaults()
+    raw["support_description_text"] = "Line one.\nTips are never expected ☕\nhttps://ko-fi.com/x"
+
+    assert values_to_settings(raw).support_description_text == "Line one.\nTips are never expected ☕\nhttps://ko-fi.com/x"
