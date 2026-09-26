@@ -53,6 +53,10 @@ def values_to_settings(raw: dict) -> Settings:
         coerced["youtube_category_id"] = _YOUTUBE_CATEGORY_IDS.get(
             coerced["youtube_category_id"], coerced["youtube_category_id"],
         )
+    if "image_library_min_score" in coerced:
+        # a slider drag hands back float noise like 0.30000000000000004 -- keep settings.json and the
+        # itemized Save confirm readable
+        coerced["image_library_min_score"] = round(float(coerced["image_library_min_score"]), 3)
     return Settings.from_dict(coerced)
 
 
@@ -385,6 +389,10 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._slider("image_transition_seconds", "Crossfade length", 0.0, 1.5, 30, lambda v: f"{v:.2f}s")
         self._slider("lyric_preview_lead_seconds", "Lyric preview lead-in", 0.0, 10.0, 20,
                      lambda v: f"{v:.1f}s")
+
+        self._section("Image library")
+        self._check("use_image_library", "Reuse images from the library")
+        self._slider("image_library_min_score", "Library match strictness", 0.15, 0.45, 30, lambda v: f"{v:.2f}")
 
         self._section("Support overlay & description")
         self._text("support_overlay_text", "Overlay text (blank = off)")

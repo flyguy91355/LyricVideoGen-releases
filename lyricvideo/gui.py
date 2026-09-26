@@ -1382,7 +1382,7 @@ class LyricVideoGUI:
         thread = threading.Thread(
             target=self._run_worker,
             args=(audio_path, song_dir, title, "fetch_lyrics"),
-            kwargs={"force_easy_chord": easy_chord},
+            kwargs={"force_easy_chord": easy_chord, "fresh_images": generate_new_images},
             daemon=True,
         )
         thread.start()
@@ -2409,6 +2409,7 @@ class LyricVideoGUI:
         title: str | None = None,
         start_stage: str = "identify",
         force_easy_chord: bool = False,
+        fresh_images: bool = False,
     ) -> None:
         writer = _QueueWriter(self._queue)
         old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -2426,6 +2427,7 @@ class LyricVideoGUI:
                 start_stage=start_stage,
                 settings=settings,
                 progress_callback=lambda stage: self._queue.put(("stage", stage)),
+                fresh_images=fresh_images,
             )
             _maybe_upload_to_youtube(work_dir, self.settings)
             self._queue.put(("done", str(out_path)))

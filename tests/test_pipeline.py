@@ -1999,3 +1999,50 @@ def test_build_capo_variant_is_idempotent(tmp_path, monkeypatch):
     second = build_capo_variant(work_dir, audio_path_override=tmp_path / "audio.m4a")
 
     assert first == second
+
+
+def test_run_pipeline_images_stage_hands_the_library_session_to_every_image_and_closes_it(tmp_path, monkeypatch, capsys):
+    _patch_common(monkeypatch, tmp_path)
+
+    class _Session:
+        closed = False
+
+        def summary_line(self):
+            return "Image library: 0 reused, 2 bought (about $0.00 saved at $0.003/image)"
+
+        def close(self):
+            self.closed = True
+
+    session, opened = _Session(), {}
+
+    def _fake_open(settings, song_slug, song_title, images_dir, fresh_images=False, **kwargs):
+        opened.update(settings=settings, slug=song_slug, title=song_title, fresh=fresh_images)
+        return session
+
+    monkeypatch.setattr("lyricvideo.pipeline.open_library_session", _fake_open)
+    seen = []
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.get_or_generate_image", lambda *a, **k: seen.append(k.get("library")) or Path("x"),
+    )
+    settings = Settings(use_image_library=True)
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work", settings=settings, fresh_images=True)
+
+    assert seen and all(library is session for library in seen)
+    assert opened == {"settings": settings, "slug": "work", "title": "Test Song", "fresh": True}
+    assert session.closed is True
+    assert "Image library: 0 reused, 2 bought" in capsys.readouterr().out
+
+
+def test_run_pipeline_without_the_library_passes_none_and_prints_no_summary(tmp_path, monkeypatch, capsys):
+    _patch_common(monkeypatch, tmp_path)
+    seen = []
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.get_or_generate_image",
+        lambda *a, **k: seen.append(k.get("library", "missing")) or Path("x"),
+    )
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert seen and all(library is None for library in seen)
+    assert "Image library:" not in capsys.readouterr().out

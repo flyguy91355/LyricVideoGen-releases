@@ -3,11 +3,15 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from PIL import Image
 
 from .models import line_hash
+
+if TYPE_CHECKING:
+    from .library_session import LibrarySession
 
 FRAME_SIZE = (1920, 1080)
 REPLICATE_API_BASE = "https://api.replicate.com/v1"
@@ -15,6 +19,8 @@ REPLICATE_POLL_INTERVAL_SECONDS = 1.0
 REPLICATE_POLL_TIMEOUT_SECONDS = 120.0
 _TERMINAL_STATUSES = ("succeeded", "failed", "canceled")
 _MAX_GENERATION_ATTEMPTS = 3
+# Replicate's pricing page, checked 2026-09-25: black-forest-labs/flux-schnell is "$3.00 / thousand output images".
+REPLICATE_PRICE_PER_IMAGE_USD = 0.003
 
 
 class ImageGenError(Exception):
@@ -152,6 +158,7 @@ def get_or_generate_image(
     fallback_color: tuple[int, int, int] = (30, 30, 40),
     extra_cache_dirs: list[Path] | None = None,
     previous_image: Path | None = None,
+    library: "LibrarySession | None" = None,
 ) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = line_hash(line_text)
@@ -170,10 +177,21 @@ def get_or_generate_image(
             return cached_path
 
     last_error: Exception | None = None
+    library_consulted = False
     for attempt in range(_MAX_GENERATION_ATTEMPTS):
         try:
             prompt = build_image_prompt(anthropic_client, song_gist, line_text)
-            return generate_line_image(replicate_token, prompt, cached_path)
+            if library is not None and not library_consulted:
+                # Once, with the first prompt that builds: a later retry's rewritten prompt is not re-matched.
+                # The library never raises (it disables itself), so a problem there can't trigger a retry.
+                library_consulted = True
+                hit = library.find_match(prompt, cached_path)
+                if hit is not None:
+                    return hit
+            generate_line_image(replicate_token, prompt, cached_path)
+            if library is not None:
+                library.record_purchase(cached_path, prompt, line_text)
+            return cached_path
         except Exception as e:
             last_error = e
             print(

@@ -97,6 +97,14 @@ class Settings:
                                                  # Off by default, matching this app's existing convention
                                                  # for opt-in extra renders (e.g. Redo's "Generate new images").
 
+    # --- Image library (library_session.py) --------------------------------
+    use_image_library: bool = False  # owner, 2026-09-25: look in the shared library of already-bought images
+                                      # before buying one from Replicate. Off until the owner has reviewed
+                                      # scripts/preview_library_matches.py's contact sheet.
+    image_library_min_score: float = 0.34  # CLIP text-to-image cosine similarity a library image needs to be
+                                            # reused. PROVISIONAL -- 0.34 is where 3 songs' contact sheets looked
+                                            # good (0.28 and below were clearly wrong); the owner's review sets it.
+
     # --- Quality check (timing_gate.py) -----------------------------------
     timing_pass_percent: int = 90            # a video is "good" when at least this share of its lyric lines start
                                               # within half a second of the singing; only good ones are offered for

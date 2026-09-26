@@ -43,6 +43,8 @@ def _raw_defaults() -> dict:
         "youtube_max_uploads_per_day": 7.0,
         "youtube_quota_retry_hours": 24.0,
         "timing_pass_percent": 90.0,
+        "use_image_library": False,
+        "image_library_min_score": 0.34,
     }
 
 
@@ -144,3 +146,14 @@ def test_values_to_settings_makes_the_timing_pass_mark_a_whole_number():
     settings = values_to_settings(raw)
 
     assert settings.timing_pass_percent == 95 and isinstance(settings.timing_pass_percent, int)
+
+
+def test_values_to_settings_rounds_the_library_score_to_three_places():
+    raw = _raw_defaults()
+    raw["use_image_library"] = True
+    raw["image_library_min_score"] = 0.30000000000000004  # what a slider drag hands back
+
+    s = values_to_settings(raw)
+
+    assert s.use_image_library is True
+    assert s.image_library_min_score == 0.3

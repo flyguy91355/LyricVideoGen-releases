@@ -3963,3 +3963,154 @@ source without timestamps, on loud recordings Whisper cannot hear, are left on t
   instead passes the marker's `original_key` to `draw_chord_bar(key_label=...)`. Owner declined adding
   "· E shapes" to the CAPO badge ("just needs the original key").
 - CLAUDE.md trim: dropped the `_default_font` -> `default_font` rename narrative (renamed 2026-09-09).
+
+## 2026-09-25: CLAUDE.md trimmed to make room (original passages, verbatim)
+CLAUDE.md sits at its 40,000-byte budget, and the pre-commit hook requires CLAUDE.md with every code commit.
+To document the shared image library, five verbose passages were condensed to current-state lines; their
+original wording is kept here unchanged.
+
+### close button / Tests invoke the callback
+
+```text
+  The window's own close (X) button (`root.protocol("WM_DELETE_WINDOW",
+  self._on_close_window)` in `__init__`) confirms first
+  while a Generate/Redo/Batch runs -- closing mid-run kills the
+  pipeline (and any in-flight upload), no resume;
+  closes immediately, no prompt, whenever nothing is running (never wedged True
+  by a GUI error, HISTORY 9-22). Tests must invoke
+  the registered `WM_DELETE_WINDOW` Tcl callback, not the Python method (once
+  shipped unwired; HISTORY 9-10). A
+```
+
+### settings popup construction guard
+
+```text
+  the on-disk baseline before destroying the window. `_open_settings_window` wraps
+  its own `SettingsPanel(...)` construction in `self._suppress_settings_save = True`
+  (reset to `False` right after): SettingsPanel's `load_from()` fires `on_change`
+  before that assignment completes, and `_on_settings_changed` would hit a
+  not-yet-assigned attribute (2026-09-11 bug; HISTORY). Startup uses the identical guard; it resets the flag only
+  once, so a later construction needs its own re-arm. The scrollable Settings panel
+```
+
+### settings panel defaults / slider entry boxes
+
+```text
+  loaded on launch and saved only on explicit Save). Every field shows its own
+  default value next to it (`_default_text`, pulled live from a fresh `Settings()`
+  so it can't drift); every slider has a typeable value box beside it in addition to
+  the draggable slider (parsed/clamped by `_parse_clamped_float`, tolerant of a
+  stray "%"/"s" suffix) -- driven off a trace on the slider's own Tk variable rather
+  than `CTkSlider`'s `command` callback, since that callback only fires on a live
+  drag, never a programmatic `.set()` (HISTORY 9-11). An
+  unsaved field's row label is bold+orange (was plain orange text), still governed
+  by the same `_dirty_fields()`/itemized-confirm-before-Save mechanism as before.
+```
+
+### countdown paragraph
+
+```text
+   opens with a `Settings.countdown_beats`
+   lead-in (default 4, owner-adjustable in Output, 0 disables it) -- a real
+   band's count-in is N *beats*, not N seconds, so `assemble_video()` computes
+   `beat_duration = 60 / bpm` from the song's own detected
+   `chord_track.bpm` (falling back to 120 if undetected/zero) and the
+   countdown's actual real-time length is `countdown_beats * beat_duration`
+   (HISTORY 9-10). Frozen on a GUARANTEED-real background (Ken Burns held at
+   its own start position, so there's no visual jump into the real content)
+   with a small centered `render.draw_countdown()` panel counting down --
+   same rounded-box/accent-color language as the chord bar's own NOW/NEXT
+   boxes, capped at ~15% of the frame. `_first_available_image_key()` picks the real first
+   moment's own image when its file exists, otherwise ANY real image
+   already generated for the song, NEVER the flat `fallback_color`
+   (HISTORY 9-10).
+   `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
+   (countdown-extended) timeline; real content uses `song_t = T -
+   countdown_duration`. Audio is delayed to match
+   (`CompositeAudioClip([audio_clip.set_start(countdown_duration)])`) so
+   both start together. Long lyric lines
+```
+
+### support overlay paragraph
+
+```text
+   `render.draw_support_overlay()` optionally burns a small, semi-transparent
+   "support this channel" watermark into the LAST `Settings.
+   support_overlay_lead_seconds` (default 20s) of every video only -- never
+   the countdown, never the whole video -- upper-RIGHT, below the Key/BPM
+   badge, not the chord legend's own corner (HISTORY 9-11).
+   `Settings.support_overlay_text` (blank = off) drives only this overlay;
+   the separate `Settings.support_description_text` (blank = off) is what
+   `schedule_upload()` appends to the YouTube description -- deliberately
+   two independent fields, since the overlay is never clickable (no region
+   of a rendered video frame can be) but the description needs the real
+   `https://` link. Field labels in `settings_panel.py` must stay short --
+   one long label once broke rendering for the WHOLE panel (see `_add()`).
+   `scripts/backfill_support_overlay_description.py` (manual, re-runnable)
+   adds `support_description_text` to already-uploaded videos.
+```
+
+### More CLAUDE.md passages condensed (2026-09-25, same reason; originals verbatim)
+
+#### Apply Update confirmation dialog
+
+```text
+The Apply Update confirmation (`_on_apply_update_clicked`'s own
+`messagebox.askyesno`) is a SEPARATE dialog and needs the identical
+`parent=`/topmost treatment (`parent=self._update_dialog_window`) -- it
+opened behind the outer dialog without it (HISTORY 9-10).
+```
+
+#### cut_release.sh sync details
+
+```text
+Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs both launchers; releases repo is public). The sync step exports from
+git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
+`cp`) so uncommitted changes never leak into a
+public release (HISTORY 2026-09-08). `git show ... > file` drops git's executable
+bit, so the script re-applies `chmod +x` to any path `git ls-tree HEAD`
+tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this same
+```
+
+## 2026-09-25: Shared image library (reuse already-bought images)
+
+- Owner: "move (maybe copy -- you tell me) all the images created from this program, along with the prompt that
+  created them, into a separate Play Along Video Production images folder so the program can also use all the
+  images I have already bought in the new songs created -- what the AI is looking for, or close. So look in the
+  directory first before buying one at Replicate." Design and plan: `docs/superpowers/specs/2026-09-25-shared-image-library-design.md`,
+  `docs/superpowers/plans/2026-09-25-shared-image-library.md`.
+- Measured before designing (read-only): Replicate's own account shows **8,435 images created** (316 more predictions
+  failed and produced nothing), 2026-09-06 to 2026-09-22, all `flux-schnell`; Replicate's pricing page lists $3.00 per
+  thousand images, so about $25.30 (roughly 12 cents per finished song). The owner had asked "over 10,000?" -- that
+  figure was this session's own miscount (it also counted the nested EASY CHORD copies).
+- **The prompts were never saved.** `build_image_prompt()` asks Claude per line and the text is discarded; the only trace
+  of an old image is its filename, `line_hash(text)`. So the library matches by what the *picture shows* (CLIP image
+  embeddings), and old images import with no prompt; every image bought from now on is filed with its real prompt.
+- Copy, not move (render/Redo read `work/<song>/images/`). Dedupe by picture content, not filename: the same lyric line in
+  two songs is two different purchases. 60 instrumental-chord captions alone account for 1,552 image files (each song
+  bought its own). Import dry run: 8,599 files seen (incl. `images_backup_*/`) = 8,351 distinct pictures + 169 duplicates +
+  79 plain-colour placeholders (skipped). An earlier "0 placeholders" check was wrong (a <4 KB size filter a solid 1080p
+  PNG exceeds).
+- Decisions: match the Claude-written *prompt* (it carries the song's theme) against image embeddings with local CLIP
+  (open_clip ViT-B-32 `laion2b_s34b_b79k`, MIT, CPU) rather than paying a Claude call per candidate -- each image costs
+  about a third of a cent, so matching has to be nearly free. One library picture serves at most one line per song. Redo's
+  "Generate new images" skips the lookup. A pipeline run never downloads the ~605 MB weights (the HF repo holds four copies;
+  only `open_clip_model.safetensors` is fetched, by the import script). Any library error disables it for that song.
+- **Ships OFF** (`Settings.use_image_library=False`); `image_library_min_score=0.28` is a provisional placeholder. The owner
+  sets it from the contact sheet `scripts/preview_library_matches.py` writes (leave-one-out: the song's own pictures are
+  hidden), the same "validate a new measure on songs he has already judged" rule as the timing gate.
+- Dependency install (dry-run shown first): only `open_clip_torch`, `torchvision`, `timm`, `ftfy`, `regex`, `wcwidth`; torch
+  2.14.0+cu130, torchaudio, TensorFlow, Demucs, Whisper and crema all still import.
+- Process notes: the repo's pre-commit hook requires CLAUDE.md with every code commit under a 40,000-byte cap, and CLAUDE.md
+  was at 39,960 -- so verbose passages were condensed and their original text archived above (never `--no-verify`).
+  `deep_review/` needs no change: its redo goes through `run_pipeline()`.
+- Import run for real (2026-09-25, foreground then background, 14m24s on CPU): library at `~/PlayAlongVideoProductionImages/`
+  holds **8,351 images (620 MB)**, source lyric line recovered for 7,953; 169 duplicates and 79 plain-colour placeholders skipped.
+- First contact sheets (Free Bird 28 lines, Black Hole Sun 46, Maggie May 40; 117 Claude prompt calls, cached in
+  `reports/library_preview/`). Lines that would reuse a library picture, by match score: 0.28 -> 113 of 114, 0.30 -> 106,
+  0.32 -> 86, 0.34 -> 59 (52%), 0.36 -> 31. Looking at real pairs: 0.39-0.40 near-identical scenes (sunlit bedroom with guitar);
+  0.33-0.34 good (sunset silhouette; mirror/dresser by a window); ~0.30 mood-level only (golden road vs golden field, and a
+  dark street offered for a golden eclipse one); 0.27 clearly wrong (snake on a road vs a cotton field). So the provisional
+  default moved from 0.28 to **0.34** and the slider range to 0.15-0.45; still provisional and the feature still ships OFF --
+  the owner's review sets the real value. At 0.34 about half of a song's images would be reused (roughly 6 cents of the ~12
+  cents a song costs); a stricter setting saves less.

@@ -58,5 +58,10 @@ google-api-python-client>=2.100
 google-auth-httplib2>=0.2
 google-auth-oauthlib>=1.2
 python-dotenv>=1.0
+# Local CLIP model for the shared image library (image_library.py / clip_embedder.py): reuse an already-bought
+# background image that fits a new lyric line instead of buying one from Replicate. Installed 2026-09-25 into
+# this venv: added only open_clip_torch, torchvision, timm, ftfy, regex, wcwidth -- torch/torchaudio/
+# tensorflow untouched. The ~605 MB weights are NOT fetched by a pipeline run; scripts/import_image_library.py does.
+open_clip_torch>=3.0
 pytest>=7.0
 reportlab>=4.0

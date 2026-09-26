@@ -24,6 +24,7 @@ from .fetch_lyrics import fetch_lyric_lines_verified
 from .identify import extract_metadata
 from .imagery import get_or_generate_image, is_fallback_image, substitute_fallback_images, summarize_song_gist
 from .layout import instrumental_image_captions
+from .library_session import open_library_session
 from .lyric_arbiter import arbitrate
 from .lyric_audio_match import drop_unsung_leading_lines, drop_unsung_trailing_lines, score_lyrics_against_transcript
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
@@ -552,6 +553,7 @@ def run_pipeline(
     progress_callback: Callable[[str], None] | None = None,
     end_stage: str = "render",
     capo: int | None = None,
+    fresh_images: bool = False,
 ) -> Path | None:
     """`end_stage` (owner, 2026-09-22: vetting a candidate song's real timing-gate share -- deep_review-style,
     or the most-popular-songs picker -- must never reach detect_chords/images/render, which cost real
@@ -561,7 +563,11 @@ def run_pipeline(
     existing caller's behavior exactly, always returning the finished mp4's path.
 
     `capo` (owner, 2026-09-23) is passed straight to assemble_video() -- None (the default) draws no badge at
-    all; an EASY CHORD variant's own build passes its real capo fret so the CAPO N badge appears only there."""
+    all; an EASY CHORD variant's own build passes its real capo fret so the CAPO N badge appears only there.
+
+    `fresh_images` (owner, 2026-09-25) is Redo's "Generate new images": the shared image library is not consulted
+    for this run (it would hand back the very pictures being replaced), though every picture bought is still
+    filed into it."""
     start_idx = STAGES.index(start_stage)
     end_idx = STAGES.index(end_stage)
     # None (the CLI's default, and every call before this feature existed) means
@@ -818,6 +824,13 @@ def run_pipeline(
         # Reuse already-paid-for images from any prior images_backup_*/ archive
         # before spending on a new one (unchanged convention).
         backup_dirs = sorted(work_dir.glob("images_backup_*"))
+        # The shared library of already-bought images (Settings.use_image_library; None whenever it is off or
+        # unavailable, in which case every line below behaves exactly as before). Not wrapped in try/finally: on
+        # an error the session is simply dropped and freed with the frame, like every other per-run object.
+        library = open_library_session(
+            settings, song_slug=work_dir.name, song_title=song.title, images_dir=images_dir,
+            fresh_images=fresh_images,
+        )
         image_paths = []
         # last_real_image lets a failed generation immediately reuse the most
         # recent REAL image instead of ever writing a flat color to disk --
@@ -832,7 +845,7 @@ def run_pipeline(
         for line in song.lines:
             path = get_or_generate_image(
                 anthropic_client, replicate_token, song_gist, line.text, images_dir,
-                extra_cache_dirs=backup_dirs, previous_image=last_real_image,
+                extra_cache_dirs=backup_dirs, previous_image=last_real_image, library=library,
             )
             image_paths.append(path)
             if not is_fallback_image(path):
@@ -848,7 +861,7 @@ def run_pipeline(
         for caption in instrumental_image_captions(song.lines, song.chord_track, song_end_time(song)):
             path = get_or_generate_image(
                 anthropic_client, replicate_token, song_gist, caption, images_dir,
-                extra_cache_dirs=backup_dirs, previous_image=last_real_image,
+                extra_cache_dirs=backup_dirs, previous_image=last_real_image, library=library,
             )
             image_paths.append(path)
             if not is_fallback_image(path):
@@ -858,6 +871,9 @@ def run_pipeline(
         # a real neighboring image in for any fallback, as an absolute last
         # resort only after every real generation attempt has already failed.
         substitute_fallback_images(image_paths)
+        if library is not None:
+            print(library.summary_line())
+            library.close()
 
     if start_idx <= STAGES.index("render") <= end_idx:
         report("render")

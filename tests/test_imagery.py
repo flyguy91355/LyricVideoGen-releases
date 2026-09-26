@@ -344,3 +344,108 @@ def test_generate_line_image_raises_on_timeout(monkeypatch):
 
     with pytest.raises(ImageGenError):
         generate_line_image("fake-token", "a prompt", Path("unused.png"), http_client=_NeverDoneHttpClient())
+
+
+class _StubLibrary:
+    """Stands in for a LibrarySession: records the calls get_or_generate_image makes on it."""
+
+    def __init__(self, hit_bytes=None):
+        self.hit_bytes = hit_bytes
+        self.lookups = []
+        self.purchases = []
+
+    def find_match(self, prompt, dest):
+        self.lookups.append(prompt)
+        if self.hit_bytes is None:
+            return None
+        dest.write_bytes(self.hit_bytes)
+        return dest
+
+    def record_purchase(self, image_path, prompt, source_text):
+        self.purchases.append((image_path, prompt, source_text))
+
+
+def test_a_library_hit_is_used_without_calling_replicate(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.imagery.generate_line_image",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("Replicate must not be called on a library hit")),
+    )
+    library = _StubLibrary(hit_bytes=b"library-picture")
+
+    path = get_or_generate_image(
+        _FakeAnthropicClient("a moody forest at dusk"), "tok", "gist", "some line", tmp_path, library=library,
+    )
+
+    assert path.read_bytes() == b"library-picture"
+    assert library.lookups == ["a moody forest at dusk"] and library.purchases == []
+
+
+def test_a_library_miss_buys_and_files_the_purchase_with_its_prompt(tmp_path, monkeypatch):
+    def fake_generate(token, prompt, out_path, model="black-forest-labs/flux-schnell"):
+        out_path.write_bytes(b"bought-picture")
+        return out_path
+
+    monkeypatch.setattr("lyricvideo.imagery.generate_line_image", fake_generate)
+    library = _StubLibrary()
+
+    path = get_or_generate_image(
+        _FakeAnthropicClient("a lighthouse"), "tok", "gist", "the line", tmp_path, library=library,
+    )
+
+    assert path.read_bytes() == b"bought-picture"
+    assert library.purchases == [(path, "a lighthouse", "the line")]
+
+
+def test_the_library_is_consulted_once_and_the_saved_prompt_is_the_one_that_succeeded(tmp_path, monkeypatch):
+    prompts = iter(["prompt one", "prompt two"])
+
+    class _Messages:
+        def create(self, **kwargs):
+            return _FakeResponse(next(prompts))
+
+    class _Client:
+        messages = _Messages()
+
+    attempts = []
+
+    def flaky_generate(token, prompt, out_path, model="black-forest-labs/flux-schnell"):
+        attempts.append(prompt)
+        if len(attempts) == 1:
+            raise RuntimeError("content filter")
+        out_path.write_bytes(b"second-try")
+        return out_path
+
+    monkeypatch.setattr("lyricvideo.imagery.generate_line_image", flaky_generate)
+    library = _StubLibrary()
+
+    path = get_or_generate_image(_Client(), "tok", "gist", "the line", tmp_path, library=library)
+
+    assert library.lookups == ["prompt one"]                        # once, with the first prompt that built
+    assert library.purchases == [(path, "prompt two", "the line")]  # the prompt that actually made the picture
+
+
+def test_an_already_cached_image_never_touches_the_library(tmp_path):
+    from lyricvideo.models import line_hash
+
+    (tmp_path / f"{line_hash('same line')}.png").write_bytes(b"already here")
+    library = _StubLibrary(hit_bytes=b"should not be used")
+
+    path = get_or_generate_image(_FakeAnthropicClient(), "tok", "gist", "same line", tmp_path, library=library)
+
+    assert path.read_bytes() == b"already here"
+    assert library.lookups == [] and library.purchases == []
+
+
+def test_a_failed_generation_never_files_a_placeholder_into_the_library(tmp_path):
+    class _FailingMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("boom")
+
+    class _FailingClient:
+        messages = _FailingMessages()
+
+    library = _StubLibrary()
+
+    get_or_generate_image(_FailingClient(), "tok", "gist", "a broken line", tmp_path, library=library)
+
+    assert library.purchases == []

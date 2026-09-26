@@ -249,3 +249,30 @@ def test_the_timing_pass_mark_defaults_to_ninety_percent_and_survives_a_save_and
     Settings(timing_pass_percent=95).save(tmp_path / "s.json")
 
     assert Settings.load(tmp_path / "s.json").timing_pass_percent == 95
+
+
+def test_image_library_settings_default_off_with_a_provisional_score():
+    s = Settings()
+    assert s.use_image_library is False
+    assert s.image_library_min_score == 0.34
+
+
+def test_image_library_settings_survive_a_save_and_load(tmp_path):
+    path = tmp_path / "settings.json"
+    Settings(use_image_library=True, image_library_min_score=0.31).save(path)
+
+    loaded = Settings.load(path)
+
+    assert loaded.use_image_library is True
+    assert loaded.image_library_min_score == 0.31
+
+
+def test_an_old_settings_file_without_the_image_library_keys_loads_the_defaults(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"fps": 30}), encoding="utf-8")
+
+    loaded = Settings.load(path)
+
+    assert loaded.fps == 30
+    assert loaded.use_image_library is False
+    assert loaded.image_library_min_score == 0.34

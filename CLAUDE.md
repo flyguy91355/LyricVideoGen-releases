@@ -35,14 +35,9 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   a required input — then click Generate; work dir (no Browse) falls back to
   the filename if identification isn't done (HISTORY). A "New Song"
   button beside Generate resets the form/log/progress bar (no relaunch).
-  The window's own close (X) button (`root.protocol("WM_DELETE_WINDOW",
-  self._on_close_window)` in `__init__`) confirms first
-  while a Generate/Redo/Batch runs -- closing mid-run kills the
-  pipeline (and any in-flight upload), no resume;
-  closes immediately, no prompt, whenever nothing is running (never wedged True
-  by a GUI error, HISTORY 9-22). Tests must invoke
-  the registered `WM_DELETE_WINDOW` Tcl callback, not the Python method (once
-  shipped unwired; HISTORY 9-10). A
+  The window's X (`WM_DELETE_WINDOW` -> `_on_close_window`) confirms first while a Generate/Redo/Batch
+  runs (closing kills the pipeline and any in-flight upload; no resume), else closes at once (HISTORY 9-22).
+  Tests invoke the registered Tcl callback, not the Python method (HISTORY 9-10). A
   "Batch: Process a Folder" section (`lyricvideo/batch.py` finds/resolves the
   files) runs every audio file in a folder through the pipeline sequentially --
   one up-front confirmation decides whether already-done songs are skipped or
@@ -69,23 +64,16 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
   building a second `SettingsPanel` bound to the same `Settings` object. Closing the
   popup (its own X button) with unsaved changes prompts the same discard
   confirmation as the panel's own Discard button, then reverts `self.settings` to
-  the on-disk baseline before destroying the window. `_open_settings_window` wraps
-  its own `SettingsPanel(...)` construction in `self._suppress_settings_save = True`
-  (reset to `False` right after): SettingsPanel's `load_from()` fires `on_change`
-  before that assignment completes, and `_on_settings_changed` would hit a
-  not-yet-assigned attribute (2026-09-11 bug; HISTORY). Startup uses the identical guard; it resets the flag only
-  once, so a later construction needs its own re-arm. The scrollable Settings panel
+  the on-disk baseline before destroying the window. Constructing a `SettingsPanel` there (and at startup)
+  is wrapped in `self._suppress_settings_save = True`, since `load_from()` fires `on_change` early (HISTORY
+  2026-09-11); startup resets the flag once, so a later construction re-arms it. The scrollable Settings panel
   (`lyricvideo/settings_panel.py`) is bound to a `Settings` object
   (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
-  loaded on launch and saved only on explicit Save). Every field shows its own
-  default value next to it (`_default_text`, pulled live from a fresh `Settings()`
-  so it can't drift); every slider has a typeable value box beside it in addition to
-  the draggable slider (parsed/clamped by `_parse_clamped_float`, tolerant of a
-  stray "%"/"s" suffix) -- driven off a trace on the slider's own Tk variable rather
-  than `CTkSlider`'s `command` callback, since that callback only fires on a live
-  drag, never a programmatic `.set()` (HISTORY 9-11). An
-  unsaved field's row label is bold+orange (was plain orange text), still governed
-  by the same `_dirty_fields()`/itemized-confirm-before-Save mechanism as before.
+  loaded on launch and saved only on explicit Save). Every field shows its own default (`_default_text`,
+  from a fresh `Settings()`); every slider has a typeable box (`_parse_clamped_float`, tolerant of a
+  "%"/"s" suffix), driven off a trace on the slider's Tk variable, not `CTkSlider`'s `command`, which
+  only fires on a live drag (HISTORY 9-11). An unsaved field's label is bold+orange
+  (`_dirty_fields()`/itemized confirm before Save).
   `render.py`/`detect_chords.py`/`assemble_video()` all take plain keyword arguments
   for every Settings-backed value (colors as RGB tuples, sizes as int, toggles as
   bool) and default to the program's original hardcoded values — they do not import
@@ -176,6 +164,16 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    applies the same rule per
    frame: a key with no file behind it renders the nearest real image, never a
    flat color. A missing `REPLICATE_API_TOKEN` raises a clear RuntimeError here.
+   **Shared image library** (spec `2026-09-25-shared-image-library-design.md`; `Settings.use_image_library`, OFF
+   until the owner reviews `scripts/preview_library_matches.py`'s leave-one-out contact sheet in `reports/`, and
+   `image_library_min_score`, provisional 0.34):
+   before buying, the images stage looks in `~/PlayAlongVideoProductionImages/` (`image_library.py`: SQLite + PNGs
+   deduped by picture; env `PLAYALONG_IMAGE_LIBRARY`) for a picture close to Claude's prompt by local CLIP
+   (`clip_embedder.py`; a pipeline run never downloads the ~605 MB weights -- only `scripts/import_image_library.py`
+   [`--dry-run`/`--limit N`; re-runnable; skips plain-colour placeholders], which also catches up old images, may). `library_session.py`'s `LibrarySession` COPIES a hit into
+   `work/<song>/images/` (one picture serves one line per song), files every purchase with its real prompt, and on
+   any error disables itself for that song. Redo's "Generate new images" passes `fresh_images=True` (skips the
+   lookup). `python -m lyricvideo.image_library stats` shows savings.
 7. **render** — `assemble.py`/`layout.py`/`render.py`: composites scrolling lyrics
    (karaoke word-highlight sweep, Ken Burns pans), a NOW/NEXT/segmented-timeline
    chord bar, a Key/BPM badge (paneled, 9-23), and a chord fingering legend
@@ -198,25 +196,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    own panel opacity is its own owner-tunable slider,
    `Settings.chord_diagram_panel_alpha` (0-255, default 235/near-opaque;
    made adjustable 2026-09-10, previously a fixed constant). Every video
-   opens with a `Settings.countdown_beats`
-   lead-in (default 4, owner-adjustable in Output, 0 disables it) -- a real
-   band's count-in is N *beats*, not N seconds, so `assemble_video()` computes
-   `beat_duration = 60 / bpm` from the song's own detected
-   `chord_track.bpm` (falling back to 120 if undetected/zero) and the
-   countdown's actual real-time length is `countdown_beats * beat_duration`
-   (HISTORY 9-10). Frozen on a GUARANTEED-real background (Ken Burns held at
-   its own start position, so there's no visual jump into the real content)
-   with a small centered `render.draw_countdown()` panel counting down --
-   same rounded-box/accent-color language as the chord bar's own NOW/NEXT
-   boxes, capped at ~15% of the frame. `_first_available_image_key()` picks the real first
-   moment's own image when its file exists, otherwise ANY real image
-   already generated for the song, NEVER the flat `fallback_color`
-   (HISTORY 9-10).
-   `assemble_video()`'s inner `make_frame(T)` runs on the OUTER
-   (countdown-extended) timeline; real content uses `song_t = T -
-   countdown_duration`. Audio is delayed to match
-   (`CompositeAudioClip([audio_clip.set_start(countdown_duration)])`) so
-   both start together. Long lyric lines
+   opens with a `Settings.countdown_beats` lead-in (default 4; 0 disables) -- N *beats*, so `assemble_video()`
+   uses `beat_duration = 60 / bpm` from `chord_track.bpm` (120 if undetected) and the count-in lasts
+   `countdown_beats * beat_duration` (HISTORY 9-10). It sits on a GUARANTEED-real background (Ken Burns held at
+   its start; `_first_available_image_key()` picks the first moment's own image, else ANY real image, NEVER the
+   flat `fallback_color`; HISTORY 9-10) under a small centered `render.draw_countdown()` panel (chord-bar box
+   style, capped ~15% of the frame). `make_frame(T)` runs on the OUTER countdown-extended timeline
+   (`song_t = T - countdown_duration`) and the audio is delayed to match
+   (`CompositeAudioClip([audio_clip.set_start(countdown_duration)])`). Long lyric lines
    wrap onto multiple rows at commas (preferred) or by word (fallback) instead of
    running off the frame edges or ever shrinking the font (`render.py`'s
    `_split_line_into_rows`). `draw_scene`'s current/next-line vertical spacing is
@@ -248,20 +235,14 @@ crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
    (default 0.25s) via `render.crossfade_backgrounds()` instead of a cut,
    capped to 40% of either neighbor segment's own length so a
    briefly-held image never spends its whole visible life mid-fade.
-   `render.draw_support_overlay()` optionally burns a small, semi-transparent
-   "support this channel" watermark into the LAST `Settings.
-   support_overlay_lead_seconds` (default 20s) of every video only -- never
-   the countdown, never the whole video -- upper-RIGHT, below the Key/BPM
-   badge, not the chord legend's own corner (HISTORY 9-11).
-   `Settings.support_overlay_text` (blank = off) drives only this overlay;
-   the separate `Settings.support_description_text` (blank = off) is what
-   `schedule_upload()` appends to the YouTube description -- deliberately
-   two independent fields, since the overlay is never clickable (no region
-   of a rendered video frame can be) but the description needs the real
-   `https://` link. Field labels in `settings_panel.py` must stay short --
-   one long label once broke rendering for the WHOLE panel (see `_add()`).
-   `scripts/backfill_support_overlay_description.py` (manual, re-runnable)
-   adds `support_description_text` to already-uploaded videos.
+   `render.draw_support_overlay()` optionally burns a small semi-transparent "support this channel" watermark
+   into the LAST `Settings.support_overlay_lead_seconds` (default 20s) only -- never the countdown -- upper-RIGHT
+   below the Key/BPM badge (HISTORY 9-11). `Settings.support_overlay_text` (blank = off) drives only the overlay;
+   the separate `Settings.support_description_text` (blank = off) is what `schedule_upload()` appends to the
+   YouTube description -- deliberately two fields, since a video frame is never clickable but the description
+   needs the real `https://` link. Field labels in `settings_panel.py` must stay short (one long label once
+   broke the WHOLE panel; see `_add()`). `scripts/backfill_support_overlay_description.py` (manual,
+   re-runnable) adds `support_description_text` to already-uploaded videos.
    `build_scene()`'s `scroll_progress` (how far the current line's own
    on-screen scroll animation has advanced) uses `_plausible_line_end()` --
    the same outlier-capped end as `_plausible_sung_intervals()` -- instead of
@@ -345,15 +326,11 @@ with the release notes and an Apply Update button (confirms first,
 then downloads/reinstalls-deps-if-changed/copies/writes the new
 VERSION) then a Relaunch Now button. No severity tiering, no
 periodic re-check, no manual "Check Now" -- see the spec for why.
-The Apply Update confirmation (`_on_apply_update_clicked`'s own
-`messagebox.askyesno`) is a SEPARATE dialog and needs the identical
-`parent=`/topmost treatment (`parent=self._update_dialog_window`) -- it
-opened behind the outer dialog without it (HISTORY 9-10).
-Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs both launchers; releases repo is public). The sync step exports from
-git's committed `HEAD` (`git show HEAD:<path>`, never a raw working-tree
-`cp`) so uncommitted changes never leak into a
-public release (HISTORY 2026-09-08). `git show ... > file` drops git's executable
-bit, so the script re-applies `chmod +x` to any path `git ls-tree HEAD`
+The Apply Update confirmation (`_on_apply_update_clicked`'s `askyesno`) is a SEPARATE dialog and needs the same
+`parent=self._update_dialog_window`/topmost treatment (HISTORY 9-10).
+Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs both launchers; releases repo is public).
+The sync exports from committed `HEAD` (`git show HEAD:<path>`, never a working-tree `cp`), so uncommitted changes
+never leak into a public release (HISTORY 2026-09-08), and re-applies `chmod +x` to paths `git ls-tree HEAD`
 tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this same
 git checkout, so code changes reach them
 immediately on every commit; releases exist so the Update Available banner

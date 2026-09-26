@@ -1308,7 +1308,10 @@ def test_on_redo_passes_the_easy_chord_checkbox_through_to_the_worker_thread(mon
 
     LyricVideoGUI._on_redo(stub)
 
-    assert calls == [((audio_path, tmp_path / "work" / "angie", "Angie", "fetch_lyrics"), {"force_easy_chord": True})]
+    assert calls == [
+        ((audio_path, tmp_path / "work" / "angie", "Angie", "fetch_lyrics"),
+         {"force_easy_chord": True, "fresh_images": False}),
+    ]
 
 
 def test_retry_upload_refuses_when_nothing_is_selected(monkeypatch):
@@ -2238,3 +2241,50 @@ def test_edit_lyrics_dialog_closes_via_its_own_window_close_button(tmp_path, mon
         _assert_dialog_closes_via_its_own_close_button(root, ctk)
     finally:
         root.destroy()
+
+
+def test_on_redo_passes_generate_new_images_through_as_fresh_images(monkeypatch, tmp_path):
+    """Redo with "Generate new images" must reach run_pipeline as fresh_images, so the image library is not
+    asked for the very pictures the owner just asked to replace."""
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    audio_path = tmp_path / "angie.mp3"
+    audio_path.write_bytes(b"fake")
+    monkeypatch.setattr("lyricvideo.gui.load_redo_inputs", lambda song_dir: (audio_path, "Angie"))
+    monkeypatch.setattr("lyricvideo.gui.backup_song_outputs", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.gui.prepare_images_for_fresh_regeneration", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda *a, **k: True)
+    monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+
+    calls = []
+    button = SimpleNamespace(configure=lambda **kw: None)
+    stub = _gui_stub(
+        _running=False,
+        redo_song_var=SimpleNamespace(get=lambda: "angie"),
+        redo_new_images_var=SimpleNamespace(get=lambda: True),
+        redo_easy_chord_var=SimpleNamespace(get=lambda: False),
+        generate_button=button, redo_button=button, batch_button=button,
+        status_var=SimpleNamespace(set=lambda v: None),
+        progress_bar=SimpleNamespace(set=lambda v: None),
+        _clear_log=lambda: None,
+        _run_worker=lambda *a, **k: calls.append((a, k)),
+        _poll_queue=lambda: None,
+    )
+
+    LyricVideoGUI._on_redo(stub)
+
+    assert calls[0][1] == {"force_easy_chord": False, "fresh_images": True}
+
+
+def test_run_worker_passes_fresh_images_through_to_run_pipeline(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "lyricvideo.gui.run_pipeline",
+        lambda *a, **k: captured.setdefault("fresh_images", k["fresh_images"]) or Path("work/a/a.mp4"),
+    )
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: None)
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
+
+    LyricVideoGUI._run_worker(stub, Path("a.mp3"), Path("work/a"), "A", "fetch_lyrics", fresh_images=True)
+
+    assert captured["fresh_images"] is True
