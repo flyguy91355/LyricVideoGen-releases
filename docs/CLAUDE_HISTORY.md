@@ -4114,3 +4114,28 @@ tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this sam
   default moved from 0.28 to **0.34** and the slider range to 0.15-0.45; still provisional and the feature still ships OFF --
   the owner's review sets the real value. At 0.34 about half of a song's images would be reused (roughly 6 cents of the ~12
   cents a song costs); a stricter setting saves less.
+
+## 2026-09-26: "Blackbird" uploaded with no description and no tags
+
+- Owner: Blackbird - The Beatles on YouTube had only the ko-fi support link as its description. A scan of every uploaded
+  video (109 recorded, 89 still live) found this was the only one: 88 of 89 had real descriptions.
+- Evidence: the live snippet had `tags: null` as well, so BOTH fields were empty -- Claude's reply had contained neither
+  `DESCRIPTION:` nor `TAGS:`. Reproduced against the API: for Blackbird's lyrics Claude often answers with a paragraph
+  ("I should clarify something important: the lyrics you've provided don't match the actual song...") instead of the two
+  labelled lines. `_parse_labeled_fields()` turns that into `""`/`""`, `generate_video_metadata()` returned it without
+  checking, and `schedule_upload()` published it. A second failure mode, found while reproducing: Sonnet 5's thinking is on
+  by default and used all of `max_tokens=300` (thinking block only, `stop_reason=max_tokens`), giving no text -- 5 of 6 tries
+  for Blackbird; 0 of 8 for Free Bird and Maggie May. (A larger budget made the API return HTTP 400 "Output blocked by
+  content filtering policy" for this lyric set with thinking on.)
+- Fix: `generate_video_metadata()` sends `thinking={"type": "disabled"}` (accepted on Sonnet 5), tells Claude not to
+  comment on the lyrics (they come from an automatic lyrics service), retries up to 3 times when a reply lacks a
+  description or at least one tag (or has no text block), and otherwise RAISES `MetadataGenError` -- so `schedule_upload()`
+  never uploads with blank metadata; the song just stays in Pending uploads. Owner: "should not have been uploaded like that."
+  Against the live API afterwards: Blackbird 8/8 first-attempt successes (was 1/6), Free Bird 3/3, Maggie May 3/3.
+- Live repair: Blackbird's description and tags were regenerated with the fixed function and written with a snippet-only
+  `videos.update` (title/category kept; still private, `publishAt` 2026-09-28T01:00Z untouched). A read right after the write
+  still showed the old text -- YouTube's read lagged; it was correct moments later.
+- Not fixed, noted: every other small-`max_tokens` Claude call (`build_image_prompt` 200, `summarize_song_gist`,
+  `draft_comment_reply`, `classify_genre`, `draft_engagement_comment`) also runs on Sonnet 5 with thinking on by default and
+  could in principle hit the same "no text" failure. The 117 image-prompt calls in the library contact-sheet run all
+  succeeded, so it is not showing up there.

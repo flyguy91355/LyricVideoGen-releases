@@ -8,6 +8,9 @@ class MetadataGenError(Exception):
     pass
 
 
+_METADATA_ATTEMPTS = 3
+
+
 def _extract_text(response) -> str:
     parts = [block.text for block in response.content if getattr(block, "type", None) == "text"]
     if not parts:
@@ -57,29 +60,45 @@ def generate_video_metadata(
     # itself couldn't resolve one.
     known_artist = artist.strip()
     artist_line = f'It is performed by "{known_artist}".\n' if known_artist else ""
-    response = anthropic_client.messages.create(
-        model=model,
-        max_tokens=300,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
-                    f"{artist_line}"
-                    "Write YouTube upload metadata for a 'play along' lyric+chord video of "
-                    "this song. Reply with EXACTLY two lines, each prefixed with its label "
-                    "and nothing else before or after:\n"
-                    "DESCRIPTION: <a 2-4 sentence description of the song>\n"
-                    "TAGS: <5-8 relevant search tags, comma-separated>"
-                ),
-            }
-        ],
+    prompt = (
+        f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
+        f"{artist_line}"
+        "The lyrics come from an automatic lyrics service and may differ slightly from the recording, so do not "
+        "comment on, correct, or question them -- just write the two lines below.\n"
+        "Write YouTube upload metadata for a 'play along' lyric+chord video of "
+        "this song. Reply with EXACTLY two lines, each prefixed with its label "
+        "and nothing else before or after:\n"
+        "DESCRIPTION: <a 2-4 sentence description of the song>\n"
+        "TAGS: <5-8 relevant search tags, comma-separated>"
     )
-    fields = _parse_labeled_fields(_extract_text(response), ["DESCRIPTION", "TAGS"])
-    title = build_play_along_title(song_title, artist)
-    description = fields["DESCRIPTION"].strip()
-    tags = [t.strip() for t in fields["TAGS"].split(",") if t.strip()]
-    return title, description, tags
+    # Real incident, 2026-09-25 ("Blackbird" went up with no description and no tags): Claude sometimes answered
+    # with a paragraph instead of the two labelled lines -- which parsed to "" and "" and was uploaded as-is -- and
+    # Sonnet 5's default adaptive thinking could spend the whole 300-token budget and return no text at all. So:
+    # thinking is off (this is a tiny formatted-output task), a reply without BOTH a description and at least one tag
+    # is retried, and after _METADATA_ATTEMPTS the call raises -- a blank description is never handed back.
+    last_problem = ""
+    for _attempt in range(_METADATA_ATTEMPTS):
+        response = anthropic_client.messages.create(
+            model=model,
+            max_tokens=300,
+            thinking={"type": "disabled"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        try:
+            text = _extract_text(response)
+        except MetadataGenError as e:
+            last_problem = str(e)
+            continue
+        fields = _parse_labeled_fields(text, ["DESCRIPTION", "TAGS"])
+        description = fields["DESCRIPTION"].strip()
+        tags = [t.strip() for t in fields["TAGS"].split(",") if t.strip()]
+        if description and tags:
+            return build_play_along_title(song_title, artist), description, tags
+        last_problem = f"the reply had no usable DESCRIPTION:/TAGS: lines ({text[:100]!r}...)"
+    raise MetadataGenError(
+        f"Claude did not return usable YouTube metadata for {song_title!r} after {_METADATA_ATTEMPTS} attempts: "
+        f"{last_problem}"
+    )
 
 
 def draft_comment_reply(

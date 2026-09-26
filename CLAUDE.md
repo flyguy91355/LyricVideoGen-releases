@@ -390,7 +390,8 @@ makes a real network call in tests. New dependencies:
 `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`.
 `lyricvideo/youtube_metadata.py` spends one small Claude call per upload
 (`generate_video_metadata`, same cost profile as the image prompts) to
-write the description/tags, and one more per new comment
+write the description/tags (thinking off; retried 3x, then RAISES -- never a blank description/tags, so
+`schedule_upload` never uploads a bare video; HISTORY 9-26), and one more per new comment
 (`draft_comment_reply`) to draft a reply and flag whether it looks like an
 error report -- both parse a labeled-line reply format
 (`DESCRIPTION:`/`TAGS:` or `IS_ERROR_REPORT:`/`REPLY:`) that's robust to

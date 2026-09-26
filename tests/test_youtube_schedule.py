@@ -560,3 +560,32 @@ def test_a_still_scheduled_off_slot_video_still_counts_against_its_day():
     slot = compute_next_publish_slot(now, claimed, times)
 
     assert slot == datetime(2026, 9, 20, 9, 0, 0)
+
+
+def test_schedule_upload_never_uploads_a_video_whose_metadata_could_not_be_generated(tmp_path):
+    """Owner, 2026-09-25, after "Blackbird" went up with no description and no tags: "should not have been
+    uploaded like that." When Claude never returns usable metadata the upload must not happen at all -- the
+    song stays in Pending uploads to be retried, rather than publishing a bare video."""
+    import pytest
+
+    from lyricvideo.youtube_metadata import MetadataGenError
+
+    class _ProseMessages:
+        def create(self, **kwargs):
+            return _FakeAnthropicResponse("I should clarify something important before providing this metadata...")
+
+    class _ProseClient:
+        messages = _ProseMessages()
+
+    work_dir = _make_song_work_dir(tmp_path)
+    settings = SimpleNamespace(
+        youtube_privacy="public", youtube_category_id="26", youtube_made_for_kids=False,
+        youtube_upload_times="15:00", support_description_text="Support: https://ko-fi.com/x",
+    )
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    with pytest.raises(MetadataGenError):
+        schedule_upload(client, _ProseClient(), work_dir, settings, now=datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc))
+
+    assert client._videos.insert_kwargs is None       # nothing was uploaded
+    assert not (work_dir / "youtube_state.json").exists()

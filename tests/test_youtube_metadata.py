@@ -173,3 +173,85 @@ def test_draft_engagement_comment_mentions_the_song_title_in_the_prompt():
     draft_engagement_comment(client, "Free Bird")
 
     assert "Free Bird" in client.messages._prompt_text()
+
+
+# --- a reply that isn't the two labelled lines must never become a blank YouTube description ----------------
+# Real incident, 2026-09-25: for "Blackbird" Claude sometimes answered with a paragraph ("I should clarify
+# something important: the lyrics you've provided don't match...") instead of DESCRIPTION:/TAGS:, which parsed
+# to "" and "" and was uploaded as a video with no description and no tags. Other times default adaptive thinking
+# used the whole 300-token budget and returned no text block at all.
+
+class _ScriptedMessages:
+    """One scripted reply per call: a str is a plain text reply, a list is used as the response's content blocks."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        reply = self._replies.pop(0)
+        if isinstance(reply, str):
+            return _FakeResponse(reply)
+        return type("Response", (), {"content": reply})()
+
+
+class _ScriptedClient:
+    def __init__(self, replies):
+        self.messages = _ScriptedMessages(replies)
+
+
+_PROSE = "I should clarify something important: the lyrics you've provided don't match the actual song..."
+_GOOD = "DESCRIPTION: A gentle acoustic song about hope.\nTAGS: acoustic, beatles, fingerstyle"
+
+
+def test_generate_video_metadata_retries_a_reply_with_no_labelled_fields():
+    client = _ScriptedClient([_PROSE, _GOOD])
+
+    title, description, tags = generate_video_metadata(client, "Blackbird", "The Beatles", "lyrics")
+
+    assert description == "A gentle acoustic song about hope."
+    assert tags == ["acoustic", "beatles", "fingerstyle"]
+    assert len(client.messages.calls) == 2
+
+
+def test_generate_video_metadata_retries_a_reply_with_a_description_but_no_tags():
+    client = _ScriptedClient(["DESCRIPTION: Only half of it.", _GOOD])
+
+    _title, description, tags = generate_video_metadata(client, "Blackbird", "The Beatles", "lyrics")
+
+    assert description == "A gentle acoustic song about hope." and tags
+
+
+def test_generate_video_metadata_retries_a_reply_with_no_text_block_at_all():
+    thinking_only = [type("Block", (), {"type": "thinking", "thinking": ""})()]
+    client = _ScriptedClient([thinking_only, _GOOD])
+
+    _title, description, _tags = generate_video_metadata(client, "Blackbird", "The Beatles", "lyrics")
+
+    assert description == "A gentle acoustic song about hope."
+    assert len(client.messages.calls) == 2
+
+
+def test_generate_video_metadata_raises_instead_of_returning_a_blank_description():
+    import pytest
+
+    from lyricvideo.youtube_metadata import MetadataGenError
+
+    client = _ScriptedClient([_PROSE, _PROSE, _PROSE])
+
+    with pytest.raises(MetadataGenError):
+        generate_video_metadata(client, "Blackbird", "The Beatles", "lyrics")
+
+    assert len(client.messages.calls) == 3      # tried three times, then gave up rather than guess
+
+
+def test_generate_video_metadata_turns_thinking_off_and_tells_claude_not_to_comment_on_the_lyrics():
+    client = _ScriptedClient([_GOOD])
+
+    generate_video_metadata(client, "Blackbird", "The Beatles", "lyrics")
+
+    call = client.messages.calls[0]
+    assert call["thinking"] == {"type": "disabled"}      # default adaptive thinking can spend the whole token budget
+    assert "do not comment" in call["messages"][0]["content"].lower()
+    assert call["max_tokens"] >= 300
