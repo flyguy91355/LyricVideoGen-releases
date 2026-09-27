@@ -113,3 +113,54 @@ def test_write_report_makes_a_self_contained_page_with_escaped_text_and_thumbnai
     assert "My &lt;Song&gt;" in html_text and "&lt;b&gt;p&lt;/b&gt;" in html_text and "<b>p</b>" not in html_text
     assert "0.30" in html_text and "0.60" in html_text                   # the threshold table
     assert list((tmp_path / "out" / "thumbs").glob("*.jpg"))
+
+
+def _verdicts(html_text: str) -> list[str]:
+    import re
+
+    return re.findall(r"<tr class='([a-z-]*)'><td>", html_text)
+
+
+def test_the_sheet_applies_the_once_per_song_rule_so_it_agrees_with_production_and_its_table(tmp_path):
+    """Issue #7 review: two lines both closest to one library picture -- only the first may be 'reused'; the
+    second would buy (no runner-up clears the bar), exactly as LibrarySession does and as the table counts."""
+    song_dir = _song_dir(tmp_path)
+    library = ImageLibrary(tmp_path / "lib")
+    library.add(_png(tmp_path / "a.png", (255, 0, 0)), _vec(1, 0))
+    library.add(_png(tmp_path / "b.png", (0, 255, 0)), _vec(0, 1))
+    embedder = _TextEmbedder({"p1": _vec(1, 0.1), "p2": _vec(1, 0.2), "p3": _vec(0.5, -1)})
+    prompts = {"red door": "p1", "green field": "p2", instrumental_caption("Am"): "p3"}
+    rows, own_ids = build_rows(song_dir, library, embedder, lambda text: prompts[text])
+    counts = reuse_counts(rows, library, own_ids, [0.34])
+
+    html_text = write_report(tmp_path / "out", "Song", rows, counts, library, current_threshold=0.34).read_text(
+        encoding="utf-8")
+
+    assert counts == [(0.34, 1)]
+    assert _verdicts(html_text) == ["reused", "would-buy", "would-buy"]
+    assert "already used by an earlier line" in html_text
+
+
+def test_the_sheet_shows_the_runner_up_production_would_really_use(tmp_path):
+    song_dir = _song_dir(tmp_path)
+    library = ImageLibrary(tmp_path / "lib")
+    library.add(_png(tmp_path / "a.png", (255, 0, 0)), _vec(1, 0))
+    library.add(_png(tmp_path / "c.png", (0, 0, 255)), _vec(0.8, 0.6))
+    embedder = _TextEmbedder({"p1": _vec(1, 0.1), "p2": _vec(1, 0.2), "p3": _vec(0, -1)})
+    prompts = {"red door": "p1", "green field": "p2", instrumental_caption("Am"): "p3"}
+    rows, own_ids = build_rows(song_dir, library, embedder, lambda text: prompts[text])
+    counts = reuse_counts(rows, library, own_ids, [0.34])
+
+    html_text = write_report(tmp_path / "out", "Song", rows, counts, library, current_threshold=0.34).read_text(
+        encoding="utf-8")
+
+    assert counts == [(0.34, 2)]
+    assert _verdicts(html_text) == ["reused", "reused", "would-buy"]
+    assert "runner-up" in html_text and "score 0.90" in html_text      # the picture line two really gets
+
+
+def test_the_threshold_table_covers_the_whole_settings_slider_range():
+    from lyricvideo.library_preview import THRESHOLDS
+
+    assert THRESHOLDS[0] <= 0.20 and THRESHOLDS[-1] >= 0.44
+    assert 0.34 in THRESHOLDS

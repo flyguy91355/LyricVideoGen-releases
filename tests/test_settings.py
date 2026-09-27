@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from lyricvideo.settings import ENCODERS, FPS_OPTIONS, RESOLUTIONS, Settings
 
 
@@ -276,3 +278,87 @@ def test_an_old_settings_file_without_the_image_library_keys_loads_the_defaults(
     assert loaded.fps == 30
     assert loaded.use_image_library is False
     assert loaded.image_library_min_score == 0.34
+
+
+# --- a failed save is never reported as a success, and never empties the saved file (issue #7 review) ------
+
+def test_a_failed_save_raises_instead_of_pretending_it_worked(tmp_path):
+    """A settings path that is really a folder cannot be written: the Save button must be told, so it keeps the
+    unsaved markers instead of showing a save that never happened."""
+    folder = tmp_path / "settings.json"
+    folder.mkdir()
+
+    with pytest.raises(OSError):
+        Settings(fps=30).save(folder)
+
+
+def test_a_write_that_fails_part_way_leaves_the_previous_settings_file_intact(tmp_path, monkeypatch):
+    """Disk full mid-write: the old settings.json must survive untouched (a truncated file loads as all
+    defaults -- every YouTube setting silently gone)."""
+    path = tmp_path / "settings.json"
+    Settings(timing_pass_percent=95, youtube_auto_upload=True).save(path)
+    before = path.read_bytes()
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("lyricvideo.settings.os.replace", disk_full)
+    with pytest.raises(OSError):
+        Settings(timing_pass_percent=80).save(path)
+
+    assert path.read_bytes() == before
+    loaded = Settings.load(path)
+    assert loaded.timing_pass_percent == 95 and loaded.youtube_auto_upload is True
+    assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]      # no temp file left behind
+
+
+def test_save_writes_the_whole_file_in_one_step(tmp_path):
+    path = tmp_path / "settings.json"
+    Settings(fps=60).save(path)
+    Settings(fps=30).save(path)
+
+    assert Settings.load(path).fps == 30
+    assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
+
+
+@pytest.mark.parametrize("content", ["null", "[]", '"x"', "42"])
+def test_a_settings_file_that_is_not_a_json_object_loads_the_defaults(tmp_path, content):
+    """Valid JSON that is not an object once raised AttributeError out of Settings.load() -- the app could not
+    start until the file was deleted by hand."""
+    path = tmp_path / "settings.json"
+    path.write_text(content, encoding="utf-8")
+
+    assert Settings.load(path) == Settings()
+
+
+def test_a_wrong_typed_value_falls_back_to_that_fields_default_and_keeps_the_rest(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({
+        "lyric_size": None, "fps": "sixty", "show_key_bpm": "yes", "accent_color": 12,
+        "timeline_window_sec": 20, "crf": 18.0, "youtube_category_id": 10, "timing_pass_percent": 95,
+    }), encoding="utf-8")
+
+    loaded = Settings.load(path)
+
+    defaults = Settings()
+    assert loaded.lyric_size == defaults.lyric_size
+    assert loaded.fps == defaults.fps
+    assert loaded.show_key_bpm is defaults.show_key_bpm
+    assert loaded.timeline_window_sec == 20.0 and isinstance(loaded.timeline_window_sec, float)
+    assert loaded.crf == 18 and isinstance(loaded.crf, int)
+    assert loaded.youtube_category_id == "10"
+    assert loaded.accent_color == "12"
+    assert loaded.timing_pass_percent == 95
+
+
+def test_from_dict_keeps_every_value_the_settings_panel_hands_it():
+    """The panel's collect() passes real bools/ints/floats/strs: none of them may be dropped by the type check."""
+    values = {
+        "fps": 30, "crf": 22, "show_chord_legend": False, "timeline_window_sec": 8.5, "image_library_min_score": 0.3,
+        "youtube_upload_times": "10:00,20:00", "youtube_auto_upload": True, "support_description_text": "a\n{description}",
+    }
+
+    loaded = Settings.from_dict(values)
+
+    for name, value in values.items():
+        assert getattr(loaded, name) == value

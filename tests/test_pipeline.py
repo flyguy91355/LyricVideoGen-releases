@@ -45,7 +45,7 @@ def _patch_common(monkeypatch, tmp_path):
     monkeypatch.setattr("lyricvideo.pipeline.separate_vocals", lambda *a, **k: tmp_path / "vocals.wav")
     # Never start a real Whisper from a pipeline-wiring test (the audio-check tests below override this).
     monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: "hello there my friend")
-    monkeypatch.setattr("lyricvideo.pipeline.torchaudio.load", lambda path: (torch.zeros(1, 16000 * 10), 16000))
+    monkeypatch.setattr("lyricvideo.pipeline._vocal_stem_seconds", lambda path: 10.0)
     monkeypatch.setattr("lyricvideo.pipeline.align_words", lambda vocals_path, words: [
         (float(i), float(i) + 0.4) for i in range(len(words))
     ])
@@ -413,14 +413,18 @@ def test_run_pipeline_resuming_past_separate_skips_demucs_when_stems_exist(tmp_p
 
 def test_run_pipeline_resuming_at_images_never_needs_the_stems(tmp_path, monkeypatch):
     """images/render never read the stems, so a resume there must not trigger
-    a (slow) re-separation just because htdemucs/ is gone."""
+    a (slow) re-separation just because htdemucs/ is gone (for a song whose chords are saved -- one with none has
+    them detected first; see tests/test_pipeline_stages_resume.py)."""
     _patch_common(monkeypatch, tmp_path)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     (work_dir / "song_info.json").write_text(
         json.dumps({"title": "t", "artist": "a", "duration": 10.0, "alt_titles": []}), encoding="utf-8",
     )
-    save_song(Song(title="t", audio_path="a.mp3"), work_dir / "lyrics_timed.json")
+    save_song(
+        Song(title="t", audio_path="a.mp3", chord_track=ChordTrack(events=[ChordEvent(0.0, 10.0, "C")], key="C major")),
+        work_dir / "lyrics_timed.json",
+    )
     reported = []
 
     run_pipeline(Path("audio.mp3"), work_dir, start_stage="images", progress_callback=reported.append)
@@ -742,7 +746,11 @@ def test_list_pending_uploads_includes_a_nested_easychords_variant_independently
     capo_dir.mkdir()
     save_song(Song(title="Bridge Over Troubled Water EasyChords", audio_path="a.mp3"), capo_dir / "lyrics_timed.json")
     (capo_dir / "bridge-over-troubled-water-easychords.mp4").write_bytes(b"video")   # capo variant not uploaded yet
-    _settled(song_dir)                                                       # the EASY folder follows its song's key
+    # What build_capo_variant writes: the marker, made for the song's settled (hard) key -- the EASY folder follows it.
+    from lyricvideo.chord_theory import save_easy_chord_capo_marker
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    save_easy_chord_capo_marker(capo_dir, 1, "D", "Eb major", "Bridge Over Troubled Water")
+    save_decision(song_dir, KeyDecision(status="confirmed", key="Eb major", source="agreed", chord_key="Eb major"))
 
     assert list_pending_uploads(work_root) == ["bridge-over-troubled-water/easychords"]
 
@@ -1304,7 +1312,7 @@ def _sync_setup(monkeypatch, tmp_path, whole_starts, anchored_starts, heard=True
     import torch
 
     _patch_common(monkeypatch, tmp_path)
-    monkeypatch.setattr("lyricvideo.pipeline.torchaudio.load", lambda path: (torch.zeros(1, 16000 * 60), 16000))  # a 60 s stem
+    monkeypatch.setattr("lyricvideo.pipeline._vocal_stem_seconds", lambda path: 60.0)  # a 60 s stem
     monkeypatch.setattr("lyricvideo.pipeline.fetch_lyric_lines_verified", lambda *a, **k: (list(_SYNC_LINES), "lrclib", ""))
     monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at(_TRUE_STARTS) if heard else [])
     used = {"whole": 0, "anchored": 0, "prepared": 0}
@@ -1707,8 +1715,17 @@ def test_a_nested_easychords_work_dir_is_recorded_under_its_own_unique_slug(tmp_
     from lyricvideo.cleared_log import cleared_songs
 
     _patch_common(monkeypatch, tmp_path)
+    easy_dir = tmp_path / "work" / "bridge-over-troubled-water" / "easychords"
+    easy_dir.mkdir(parents=True)
+    (easy_dir / "song_info.json").write_text(
+        json.dumps({"title": "Bridge EasyChords", "artist": "a", "duration": 10.0, "alt_titles": []}), encoding="utf-8",
+    )
+    save_song(
+        Song(title="Bridge EasyChords", audio_path="a.mp3", chord_track=ChordTrack(events=[ChordEvent(0.0, 10.0, "C")], key="C major")),
+        easy_dir / "lyrics_timed.json",
+    )
 
-    run_pipeline(Path("audio.mp3"), tmp_path / "work" / "bridge-over-troubled-water" / "easychords")
+    run_pipeline(Path("audio.mp3"), easy_dir, start_stage="render")     # how build_capo_variant renders it
 
     assert [e["slug"] for e in cleared_songs()] == ["bridge-over-troubled-water/easychords"]
 
@@ -1953,7 +1970,7 @@ def test_run_pipeline_builds_the_easy_chord_variant_when_setting_is_on_and_key_i
         ),
     )
     calls = []
-    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir: calls.append(work_dir))
+    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir, **kwargs: calls.append(work_dir))
     work_dir = tmp_path / "work"
 
     run_pipeline(Path("audio.mp3"), work_dir, settings=Settings(generate_easy_chord_versions=True))
@@ -1970,7 +1987,7 @@ def test_run_pipeline_does_not_build_the_easy_chord_variant_when_the_setting_is_
         ),
     )
     calls = []
-    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir: calls.append(work_dir))
+    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir, **kwargs: calls.append(work_dir))
     work_dir = tmp_path / "work"
 
     run_pipeline(Path("audio.mp3"), work_dir, settings=Settings(generate_easy_chord_versions=False))
@@ -1981,7 +1998,7 @@ def test_run_pipeline_does_not_build_the_easy_chord_variant_when_the_setting_is_
 def test_run_pipeline_does_not_build_the_easy_chord_variant_for_an_already_easy_key_song(tmp_path, monkeypatch):
     _patch_common(monkeypatch, tmp_path)   # detect_chords stub here already returns "C major" -- easy
     calls = []
-    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir: calls.append(work_dir))
+    monkeypatch.setattr("lyricvideo.pipeline.build_capo_variant", lambda work_dir, **kwargs: calls.append(work_dir))
     work_dir = tmp_path / "work"
 
     run_pipeline(Path("audio.mp3"), work_dir, settings=Settings(generate_easy_chord_versions=True))
@@ -2213,7 +2230,7 @@ def test_build_capo_variant_refuses_chords_that_are_not_the_songs_own_shifted_by
     _patch_common(monkeypatch, tmp_path)
     work_dir = tmp_path / "work" / "bridge-over-troubled-water"
     _write_original_song_for_capo(work_dir)
-    monkeypatch.setattr("lyricvideo.pipeline.transpose_chord_track", lambda track, capo, shape: track)   # a broken transposition
+    monkeypatch.setattr("lyricvideo.pipeline.transpose_chord_track", lambda track, capo, shape, **kw: track)   # a broken transposition
 
     with pytest.raises(RuntimeError, match="capo"):
         build_capo_variant(work_dir)

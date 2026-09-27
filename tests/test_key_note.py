@@ -93,3 +93,38 @@ def test_apply_key_fixes_is_safe_to_run_twice_and_skips_a_replacement_already_ma
 def test_apply_key_fixes_without_replacements_is_just_the_note():
     from lyricvideo.key_note import apply_key_fixes
     assert apply_key_fixes("Song text.", "C minor", "D minor", []) == apply_key_note("Song text.", "C minor", "D minor")
+
+
+# --- a note pushed below the support template's tip line is still found (issue #7 review, F054) -------------------------
+
+_TIP = '☕ Tips are welcome: https://ko-fi.com/x\n▼ Click "more" for the song info ▼'
+
+
+def test_a_note_pushed_below_the_tip_is_replaced_not_duplicated():
+    pushed = f"{_TIP}\n\n📌 Song key: C minor (not D minor as shown in the video)\n\nBody text."
+
+    out = apply_key_note(pushed, "C major", "D minor")
+
+    assert out.count("📌") == 1
+    assert out == f"📌 Song key: C major (not D minor as shown in the video)\n\n{_TIP}\n\nBody text."
+
+
+def test_a_stale_second_note_anywhere_is_removed():
+    doubled = (
+        "📌 Song key: C major (not D minor as shown in the video)\n\n"
+        f"{_TIP}\n\n📌 Correction: an older, longer note.\n\nBody text."
+    )
+
+    out = apply_key_note(doubled, "C major", "D minor")
+
+    assert out.count("📌") == 1 and out.endswith("Body text.") and _TIP in out
+
+
+def test_split_key_note_separates_the_note_from_the_rest():
+    from lyricvideo.key_note import split_key_note
+
+    note, rest = split_key_note(f"{_TIP}\n\n📌 Song key: C minor (not D minor as shown in the video)\n\nBody.")
+
+    assert note == "📌 Song key: C minor (not D minor as shown in the video)"
+    assert rest == f"{_TIP}\n\nBody."
+    assert split_key_note("Just a song.") == ("", "Just a song.")

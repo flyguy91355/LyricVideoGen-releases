@@ -11,7 +11,7 @@ from PIL import Image
 from .chord_diagram import draw_chord_legend
 from .layout import Scene, SceneLine, SceneWord
 from .models import ChordEvent, ChordTrack, current_chord_at
-from .pipeline import default_font, ordered_unique_chords
+from .pipeline import ordered_unique_chords, resolve_font
 from .render import draw_chord_bar, draw_scene
 from .settings import Settings
 
@@ -43,7 +43,7 @@ def render_preview_frame(settings: Settings, preview_size: tuple[int, int] = PRE
     downscales to `preview_size` for on-screen display."""
     render_kwargs = settings.render_kwargs()
     frame_size = render_kwargs["frame_size"]
-    font_path = settings.font_path or default_font()
+    font_path = resolve_font(settings.font_path)       # exactly the font a real render uses; a moved font never raises here
 
     background = Image.new("RGB", frame_size, (30, 30, 40))  # same fallback color assemble.py uses
     frame = draw_scene(

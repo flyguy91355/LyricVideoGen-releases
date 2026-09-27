@@ -6,7 +6,16 @@ docs/superpowers/specs/2026-09-17-youtube-channel-organization-design.md."""
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
+
+from .youtube_state import atomic_write_text, read_json_state
+
+# Held across every load-modify-save (issue #7 review, F143/F144): organize_video runs on upload worker threads that can
+# overlap, and an unlocked read-modify-write let one save wipe another's playlist id. Writes are atomic; an unreadable
+# cache is moved aside to *.corrupt-<time> (never silently overwritten) and youtube_playlists.get_or_create_playlist
+# re-finds existing playlists by title on a cache miss, so a lost cache no longer creates duplicate public playlists.
+_LOCK = threading.RLock()
 
 CREDENTIALS_DIR = Path.home() / ".playalongvideoproduction"
 PLAYLISTS_FILE = CREDENTIALS_DIR / "youtube_playlists.json"
@@ -22,34 +31,45 @@ DEFAULT_GENRES = [
 
 
 def load_playlist_ids(path: Path = PLAYLISTS_FILE) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    with _LOCK:
+        data = read_json_state(path, {}, dict)
+    return {str(k): str(v) for k, v in data.items() if v}
 
 
 def save_playlist_id(key: str, playlist_id: str, path: Path = PLAYLISTS_FILE) -> None:
-    ids = load_playlist_ids(path)
-    ids[key] = playlist_id
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(ids), encoding="utf-8")
+    with _LOCK:
+        ids = load_playlist_ids(path)
+        ids[key] = playlist_id
+        atomic_write_text(path, json.dumps(ids))
+
+
+def remove_playlist_ids(keys: list[str], path: Path = PLAYLISTS_FILE) -> None:
+    """Drops cached ids (e.g. broken playlists a cleanup script retired) without touching the rest."""
+    with _LOCK:
+        ids = load_playlist_ids(path)
+        if any(k in ids for k in keys):
+            for key in keys:
+                ids.pop(key, None)
+            atomic_write_text(path, json.dumps(ids))
 
 
 def load_genres(path: Path = GENRES_FILE) -> list[str]:
-    if not path.exists():
+    with _LOCK:
+        data = read_json_state(path, None, list)
+    if data is None:
         return list(DEFAULT_GENRES)
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return list(DEFAULT_GENRES)
+    return [str(g) for g in data if isinstance(g, str) and g.strip()]
 
 
 def add_genre_if_new(genre: str, path: Path = GENRES_FILE) -> None:
-    genres = load_genres(path)
-    if genre in genres:
+    """Adds a genre to the shared list; a blank genre is ignored (issue #7 review, F085: a reply with no GENRE: line
+    used to add "" to the list, which then showed up as a bare "- " line in every later classification prompt)."""
+    genre = (genre or "").strip()
+    if not genre:
         return
-    genres.append(genre)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(genres), encoding="utf-8")
+    with _LOCK:
+        genres = load_genres(path)
+        if genre in genres:
+            return
+        genres.append(genre)
+        atomic_write_text(path, json.dumps(genres))

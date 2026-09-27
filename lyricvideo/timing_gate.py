@@ -8,21 +8,25 @@ repeated chorus excuse a misplaced line and cleared 'Like a Prayer', whose secon
 
 A line the recognizer heard too little of to compare is left out (unjudged); a song with too few judged lines cannot be
 checked and is set aside like a failing one. Callers: `pipeline._align_lyrics` (picks the alignment and sets the concern
-on a fresh render), `pipeline.list_pending_uploads`/`list_flagged_songs` (hold an already-rendered song before it can
-upload), and `python -m lyricvideo.timing_gate` (report / hold over a whole work folder)."""
+on a fresh render), `pipeline.list_pending_uploads`/`list_flagged_songs` (judge an already-rendered song READ-ONLY at the
+current bar before it can upload -- timing_verdict; a listing never writes), and
+`python -m lyricvideo.timing_gate` (report / `--hold` writes the hold over a whole work folder)."""
 
 from __future__ import annotations
 
 import argparse
 import bisect
+import os
 import statistics
+import sys
+import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .anchors import HeardWord
 from .cleared_log import record_cleared, record_removed
 from .lyric_audio_match import _content, _tokens, _words_match
-from .models import load_song, save_song
+from .models import Song, display_slug, load_song, original_song_dir, save_song
 from .owner_verified import verification
 from .transcribe import load_transcript_words
 
@@ -125,12 +129,15 @@ def heard_text_near_line(line_words: list, heard: list[HeardWord]) -> str:
     return " ".join(hw.word.strip() for hw in nearby if hw.word.strip())
 
 
-def check_sync(
-    line_words: list[list[str]], times: list[tuple[float, float]], heard: list[HeardWord], needed: float | None = None,
-) -> SyncReport:
-    """line_words: each line's words; times: one (start, end) per word, flat in line order; heard: what was sung;
-    needed: the share of lines that must be in sync (default: the bar in force, see pass_share)."""
-    needed = pass_share() if needed is None else needed
+_IN, _OUT, _UNJUDGED = "in", "out", "unjudged"
+
+
+def _line_verdicts(
+    line_words: list[list[str]], times: list[tuple[float, float]], heard: list[HeardWord],
+) -> list[str | None]:
+    """One verdict per line, in line order: "in" (its words start within TOLERANCE_SECONDS of where they are sung), "out"
+    (they don't, or other words are sung where it is placed), "unjudged" (the recognizer heard too little there to say), or
+    None for a line with no words. check_sync counts these; pick_by_sync compares candidates line by line with them."""
     sung = sorted((hw.start, token) for hw in heard for token in _content(_tokens(hw.word)))
     starts = [start for start, _ in sung]
 
@@ -138,12 +145,12 @@ def check_sync(
         return sung[bisect.bisect_left(starts, low):bisect.bisect_right(starts, high)]
 
     n = 0
-    in_sync = unjudged = 0
-    out_of_sync: list[int] = []
-    for number, words in enumerate(line_words, start=1):
+    verdicts: list[str | None] = []
+    for words in line_words:
         placed = times[n:n + len(words)]
         n += len(words)
         if not words:
+            verdicts.append(None)
             continue
         offsets = []
         has_tokens = False
@@ -155,31 +162,55 @@ def check_sync(
                 if near:
                     offsets.append(min(near, key=abs))
         if not has_tokens:
-            unjudged += 1                                   # nothing but filler and vocalisations to compare
+            verdicts.append(_UNJUDGED)                      # nothing but filler and vocalisations to compare
         elif offsets:
-            if abs(statistics.median(offsets)) <= TOLERANCE_SECONDS + _EPSILON:
-                in_sync += 1
-            else:
-                out_of_sync.append(number)
+            verdicts.append(_IN if abs(statistics.median(offsets)) <= TOLERANCE_SECONDS + _EPSILON else _OUT)
         elif len(sung_between(placed[0][0] - SEARCH_SECONDS, placed[-1][1] + SEARCH_SECONDS)) >= MIN_HEARD_NEARBY:
-            out_of_sync.append(number)                      # other words are sung right here, none of this line's
+            verdicts.append(_OUT)                           # other words are sung right here, none of this line's
         else:
-            unjudged += 1                                   # the recognizer heard (almost) nothing here: cannot say
+            verdicts.append(_UNJUDGED)                      # the recognizer heard (almost) nothing here: cannot say
+    return verdicts
+
+
+def _report_from(verdicts: list[str | None], total_lines: int, needed: float) -> SyncReport:
+    in_sync = sum(1 for v in verdicts if v == _IN)
+    out_of_sync = tuple(number for number, v in enumerate(verdicts, start=1) if v == _OUT)
+    unjudged = sum(1 for v in verdicts if v == _UNJUDGED)
     judged = in_sync + len(out_of_sync)
     share = in_sync / judged if judged >= MIN_JUDGED_LINES else None
-    return SyncReport(share, judged, unjudged, len(line_words), tuple(out_of_sync), needed)
+    return SyncReport(share, judged, unjudged, total_lines, out_of_sync, needed)
+
+
+def check_sync(
+    line_words: list[list[str]], times: list[tuple[float, float]], heard: list[HeardWord], needed: float | None = None,
+) -> SyncReport:
+    """line_words: each line's words; times: one (start, end) per word, flat in line order; heard: what was sung;
+    needed: the share of lines that must be in sync (default: the bar in force, see pass_share)."""
+    needed = pass_share() if needed is None else needed
+    return _report_from(_line_verdicts(line_words, times, heard), len(line_words), needed)
 
 
 def pick_by_sync(
     candidates: dict[str, list[tuple[float, float]]], line_words: list[list[str]], heard: list[HeardWord],
     preferred: str | None = None, needed: float | None = None,
 ) -> tuple[str, list[tuple[float, float]], SyncReport]:
-    """The candidate alignment with the most lines in sync (a tie goes to `preferred`, then to the earlier one)."""
+    """The candidate alignment with the most lines in sync, counted over the SAME lines for every candidate: every line at
+    least one candidate places where it can be judged. A line one candidate moves into silence (unjudged there) while another
+    places it on singing counts as not in sync for the first -- ranking each candidate by its own share let one that threw a
+    line into a guitar solo beat one that placed it 0.8 s late on its own singing (issue #7 review; the 'Go Your Own Way'
+    failure). A tie goes to the candidate that leaves fewer such lines in silence, then to `preferred`, then to the earlier
+    one. The report returned is the chosen candidate's own (check_sync), so the gate's percentage is unchanged."""
+    needed = pass_share() if needed is None else needed
+    verdicts = {name: _line_verdicts(line_words, times, heard) for name, times in candidates.items()}
+    judgeable = {i for line_verdicts in verdicts.values() for i, v in enumerate(line_verdicts) if v in (_IN, _OUT)}
     scored = []
     for order, (name, times) in enumerate(candidates.items()):
-        report = check_sync(line_words, times, heard, needed)
-        scored.append((-(report.share if report.share is not None else -1.0), name != preferred, order, name, times, report))
-    _, _, _, name, times, report = min(scored, key=lambda item: item[:3])
+        line_verdicts = verdicts[name]
+        in_sync = sum(1 for i in judgeable if line_verdicts[i] == _IN)
+        moved_into_silence = sum(1 for i in judgeable if line_verdicts[i] == _UNJUDGED)
+        report = _report_from(line_verdicts, len(line_words), needed)
+        scored.append((-in_sync, moved_into_silence, name != preferred, order, name, times, report))
+    _, _, _, _, name, times, report = min(scored, key=lambda item: item[:4])
     return name, times, report
 
 
@@ -202,30 +233,103 @@ def settle_alignment(
     return Settled(method, times, report, report.concern)
 
 
-def check_saved_song(song_dir: Path, needed: float | None = None) -> SyncReport | None:
-    """The verdict on a rendered song's own saved timing, or None when it cannot be read or has no transcript."""
-    song_dir = Path(song_dir)
+_TIMED_FILE = "lyrics_timed.json"
+_TRANSCRIPT_FILE = "transcript.json"
+
+# check_saved_song's verdicts, kept while neither the song's timing file nor its transcript changes (issue #7: every song list
+# re-parsed both and re-ran check_sync for every song on every open). Keyed by the song folder; the value holds the files'
+# (inode, mtime_ns, size) signature and the report judged against a neutral bar -- the bar only sets SyncReport.needed, so a
+# moved pass-mark slider needs no re-check. Guarded by a lock: the song lists run on the Tk thread and on background threads.
+_REPORTS: dict[str, tuple[tuple, SyncReport | None]] = {}
+_REPORTS_LOCK = threading.Lock()
+_REPORTS_LIMIT = 5000
+
+
+def file_signature(path: Path) -> tuple[int, int, int] | None:
+    """(inode, mtime_ns, size) of a file, None when it is missing: what the song-list caches remember a parse by. Every
+    save_song is an atomic replace, which gives the file a new inode, so a rewrite is noticed even within one clock tick."""
     try:
-        song = load_song(song_dir / "lyrics_timed.json")
-    except Exception:
+        st = os.stat(path)
+    except OSError:
         return None
-    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(song_dir)]
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def transcript_dir(song_dir: Path) -> Path:
+    """Where a song's Whisper transcript lives: its own folder, or -- for an EASY CHORD variant, which build_capo_variant never
+    gives one -- its original song's (the same audio, sung the same way; issue #7 review: without this no EASY video could
+    ever be judged, so none was ever offered in Upload to YouTube and none was held when its song failed the bar)."""
+    song_dir = Path(song_dir)
+    if (song_dir / _TRANSCRIPT_FILE).exists():
+        return song_dir
+    return original_song_dir(song_dir)
+
+
+def _judge_saved(song_dir: Path, song: Song | None, source: Path) -> SyncReport | None:
+    if song is None:
+        try:
+            song = load_song(song_dir / _TIMED_FILE)
+        except Exception:
+            return None
+    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(source)]
     if not heard:
         return None
     line_words = [[w.word for w in line.words] for line in song.lines]
     times = [(w.start_time, w.end_time) for line in song.lines for w in line.words]
-    return check_sync(line_words, times, heard, needed)
+    return check_sync(line_words, times, heard, PASS_SHARE)
+
+
+def check_saved_song(
+    song_dir: Path, needed: float | None = None, song: Song | None = None,
+    timed_signature: tuple[int, int, int] | None = None,
+) -> SyncReport | None:
+    """The verdict on a rendered song's own saved timing, or None when it cannot be read or has no transcript. An EASY CHORD
+    variant is scored (its own lines) against its original song's transcript (transcript_dir). Remembered until the timing
+    file or the transcript changes. `song` is the already-loaded lyrics_timed.json, when the caller has it, and
+    `timed_signature` the file's signature (file_signature) taken BEFORE that load: a verdict on a song the file no longer
+    holds is returned but never remembered."""
+    song_dir = Path(song_dir)
+    needed = pass_share() if needed is None else needed
+    source = transcript_dir(song_dir)
+    current = file_signature(song_dir / _TIMED_FILE)
+    signature = (current, str(source), file_signature(source / _TRANSCRIPT_FILE))
+    key = os.path.abspath(song_dir)
+    if current is not None:
+        with _REPORTS_LOCK:
+            cached = _REPORTS.get(key)
+        if cached is not None and cached[0] == signature:
+            return None if cached[1] is None else replace(cached[1], needed=needed)
+    report = _judge_saved(song_dir, song, source)
+    loaded_this_version = song is None or timed_signature == current
+    if current is not None and loaded_this_version:
+        with _REPORTS_LOCK:
+            if len(_REPORTS) >= _REPORTS_LIMIT:
+                _REPORTS.clear()
+            _REPORTS[key] = (signature, report)
+    return None if report is None else replace(report, needed=needed)
+
+
+def timing_verdict(existing_concern: str, report: SyncReport | None) -> str:
+    """The timing concern a song carries at the bar `report` was judged against, given the concern stored in its file (which
+    must be "" or this check's own -- see is_gate_concern): the report's reason when it fails, "" when it passes, and the
+    stored concern unchanged when the song cannot be judged here (an older song with no transcript: only a fresh render
+    holds on "could not be checked")."""
+    if report is None or report.share is None:
+        return existing_concern
+    return "" if report.passes else report.concern
 
 
 def hold_if_timing_fails(song_dir: Path, needed: float | None = None) -> str:
-    """Keeps a rendered song's hold in step with the bar, and returns the timing concern it now carries ("" when none).
-    A song that FAILS gets the reason written into its lyrics_timed.json (so every upload path skips it and it shows in
-    Flagged for Lyrics Review); a song this check held that now PASSES (the bar was lowered, or a redo fixed it) is
-    released; a passing one stays clean. A concern from any other check is never touched, and a song that cannot be
-    judged here (an older song with no transcript) keeps whatever it had: only a fresh render holds on "could not be
-    checked"."""
+    """Keeps a rendered song's STORED hold in step with the bar, and returns the timing concern it now carries ("" when none).
+    A song that FAILS gets the reason written into its lyrics_timed.json; a song this check held that now PASSES (the bar was
+    lowered, or a redo fixed it) is released; a passing one stays clean. A concern from any other check is never touched, and
+    a song that cannot be judged here (an older song with no transcript) keeps whatever it had: only a fresh render holds on
+    "could not be checked". Used by `python -m lyricvideo.timing_gate --hold`; the song lists never write (they judge the
+    same way, read-only, with timing_verdict).
+    The write is atomic (models.save_song), and a failure to update the cleared-songs record is only a warning."""
     song_dir = Path(song_dir)
-    timed_path = song_dir / "lyrics_timed.json"
+    timed_path = song_dir / _TIMED_FILE
+    signature = file_signature(timed_path)
     try:
         song = load_song(timed_path)
     except Exception:
@@ -233,20 +337,22 @@ def hold_if_timing_fails(song_dir: Path, needed: float | None = None) -> str:
     existing = song.lyrics_accuracy_concern
     if existing and not is_gate_concern(existing):
         return ""
-    if verification(song_dir):
+    if verification(song_dir, song=song):
         return ""                                   # the owner approved this version: never re-held behind their back
-    report = check_saved_song(song_dir, needed)
-    if report is None or report.share is None:
-        return existing
-    if report.passes:
-        if existing:
-            save_song(replace(song, lyrics_accuracy_concern=""), timed_path)
-            record_cleared(song_dir.name, f"passes the {report.needed:.0%} timing check at {percent_display(report.share)}")
-        return ""
-    if report.concern != existing:
-        save_song(replace(song, lyrics_accuracy_concern=report.concern), timed_path)
-        record_removed(song_dir.name, report.concern[:300])          # so the cleared-for-upload record stops counting it
-    return report.concern
+    report = check_saved_song(song_dir, needed, song=song, timed_signature=signature)
+    concern = timing_verdict(existing, report)
+    if concern == existing:
+        return concern
+    save_song(replace(song, lyrics_accuracy_concern=concern), timed_path)
+    slug = display_slug(song_dir)                   # "<song>/easychords", never a bare "easychords" shared by every variant
+    try:
+        if concern:
+            record_removed(slug, concern[:300])     # so the cleared-for-upload record stops counting it
+        else:
+            record_cleared(slug, f"passes the {report.needed:.0%} timing check at {percent_display(report.share)}")
+    except Exception as e:
+        print(f"WARNING: could not update the cleared-songs record for {slug}: {type(e).__name__}: {e}", file=sys.stderr)
+    return concern
 
 
 def scan_songs(work_root: Path, hold: bool = False, needed: float | None = None) -> list[dict]:

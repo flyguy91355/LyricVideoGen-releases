@@ -22,12 +22,19 @@ from pathlib import Path
 
 import requests
 
-from .audio_decode import probe_duration
-from .text_clean import clean_title, smart_title_case
+from .audio_decode import decode_audio, probe_duration
+from .text_clean import clean_title, smart_title_case, strip_title_noise
 
 log = logging.getLogger("playalongvideoproduction")
 
 _SEPARATORS = [" - ", " – ", " — ", "_-_", " -- ", " _ "]
+
+# A FILENAME title loses a real track-number prefix (text_clean.clean_title: "01 - ", "1. ", never "19-2000" or a
+# three-digit band name); a TAG or MusicBrainz title never does -- tags keep the number in their own field
+# (text_clean.strip_title_noise). Issue #7 review.
+# Sample rate used only to MEASURE a file's length by decoding it (any rate gives the same seconds; low is cheap).
+_LENGTH_DECODE_RATE = 4000
+
 
 LRCLIB_SEARCH = "https://lrclib.net/api/search"
 MUSICBRAINZ_RECORDING = "https://musicbrainz.org/ws/2/recording/"
@@ -45,6 +52,10 @@ class SongInfo:
     duration: float = 0.0
     source: str = "unknown"  # "id3" | "filename" | "musicbrainz" | "lrclib"
     alt_titles: list[str] = field(default_factory=list)
+    # The individually credited artists when MusicBrainz resolved `artist` (its "A, B & C" credit string can't be
+    # split back reliably -- a band name may hold a comma); [] otherwise. Saved as "artists" in song_info.json, which
+    # youtube_playlists.organize_video prefers for the per-artist playlists.
+    artists: list[str] = field(default_factory=list)
 
     @property
     def search_titles(self) -> list[str]:
@@ -65,8 +76,8 @@ def parse_filename(stem: str) -> tuple[str, str]:
         if sep in text:
             parts = [p.strip() for p in text.split(sep) if p.strip()]
             if len(parts) >= 2:
-                artist = parts[0]
-                title = clean_title(" - ".join(parts[1:]))
+                artist = parts[0].replace("_", " ").strip()
+                title = clean_title(" - ".join(parts[1:]).replace("_", " "))
                 return artist, title
     return "", text.replace("_", " ").strip()
 
@@ -96,7 +107,35 @@ def read_tags(path: Path) -> tuple[str, str, str, float]:
         return str(value or "").strip()
 
     duration = float(getattr(audio.info, "length", 0.0) or 0.0)
+    if _length_is_a_header_guess(audio.info):
+        measured = decoded_duration(path)
+        if measured > 0:
+            if abs(measured - duration) > 1.0:
+                log.info("%s has no VBR header, so its tagged length (%.0fs) was a guess; decoded length is %.1fs",
+                         path.name, duration, measured)
+            duration = measured
     return first("title"), first("artist"), first("album"), duration
+
+
+def _length_is_a_header_guess(info) -> bool:
+    """True for an MP3 with no Xing/VBRI/LAME header: mutagen (and ffmpeg's banner) then extrapolate its length from
+    the FIRST frame's bitrate, which for a VBR file can be off by minutes (issue #7 review: a 180 s song read as 841 s,
+    so its correct Demucs stems were rejected as truncated on every run)."""
+    try:
+        from mutagen.mp3 import BitrateMode, MPEGInfo  # type: ignore
+    except ImportError:  # pragma: no cover
+        return False
+    return isinstance(info, MPEGInfo) and getattr(info, "bitrate_mode", None) == BitrateMode.UNKNOWN
+
+
+def decoded_duration(path: Path) -> float:
+    """The file's real length in seconds, measured by decoding it (0.0 when it can't be decoded)."""
+    try:
+        samples = decode_audio(path, sr=_LENGTH_DECODE_RATE)
+    except Exception as exc:
+        log.debug("could not decode %s to measure its length: %s", path.name, exc)
+        return 0.0
+    return len(samples) / _LENGTH_DECODE_RATE
 
 
 def artist_consensus(results: list[dict], min_votes: int = 2, min_share: float = 0.4) -> str | None:
@@ -143,11 +182,23 @@ def _artist_credit(rec: dict) -> str:
     return "".join(parts).strip()
 
 
-def rank_musicbrainz(recordings: list[dict], duration: float, artist_hint: str = "") -> tuple[str, str] | None:
-    """Choose (artist, title) from MusicBrainz search results."""
+def _artist_credit_names(rec: dict) -> list[str]:
+    """Each credited artist's own name, in credit order, without the join phrases (", ", " & ", " feat. ")."""
+    names: list[str] = []
+    for credit in rec.get("artist-credit", []) or []:
+        if isinstance(credit, dict):
+            name = str(credit.get("name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def _best_musicbrainz_recording(recordings: list[dict], duration: float, artist_hint: str = "") -> dict | None:
     hint = artist_hint.strip().lower() if artist_hint else ""
     best, best_score = None, float("-inf")
     for rec in recordings:
+        if not isinstance(rec, dict):
+            continue
         length = (rec.get("length") or 0) / 1000.0
         if not length:
             continue
@@ -159,12 +210,19 @@ def rank_musicbrainz(recordings: list[dict], duration: float, artist_hint: str =
         if hint and hint in artist.lower():
             score += 40.0
         if score > best_score and artist:
-            best, best_score = (artist, str(rec.get("title") or "")), score
+            best, best_score = rec, score
     return best
 
 
-def musicbrainz_lookup(title: str, duration: float, artist_hint: str = "") -> tuple[str, str] | None:
-    """Find the recording matching `title` and `duration` (within a small window)."""
+def rank_musicbrainz(recordings: list[dict], duration: float, artist_hint: str = "") -> tuple[str, str] | None:
+    """Choose (artist, title) from MusicBrainz search results."""
+    rec = _best_musicbrainz_recording(recordings, duration, artist_hint)
+    return None if rec is None else (_artist_credit(rec), str(rec.get("title") or ""))
+
+
+def musicbrainz_lookup(title: str, duration: float, artist_hint: str = "") -> tuple[str, str, list[str]] | None:
+    """Find the recording matching `title` and `duration` (within a small window): (credit string, recording title,
+    the individually credited artists)."""
     if not title or duration <= 0:
         return None
     window = max(6.0, duration * 0.02)
@@ -176,8 +234,11 @@ def musicbrainz_lookup(title: str, duration: float, artist_hint: str = "") -> tu
         if r.status_code != 200:
             log.info("MusicBrainz answered HTTP %s; skipping", r.status_code)
             return None
-        return rank_musicbrainz(r.json().get("recordings", []) or [], duration, artist_hint)
-    except (requests.RequestException, ValueError) as exc:
+        rec = _best_musicbrainz_recording(r.json().get("recordings", []) or [], duration, artist_hint)
+        if rec is None:
+            return None
+        return _artist_credit(rec), str(rec.get("title") or ""), _artist_credit_names(rec)
+    except (requests.RequestException, ValueError, AttributeError) as exc:
         log.info("MusicBrainz lookup failed: %s", exc)
         return None
 
@@ -189,20 +250,26 @@ def extract_metadata(path: Path) -> SongInfo:
     alt_titles: list[str] = []
 
     if not title or not artist:
-        f_artist, f_title = parse_filename(path.stem)
+        f_artist, f_title = parse_filename(path.stem)   # the filename title is already track-number-stripped
         title = title or f_title
         artist = artist or f_artist
         source = source or "filename"
     if duration <= 0:
-        duration = probe_duration(path)
-    title = clean_title(title) or path.stem
+        # mutagen could not read the file; ffmpeg's banner is a header read too (a guess for a Xing-less MP3),
+        # so the decoded length wins whenever the file decodes.
+        duration = decoded_duration(path) or probe_duration(path)
+    # Noise only from here on: a tag or MusicBrainz title never carries a track number, and "19-2000" or "5.15"
+    # starting with digits is the title itself (issue #7 review).
+    title = strip_title_noise(title) or path.stem
+    artists: list[str] = []
 
     if not artist and title:
         log.info("No artist in tags or filename; looking '%s' up by title and length", title)
         hint = lrclib_artist_for_title(title)
         hit = musicbrainz_lookup(title, duration, artist_hint=hint or "")
         if hit:
-            artist, mb_title = hit
+            artist, mb_title = hit[0], hit[1]
+            artists = [str(a).strip() for a in (hit[2] if len(hit) > 2 else []) if str(a).strip()]
             if mb_title and mb_title.strip().lower() != title.strip().lower():
                 alt_titles.append(title)
                 title = mb_title
@@ -210,11 +277,11 @@ def extract_metadata(path: Path) -> SongInfo:
         elif hint:
             artist, source = hint, "lrclib"
 
-    title = clean_title(title) or path.stem
+    title = strip_title_noise(title) or path.stem
     if source == "filename":
         title = smart_title_case(title)
     info = SongInfo(path=path, title=title, artist=artist.strip(), duration=duration,
-                    source=source or "filename", alt_titles=alt_titles)
+                    source=source or "filename", alt_titles=alt_titles, artists=artists)
     log.info("Identified '%s' by '%s' (%s, %.0fs)", info.title, info.artist or "Unknown Artist",
              info.source, info.duration)
     return info

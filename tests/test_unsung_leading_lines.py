@@ -5,7 +5,7 @@ the audio, its a credit, right?" Song text is invented."""
 from lyricvideo.anchors import HeardWord
 from lyricvideo.lyric_audio_match import drop_unsung_leading_lines
 
-LINES = ["By. Someone", "Composer 2", "I come home in the morning light", "My mother says when you gonna live your life"]
+LINES = ["By. Someone", "Composer 2", "I come round the purple lantern", "My kettle hums a paper song"]
 TIMES = [0.5, 1.0, 17.0, 20.0]
 HEARD = [HeardWord("i", 17.2, 17.4), HeardWord("come", 17.5, 17.8)]
 LOUD_FROM_17S = [0.0] * 34 + [1.0] * 100                    # 0.5 s hops: silent until 17 s, then singing
@@ -52,17 +52,17 @@ def test_without_source_times_or_audio_information_nothing_is_dropped():
 
 
 def test_at_most_four_leading_lines_are_dropped_and_a_real_line_always_remains():
-    many = [f"Credit {n}" for n in range(6)] + ["I come home in the morning light"]
+    many = [f"Credit {n}" for n in range(6)] + ["I come round the purple lantern"]
     lines, _, dropped = run(lines=many, times=[0.1 * n for n in range(6)] + [17.0])
 
-    assert len(dropped) == 4 and lines[-1] == "I come home in the morning light"
+    assert len(dropped) == 4 and lines[-1] == "I come round the purple lantern"
 
 
 # --- the same rule at the END of the file ------------------------------------------------------------------------
 
 from lyricvideo.lyric_audio_match import drop_unsung_trailing_lines
 
-SONG = ["Desperado, why don't you come to your senses", "You better let somebody love you", "Before it's too late"]
+SONG = ["Marigold, the windmill hums a little", "Seven pebbles in a teacup", "Before the lamp is late"]
 CREDITS = ["Lead Vocals : Someone", "Piano : Someone Else", "Strings : An Orchestra"]
 END_LINES = SONG + CREDITS
 END_TIMES = [10.0, 170.0, 188.0, 205.0, 206.0, 207.0]                        # credits stamped after the last singing
@@ -107,7 +107,7 @@ def test_trailing_rule_needs_source_times_and_audio_evidence():
 
 
 def test_at_most_twelve_trailing_lines_are_dropped_and_a_real_line_remains():
-    many = ["I come home in the morning light"] + [f"Credit {n}" for n in range(15)]
+    many = ["I come round the purple lantern"] + [f"Credit {n}" for n in range(15)]
     lines, _, dropped = run_end(lines=many, times=[188.0] + [205.0 + n for n in range(15)])
 
-    assert len(dropped) == 12 and lines[0] == "I come home in the morning light"
+    assert len(dropped) == 12 and lines[0] == "I come round the purple lantern"

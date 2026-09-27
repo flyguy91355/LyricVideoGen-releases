@@ -247,3 +247,92 @@ def test_a_library_bought_image_serves_a_second_song_end_to_end(tmp_path, monkey
     assert bought == ["a red door at dusk"]                     # only song one paid for anything
     assert library.stats() == {"images": 1, "with_prompt": 1, "reuses": 1}
     assert len(list((tmp_path / "song-two" / "images").glob("*.png"))) == 1
+
+
+def _redo_with_generate_new_images(work: Path) -> Path:
+    """What Redo's "Generate new images" does to the folders (pipeline.prepare_images_for_fresh_regeneration)."""
+    moved = work / "images_prior_20260926-120000"
+    (work / "images").rename(moved)
+    (work / "images").mkdir()
+    return moved
+
+
+def test_a_later_redo_never_offers_back_a_picture_the_owner_replaced(tmp_path):
+    """Issue #7 review: after "Generate new images", a later ordinary Redo that changes a line must not copy the
+    rejected picture (still in the library) back into images/."""
+    from lyricvideo.image_library import content_id
+
+    library = ImageLibrary(tmp_path / "lib")
+    work = tmp_path / "work" / "song"
+    (work / "images").mkdir(parents=True)
+    rejected = _png(work / "images" / "aaa.png", (255, 0, 0))
+    rejected_id = library.add(rejected, _vec(1, 0), "a red door", "old line", "Song")   # filed when it was bought
+    _redo_with_generate_new_images(work)
+    settings = Settings(use_image_library=True, image_library_min_score=0.34)
+    embedder = _FakeEmbedder({"a red door, fixed line": _vec(1, 0)})
+
+    session = open_library_session(
+        settings, "song", "Song", work / "images", fresh_images=False, embedder=embedder, library=library,
+    )
+
+    assert rejected_id == content_id(work / "images_prior_20260926-120000" / "aaa.png")
+    assert rejected_id in session.used_ids
+    assert session.find_match("a red door, fixed line", work / "images" / "bbb.png") is None
+    assert not (work / "images" / "bbb.png").exists()
+
+
+def test_the_replaced_pictures_are_remembered_after_their_folder_is_deleted(tmp_path):
+    import shutil
+
+    from lyricvideo.library_session import REJECTED_IMAGES_FILE, rejected_image_ids
+
+    library = ImageLibrary(tmp_path / "lib")
+    work = tmp_path / "work" / "song"
+    (work / "images").mkdir(parents=True)
+    rejected_id = library.add(_png(work / "images" / "aaa.png", (255, 0, 0)), _vec(1, 0))
+    moved = _redo_with_generate_new_images(work)
+    settings = Settings(use_image_library=True, image_library_min_score=0.34)
+    open_library_session(settings, "song", "Song", work / "images", fresh_images=True,
+                         embedder=_FakeEmbedder({}), library=library)
+    assert (work / REJECTED_IMAGES_FILE).exists()
+
+    shutil.rmtree(moved)                    # the owner frees disk space
+
+    assert rejected_id in rejected_image_ids(work)
+    session = open_library_session(settings, "song", "Song", work / "images",
+                                   embedder=_FakeEmbedder({"a red door": _vec(1, 0)}), library=library)
+    assert session.find_match("a red door", work / "images" / "bbb.png") is None
+
+
+def test_a_song_never_redone_with_new_images_writes_no_rejection_file(tmp_path):
+    from lyricvideo.library_session import REJECTED_IMAGES_FILE
+
+    library = ImageLibrary(tmp_path / "lib")
+    work = tmp_path / "work" / "song"
+    (work / "images").mkdir(parents=True)
+
+    open_library_session(Settings(use_image_library=True), "song", "Song", work / "images",
+                         embedder=_FakeEmbedder({}), library=library)
+
+    assert not (work / REJECTED_IMAGES_FILE).exists()
+
+
+def test_copy_to_never_leaves_a_partial_file_under_the_destination_name(tmp_path, monkeypatch):
+    import pytest
+
+    library = ImageLibrary(tmp_path / "lib")
+    image_id = library.add(_png(tmp_path / "a.png", (255, 0, 0)), _vec(1, 0))
+    real_write_bytes = Path.write_bytes
+
+    def disk_full(self, data):
+        real_write_bytes(self, data[: len(data) // 2])
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", disk_full)
+    dest_dir = tmp_path / "song-images"
+    dest_dir.mkdir()
+
+    with pytest.raises(OSError):
+        library.copy_to(image_id, dest_dir / "line.png")
+
+    assert list(dest_dir.iterdir()) == []

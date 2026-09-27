@@ -16,8 +16,11 @@ judge's reasons. `--no-ai` skips the judge.
 does, so a not-yet-uploaded song skips auto-upload and appears in "Flagged for Lyrics Review". An
 already-UPLOADED song is flagged too (status `flagged-uploaded`) so the older videos that may need
 replacing on YouTube are recorded (lyricvideo/replace_report.py lists them). It never overwrites a
-concern it did not write. Each song's transcript is cached in its work folder, so a Redo later reuses
-it. Results are appended to `--report` as they finish and a re-run resumes where it stopped."""
+concern it did not write: a timing-gate concern is kept, with a lyric failure put in front of it (the gate
+releases its own concern by itself once the song passes the bar). Lyrics the owner typed in (source
+"owner") are never checked or held (status `owner-lyrics`). Each song's transcript is cached in its work
+folder, so a Redo later reuses it. Results are appended to `--report` as they finish and a re-run resumes
+where it stopped; a `--flag` run still releases holds a report-only run verified."""
 
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ from typing import Callable
 from .lyric_arbiter import describe_arbitration
 from .lyric_audio_match import audio_match_passes, describe_mismatch, score_lyrics_against_transcript
 from .models import load_song, save_song
+from .timing_gate import is_gate_concern
 from .transcribe import load_transcript_segments, transcribe_vocals
 from .youtube_state import load_youtube_state
 
@@ -52,9 +56,26 @@ def _is_audio_check_concern(text: str) -> bool:
     return any(phrase in text for phrase in _AUDIO_CHECK_PHRASES)
 
 
+# How the timing gate's own concern starts (timing_gate.is_gate_concern decides whether a whole concern is one).
+_GATE_START = "SET ASIDE FOR REVIEW -- the lyric timing"
+
+
+def _timing_part(concern: str) -> str:
+    """The timing gate's concern at the end of a combined "<lyric concern> <timing concern>" ("" when there is none):
+    what stays when the lyric part is cleared, so clearing lyrics never drops a timing hold."""
+    at = concern.find(_GATE_START)
+    return concern[at:] if at > 0 and is_gate_concern(concern[at:]) else ""
+
+
+def _owner_lyrics(song) -> bool:
+    """The video carries lyrics the owner typed in (Edit Lyrics, then Redo): their word is final, so no audio or AI
+    check may flag or hold them (pipeline.py's fetch_lyrics stage; issue #7 review)."""
+    return song.lyrics_source == "owner"
+
+
 def hold_unchecked(work_root: Path, already_verified: set[str] | None = None) -> list[str]:
     """Puts every song that is waiting to upload -- rendered, never uploaded, no concern yet, not
-    already verified -- on hold. Returns the songs held."""
+    already verified, lyrics not the owner's own -- on hold. Returns the songs held."""
     from .pipeline import list_pending_uploads  # heavy import (torch, anthropic): only when holding
 
     held: list[str] = []
@@ -63,7 +84,7 @@ def hold_unchecked(work_root: Path, already_verified: set[str] | None = None) ->
             continue
         timed_path = Path(work_root) / slug / "lyrics_timed.json"
         song = load_song(timed_path)
-        if song.lyrics_accuracy_concern:
+        if song.lyrics_accuracy_concern or _owner_lyrics(song):
             continue
         save_song(replace(song, lyrics_accuracy_concern=UNCHECKED_HOLD), timed_path)
         held.append(slug)
@@ -74,7 +95,7 @@ def hold_unchecked(work_root: Path, already_verified: set[str] | None = None) ->
 class SongVerdict:
     slug: str
     # verified | verified-ai | flagged | flagged-uploaded | mismatch | mismatch-uploaded | already-flagged |
-    # no-stem | no-lyrics | error
+    # owner-lyrics | no-stem | no-lyrics | error
     status: str
     coverage: float = 0.0
     worst_run: int = 0
@@ -90,6 +111,17 @@ def verify_song(
     slug = work_dir.name
     timed_path = work_dir / "lyrics_timed.json"
     song = load_song(timed_path)
+    existing = song.lyrics_accuracy_concern
+
+    def write(concern: str) -> None:
+        save_song(replace(song, lyrics_accuracy_concern=concern), timed_path)
+
+    if _owner_lyrics(song):
+        # The owner's own lyrics are final: never checked, flagged or held here. A hold an older run put on them
+        # is released.
+        if existing == UNCHECKED_HOLD and flag:
+            write("")
+        return SongVerdict(slug, "owner-lyrics", concern="" if existing == UNCHECKED_HOLD and flag else existing)
     lines = [" ".join(w.word for w in line.words) for line in song.lines if line.words]
     if not lines:
         return SongVerdict(slug, "no-lyrics")
@@ -99,20 +131,22 @@ def verify_song(
 
     match = score_lyrics_against_transcript(lines, transcribe(vocals, work_dir))
     numbers = dict(coverage=round(match.coverage, 3), worst_run=match.worst_run, worst_heard_gap=match.worst_heard_gap)
-    existing = song.lyrics_accuracy_concern
-    # A hold is "no verdict yet", and (under --recheck-flagged) so is a flag the audio check alone wrote.
+    # A hold is "no verdict yet", and (under --recheck-flagged) so is a flag the audio check alone wrote -- clearing
+    # one keeps a timing concern that rode along with it.
     reevaluable = existing == UNCHECKED_HOLD or (recheck and _is_audio_check_concern(existing))
-
-    def write(concern: str) -> None:
-        save_song(replace(song, lyrics_accuracy_concern=concern), timed_path)
+    cleared = _timing_part(existing) if reevaluable else existing
+    # A concern the timing gate wrote ALONE says nothing about the words, and the gate releases it by itself once the
+    # song passes the bar -- so a lyric failure must still be recorded in front of it (issue #7 review), or the song
+    # would become uploadable with lyrics that failed this check.
+    timing_only = bool(existing) and is_gate_concern(existing)
 
     if audio_match_passes(match):
         if reevaluable and flag:
-            write("")                                         # checked out: uploads may resume
+            write(cleared)                                    # checked out: uploads may resume
         return SongVerdict(slug, "verified", **numbers)
 
     concern = describe_mismatch(match)
-    if existing and not reevaluable:
+    if existing and not reevaluable and not timing_only:
         return SongVerdict(slug, "already-flagged", concern=existing, **numbers)
 
     if arbiter is not None:
@@ -123,12 +157,16 @@ def verify_song(
         if judgement is not None:
             if judgement.confirmed:
                 if reevaluable and flag:
-                    write("")
+                    write(cleared)
                 return SongVerdict(slug, "verified-ai", **numbers)
             review = describe_arbitration(judgement)
             if review:
                 concern += " " + review
 
+    if timing_only:
+        concern = f"{concern} {existing}"                     # lyric reason first: the gate can no longer release it
+    elif reevaluable and cleared:
+        concern = f"{concern} {cleared}"
     uploaded = load_youtube_state(work_dir) is not None
     if flag:
         write(concern)
@@ -162,6 +200,26 @@ def verify_all(
         if on_result is not None:
             on_result(verdict)
     return verdicts
+
+
+def _unfinished_under_flag(work_root: Path, rows: list[dict]) -> set[str]:
+    """Songs an earlier report counts as done that a --flag run must still look at (issue #7 review):
+    - verified (or found to carry the owner's own lyrics) by a REPORT-ONLY run, but still carrying the "not checked
+      yet" hold (report-only never writes, so only a --flag run can release it);
+    - reported already-flagged while their concern was the timing gate's alone (older versions recorded no lyric
+      verdict for those, and the gate releases its own concern once the song passes the bar)."""
+    last_status = {r["slug"]: r.get("status") for r in rows if isinstance(r, dict) and r.get("slug")}
+    unfinished: set[str] = set()
+    for slug, status in last_status.items():
+        if status not in ("verified", "verified-ai", "owner-lyrics", "already-flagged"):
+            continue
+        try:
+            concern = load_song(Path(work_root) / slug / "lyrics_timed.json").lyrics_accuracy_concern
+        except Exception:
+            continue
+        if concern == UNCHECKED_HOLD or (status == "already-flagged" and is_gate_concern(concern)):
+            unfinished.add(slug)
+    return unfinished
 
 
 def _make_arbiter() -> Callable:
@@ -206,7 +264,10 @@ def main(argv: list[str] | None = None) -> int:
         not_done |= {"mismatch", "mismatch-uploaded"}
     if args.recheck_flagged:
         not_done |= {"flagged", "flagged-uploaded", "already-flagged"}
-    done = {r["slug"] for r in report_rows() if r.get("status") not in not_done}
+    rows = report_rows()
+    done = {r["slug"] for r in rows if r.get("status") not in not_done}
+    if args.flag:
+        done -= _unfinished_under_flag(args.work_root, rows)
 
     def record(verdict: SongVerdict) -> None:
         with args.report.open("a", encoding="utf-8") as f:

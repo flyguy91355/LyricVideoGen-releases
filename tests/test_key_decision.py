@@ -146,3 +146,96 @@ def test_an_easy_chord_folder_uses_its_songs_key_decision(tmp_path):
     save_decision(song, KeyDecision(status="confirmed", key="Eb major", source="agreed", chord_key="Eb major"))
     assert key_state(song / "easychords") == "confirmed"
     assert confirmed_key_for_upload(song / "easychords") == "Eb major"
+
+
+# --- issue #7 review, F013/F019: Set Key that agrees with the chords must CONFIRM the song --------------------------------
+
+def test_set_key_agreeing_with_the_chords_confirms_a_song_held_for_its_key(tmp_path):
+    from lyricvideo.key_decision import confirmed_key_for_upload, key_needs_attention, key_state
+    decision, held_track = settle_song_key(tmp_path, D_SONG, "x", "y", FakeClient("KEY: B minor"))
+    assert decision.status == "review" and held_track.key == "D major"          # the chords' own answer, provisional
+    song = Song(title="T", audio_path="a.mp3", chord_track=held_track)
+    save_owner_key(tmp_path, "D major")                                          # the owner agrees with the chords
+
+    changed = apply_saved_owner_key(tmp_path, song)
+
+    assert changed is False                                                      # nothing to respell
+    saved = load_decision(tmp_path)
+    assert saved.confirmed and saved.key == "D major" and saved.source == "owner"
+    assert saved.published_key == "B minor"                                      # what the second opinion said is kept
+    assert key_state(tmp_path) == "confirmed" and confirmed_key_for_upload(tmp_path) == "D major"
+    assert key_needs_attention(tmp_path) is False
+
+
+def test_set_key_confirms_an_unchecked_song_whose_saved_key_already_matches(tmp_path):
+    from lyricvideo.key_decision import key_state
+    song = Song(title="T", audio_path="a.mp3", chord_track=track(("D", 8), ("G", 4), ("A", 4), key="D major"))
+    assert key_state(tmp_path) == "unchecked"
+    save_owner_key(tmp_path, "d major")
+
+    assert apply_saved_owner_key(tmp_path, song) is False
+    assert key_state(tmp_path) == "confirmed" and load_decision(tmp_path).key == "D major"
+
+
+def test_confirm_owner_key_needs_an_owner_key_and_keeps_a_matching_confirmed_decision(tmp_path):
+    from lyricvideo.key_decision import KeyDecision, confirm_owner_key, save_decision
+    assert confirm_owner_key(tmp_path, D_SONG) is None and load_decision(tmp_path) is None
+    save_decision(tmp_path, KeyDecision(status="confirmed", key="D major", source="agreed", chord_key="D major", at="then"))
+    save_owner_key(tmp_path, "D major")
+    assert confirm_owner_key(tmp_path, D_SONG).at == "then"                     # the same key: left as it is
+    save_owner_key(tmp_path, "B minor")
+    changed = confirm_owner_key(tmp_path, D_SONG)
+    assert changed.confirmed and changed.key == "B minor" and changed.source == "owner"   # the owner always wins
+    assert load_decision(tmp_path).key == "B minor"
+
+
+def test_apply_saved_owner_key_compares_keys_not_spellings(tmp_path):
+    sharp = track(("A#", 8), ("D#", 4), ("F", 4), key="A# major")               # spelled with the flats box off
+    song = Song(title="T", audio_path="a.mp3", chord_track=sharp)
+    save_owner_key(tmp_path, "Bb major")
+
+    assert apply_saved_owner_key(tmp_path, song, prefer_flats=False) is False
+    assert song.chord_track.key == "A# major" and load_decision(tmp_path).key == "Bb major"
+    assert apply_saved_owner_key(tmp_path, song) is True                         # flats wanted: respelled
+    assert [e.label for e in song.chord_track.events] == ["Bb", "Eb", "F"] and song.chord_track.key == "Bb major"
+
+
+# --- issue #7 review, F105: Settings' "Use flats in flat keys" box is honored where the spelling is decided ---------------
+
+def test_settle_with_the_flats_box_off_keeps_sharps_but_records_the_canonical_key(tmp_path):
+    sharp = track(("A#", 8), ("D#", 4), ("F", 4), ("Gm", 4), ("A#", 8), key="")
+    decision, out = settle_song_key(tmp_path, sharp, "x", "y", FakeClient("KEY: Bb major"), prefer_flats=False)
+    assert decision.confirmed and decision.key == "Bb major"
+    assert out.key == "A# major" and [e.label for e in out.events] == ["A#", "D#", "F", "Gm", "A#"]
+    decision, out = settle_song_key(tmp_path, sharp, "x", "y", FakeClient("KEY: Bb major"))
+    assert out.key == "Bb major" and [e.label for e in out.events] == ["Bb", "Eb", "F", "Gm", "Bb"]
+
+
+# --- issue #7 review, F117/F123: every real key spelling, and never a KeyError ----------------------------------------
+
+@pytest.mark.parametrize("typed,saved", [
+    ("Cb major", "B major"), ("Fb", "E major"), ("E# minor", "F minor"), ("B#", "C major"),
+    ("F♯ Minor", "F# minor"), ("B♭ MAJOR", "Bb major"), ("g sharp minor", "G# minor"), ("E-flat major", "Eb major"),
+])
+def test_set_key_accepts_every_real_key_spelling(tmp_path, typed, saved):
+    assert save_owner_key(tmp_path, typed) == saved and load_owner_key(tmp_path) == saved
+
+
+@pytest.mark.parametrize("typed", ["E##", "Dbb", "H minor", "CM", "D dorian", "", "   "])
+def test_set_key_refuses_a_non_key_with_value_error_only(tmp_path, typed):
+    with pytest.raises(ValueError):
+        save_owner_key(tmp_path, typed)
+    assert load_owner_key(tmp_path) is None
+
+
+def test_a_cb_major_second_opinion_is_read_not_a_crash(tmp_path):
+    b_song = track(("B", 8), ("E", 4), ("F#", 4), ("B", 8))
+    decision, out = settle_song_key(tmp_path, b_song, "x", "y", FakeClient("KEY: Cb major"))
+    assert decision.confirmed and decision.key == "B major" and out.key == "B major"
+
+
+def test_owner_and_decision_files_are_written_whole(tmp_path):
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    save_owner_key(tmp_path, "D major")
+    save_decision(tmp_path, KeyDecision(status="confirmed", key="D major", source="owner"))
+    assert sorted(p.name for p in tmp_path.iterdir()) == [KEY_DECISION_FILE, KEY_OWNER_FILE]   # no temp files left

@@ -97,3 +97,40 @@ def test_candidate_keys_is_empty_without_chords():
 def test_chord_summary_shows_the_most_used_chords_with_their_share_of_time():
     from lyricvideo.key_estimate import chord_summary
     assert chord_summary(track(("D", 6), ("G", 3), ("A", 1), ("N", 5))) == "D 60%, G 30%, A 10%"
+
+
+# --- issue #7 review, F117/F123: every real key spelling parses, nothing raises -----------------------------------------
+
+@pytest.mark.parametrize("text,expected", [
+    ("Cb major", (11, "major")), ("Fb", (4, "major")), ("E# minor", (5, "minor")), ("B#", (0, "major")),
+    ("F♯ Minor", (6, "minor")), ("B♭ MAJOR", (10, "major")), ("F♯ minor", (6, "minor")), ("E♭m", (3, "minor")),
+    ("f sharp minor", (6, "minor")), ("B-flat major", (10, "major")), ("gb", (6, "major")), ("C#MIN", (1, "minor")),
+    ("d major.", (2, "major")), ("  e   MINOR  ", (4, "minor")), ("Bbm", (10, "minor")), ("bm", (11, "minor")),
+])
+def test_parse_key_accepts_every_real_spelling(text, expected):
+    assert parse_key(text) == expected
+
+
+@pytest.mark.parametrize("text", ["E##", "Dbb", "Fx", "CM", "F#M", "D dorian", "C mixolydian", 42, "Bb major key"])
+def test_parse_key_returns_none_and_never_raises(text):
+    assert parse_key(text) is None
+
+
+# --- issue #7 review, F100/F101: chords are spelled by what they do in the key -------------------------------------------
+
+def test_respell_spells_borrowed_flat_chords_in_sharp_keys_with_flats():
+    d_song = track(("D", 4), ("A#", 4), ("C", 4), ("G", 4), key="")       # I, bVI, bVII, IV in D major
+    assert [e.label for e in respell_chord_track(d_song, "D major").events] == ["D", "Bb", "C", "G"]
+    c_song = track(("C", 4), ("A#", 4), ("D#", 4), ("G#", 4), ("C#", 4), ("F#m7", 4), key="")
+    assert [e.label for e in respell_chord_track(c_song, "C major").events] == ["C", "Bb", "Eb", "Ab", "Db", "F#m7"]
+
+
+def test_respell_spells_a_minor_keys_raised_seventh_with_a_sharp():
+    dm = track(("Dm", 4), ("Db", 4), ("A#", 4), ("A7", 4), key="")        # i, raised vii (C#), VI, V7 in D minor
+    assert [e.label for e in respell_chord_track(dm, "D minor").events] == ["Dm", "C#", "Bb", "A7"]
+
+
+def test_respell_with_the_flats_box_off_uses_sharps_for_chords_and_key():
+    t = track(("Bb", 4), ("Eb", 4), ("F", 4), key="Bb major")
+    out = respell_chord_track(t, "Bb major", prefer_flats=False)
+    assert [e.label for e in out.events] == ["A#", "D#", "F"] and out.key == "A# major"

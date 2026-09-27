@@ -7,12 +7,53 @@ library for the rest of the song and the caller simply buys as it always did."""
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 
 from .clip_embedder import ClipEmbedder, Embedder, EmbedderUnavailable
 from .image_library import ImageLibrary, content_id
 from .imagery import REPLICATE_PRICE_PER_IMAGE_USD
+
+# Pictures the owner REPLACED with Redo's "Generate new images" (moved aside to images_prior_<timestamp>/): never
+# offered to that song again by the library, on any later run (issue #7 review; spec 2026-09-25 "must not re-match
+# the very pictures the owner asked to replace"). Remembered in this per-song file too, so deleting the
+# images_prior_* folders to free disk space does not bring them back.
+REJECTED_IMAGES_FILE = "image_library_rejected.json"
+
+
+def rejected_image_ids(work_dir: Path) -> set[str]:
+    """Content ids of every picture this song's owner replaced: the saved list plus whatever images_prior_*/ holds
+    now (newly found ones are added to the saved list)."""
+    work_dir = Path(work_dir)
+    record = work_dir / REJECTED_IMAGES_FILE
+    saved: set[str] = set()
+    try:
+        data = json.loads(record.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            saved = {str(item) for item in data}
+    except (OSError, ValueError):
+        pass
+    found: set[str] = set()
+    for prior in sorted(work_dir.glob("images_prior_*")):
+        if not prior.is_dir():
+            continue
+        for png in prior.glob("*.png"):
+            try:
+                found.add(content_id(png))
+            except OSError:
+                continue
+    if found - saved:
+        saved |= found
+        tmp = record.with_name(f".{record.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_text(json.dumps(sorted(saved), indent=1), encoding="utf-8")
+            os.replace(tmp, record)
+        except OSError as e:
+            print(f"WARNING: could not save the replaced-pictures list ({e}); using it for this run only",
+                  file=sys.stderr)
+    return saved | found
 
 
 class LibrarySession:
@@ -120,6 +161,7 @@ def open_library_session(
             library, embedder, song_slug, song_title, settings.image_library_min_score, skip_lookup=fresh_images,
         )
         session.seed_used_ids(images_dir)
+        session.used_ids |= rejected_image_ids(images_dir.parent)       # pictures the owner replaced: never again
         return session
     except EmbedderUnavailable as e:
         print(

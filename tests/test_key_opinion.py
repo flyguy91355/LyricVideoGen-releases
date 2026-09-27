@@ -81,3 +81,19 @@ def test_the_prompt_lists_the_song_the_chords_and_every_candidate_and_thinking_i
 def test_a_missing_artist_is_still_asked():
     client = FakeClient("KEY: D major")
     assert ask(client, artist="") == "D major"
+
+
+def test_an_enharmonic_spelling_like_cb_major_is_read_never_a_crash():
+    """Issue #7 review, F123: "KEY: Cb major" raised KeyError out of parse_key, failing the whole pipeline run."""
+    assert ask(FakeClient("KEY: Cb major"), ["B major", "G# minor"]) == "B major"
+    assert ask(FakeClient("KEY: E# minor", "KEY: E# minor", "KEY: E# minor"), ["B major", "G# minor"]) is None   # off the list
+
+
+def test_a_parse_failure_is_skipped_not_raised(monkeypatch):
+    def boom(text):
+        if text.startswith("weird"):
+            raise RuntimeError("unreadable")
+        from lyricvideo.key_estimate import parse_key
+        return parse_key(text)
+    monkeypatch.setattr("lyricvideo.key_opinion.parse_key", boom)
+    assert ask(FakeClient("KEY: weird thing", "KEY: D major")) == "D major"

@@ -22,11 +22,19 @@ Design notes:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import lru_cache
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
+# Typographic apostrophes (U+2019 in "don't" from lrclib/Genius text) read as "'" -- Whisper writes ASCII, and a
+# U+2019 "don't" used to split into "don" + "t", neither of which matched, so correct lyrics failed the 70% rule.
+# Right/left single quote, modifier apostrophe, full-width apostrophe, prime, acute accent, backtick:
+_APOSTROPHES = str.maketrans({chr(c): "'" for c in (0x2019, 0x2018, 0x02BC, 0xFF07, 0x2032, 0x00B4, 0x0060)})
+# Letters NFKD does not decompose into a base letter plus an accent.
+_UNDECOMPOSED = str.maketrans({"ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d",
+                               "þ": "th", "ı": "i"})
 # "(Just like a prayer)" -- a parenthesized backing vocal. Quiet echoes the
 # recognizer can't hear ('Like a Prayer' had 30 such lines and looked 92% wrong),
 # so they are not required to be heard (an unclosed "(" runs to the line end).
@@ -66,10 +74,20 @@ class AudioMatch:
     worst_heard_gap: int = 0           # longest run of sung content words no lyric line explains
     gap_text: str = ""                 # the words of that longest unexplained run (for a reviewer)
     unsupported_ranges: list[tuple[int, int]] = field(default_factory=list)  # 1-based, inclusive
+    # Per lyric line: the content words counted toward `coverage` and how many of them were heard (0/0 for a repeat,
+    # whose words count on its first copy). Lets a judge's "recognizer error" verdict be weighed against coverage.
+    line_words: list[int] = field(default_factory=list)
+    line_matched: list[int] = field(default_factory=list)
 
 
 def _tokens(text: str) -> list[str]:
-    return _WORD_RE.findall(text.lower())
+    """Lower-case words, the same way for lyrics and transcript: typographic apostrophes become "'", accents are
+    dropped ("señorita" -> "senorita", as Whisper often writes it) -- issue #7 review."""
+    if text.isascii():
+        return _WORD_RE.findall(text.replace("`", "'").lower() if "`" in text else text.lower())
+    text = unicodedata.normalize("NFKD", text.translate(_APOSTROPHES))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower().translate(_UNDECOMPOSED)
+    return _WORD_RE.findall(text)
 
 
 def _content(tokens: list[str]) -> list[str]:
@@ -261,6 +279,8 @@ def score_lyrics_against_transcript(lyric_lines: list[str], heard_text: str) -> 
         worst_heard_gap=gap,
         gap_text=" ".join(gap_words),
         unsupported_ranges=ranges,
+        line_words=words_in_line,
+        line_matched=matched_in_line,
     )
 
 
@@ -309,6 +329,34 @@ def audio_match_badness(match: AudioMatch) -> float:
     )
 
 
+def coverage_excusing(match: AudioMatch, ranges: list[tuple[int, int]]) -> float:
+    """The coverage if every content word of the given 1-based line ranges had been heard -- what is left once a judge
+    has excused those stretches as recognizer failures. A shortfall from half-heard lines OUTSIDE the ranges is never
+    excused (issue #7 review: one excused unheard line used to wave through a song at 45% coverage). A match built
+    without per-line counts gives its plain coverage."""
+    if not match.line_words or len(match.line_matched) != len(match.line_words):
+        return match.coverage
+    total = sum(match.line_words)
+    if not total:
+        return 0.0
+    excused = {i for a, b in ranges for i in range(max(a, 1) - 1, min(b, len(match.line_words)))}
+    heard = sum(match.line_matched) + sum(match.line_words[i] - match.line_matched[i] for i in excused)
+    return heard / total
+
+
+def _lines_heard(lines: list[str], heard) -> list[bool]:
+    """Per lyric line: True when the recognizer heard any of it -- one of its own content words is matched in order, or
+    the audio check supports it (a repeat inherits its first copy's support). A line with no word characters at all
+    ("作曲 : ...") is never "heard"; with nothing heard at all, no line is."""
+    if not heard:
+        return [False] * len(lines)
+    match = score_lyrics_against_transcript(list(lines), " ".join(h.word for h in heard))
+    return [
+        bool(_tokens(line)) and (bool(supported) or matched > 0)
+        for line, supported, matched in zip(lines, match.line_supported, match.line_matched)
+    ]
+
+
 CREDIT_STAMP_SECONDS = 3.0      # a provider stamps credits within the first seconds of the file...
 CREDIT_SILENT_LEAD = 3.0        # ...and a real first line is never stamped this much before the first singing
 MAX_LEADING_CREDITS = 4
@@ -320,7 +368,8 @@ def drop_unsung_leading_lines(lines, times, heard, loudness, hop):
     contributor, producer...) arrive as fake lyric lines stamped near 0:00, well before the first singing, with nothing
     heard near them. Any wording qualifies -- owner, 2026-09-20: "if its not part of the audio, its a credit". Needs the
     source's own line times and audio evidence; only a leading run is considered, at most MAX_LEADING_CREDITS, and one
-    real line always remains."""
+    real line always remains. A line whose words WERE heard is never dropped, however it is stamped: its source was timed
+    to another edition (issue #7 review), and it stops the run."""
     if not times or len(times) != len(lines) or not (heard or loudness):
         return lines, times, []
     onsets = [h.start for h in heard]
@@ -332,8 +381,13 @@ def drop_unsung_leading_lines(lines, times, heard, loudness, hop):
         return lines, times, []
     first_sung = min(onsets)
     dropped = 0
+    heard_line: list[bool] | None = None
     while (dropped < min(MAX_LEADING_CREDITS, len(lines) - 1) and times[dropped] <= CREDIT_STAMP_SECONDS
            and times[dropped] < first_sung - CREDIT_SILENT_LEAD):
+        if heard_line is None:
+            heard_line = _lines_heard(lines, heard)
+        if heard_line[dropped]:
+            break
         dropped += 1
     return lines[dropped:], times[dropped:], lines[:dropped]
 
@@ -346,7 +400,9 @@ def drop_unsung_trailing_lines(lines, times, heard, loudness, hop):
     """The mirror of drop_unsung_leading_lines: credits at the END ('Lead Vocals : Don Henley', 'Strings : London
     Philharmonic Orchestra' -- Desperado, 2026-09-20, eight of them stamped 205-212 s after the singing ended at 194 s).
     A trailing line stamped more than CREDIT_TRAILING_GAP after the last heard or sung moment is dropped; only a trailing
-    run, at most MAX_TRAILING_CREDITS, and one real line always remains. Returns (lines, times, dropped)."""
+    run, at most MAX_TRAILING_CREDITS, and one real line always remains. A line whose words WERE heard is never dropped:
+    a source timed to an edition with a longer intro stamps the real last lines "after the singing" (issue #7 review:
+    a +20 s offset silently cut the last lines), and it stops the run. Returns (lines, times, dropped)."""
     if not times or len(times) != len(lines) or not (heard or loudness):
         return lines, times, []
     last_sung = [h.end for h in heard]
@@ -359,6 +415,11 @@ def drop_unsung_trailing_lines(lines, times, heard, loudness, hop):
         return lines, times, []
     limit = max(last_sung) + CREDIT_TRAILING_GAP
     keep = len(lines)
+    heard_line: list[bool] | None = None
     while keep > 1 and len(lines) - keep < MAX_TRAILING_CREDITS and times[keep - 1] > limit:
+        if heard_line is None:
+            heard_line = _lines_heard(lines, heard)
+        if heard_line[keep - 1]:
+            break
         keep -= 1
     return lines[:keep], times[:keep], lines[keep:]

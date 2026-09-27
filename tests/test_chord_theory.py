@@ -1,12 +1,10 @@
 import numpy as np
 
 from lyricvideo.chord_theory import (
-    KS_MAJOR,
     TRIADS,
     build_templates,
     capo_and_shape_key,
     diatonic_chords,
-    estimate_key,
     is_easy_key,
     key_name,
     key_uses_flats,
@@ -30,21 +28,6 @@ def test_build_templates_rows_are_unit_norm():
     _, templates = build_templates(TRIADS)
     norms = np.linalg.norm(templates, axis=1)
     assert np.allclose(norms, 1.0)
-
-
-def test_estimate_key_recognizes_c_major_profile():
-    # KS_MAJOR itself, rolled to tonic 0, is a perfect C major profile.
-    tonic, mode, confidence = estimate_key(KS_MAJOR)
-    assert tonic == 0
-    assert mode == "major"
-    assert confidence > 0.9
-
-
-def test_estimate_key_handles_all_silence():
-    tonic, mode, confidence = estimate_key(np.zeros(12))
-    assert tonic == 0
-    assert mode == "major"
-    assert confidence == 0.0
 
 
 def test_diatonic_chords_c_major_contains_expected_triads():
@@ -170,12 +153,18 @@ def test_transpose_chord_label_shifts_down_by_the_capo_amount():
     assert transpose_chord_label("Bb7", 1) == "A7"
 
 
-def test_transpose_chord_label_always_spells_with_sharps():
-    """None of the CAGED shape keys (C D E G A Am Dm Em) are in chord_theory's own
-    _FLAT_MAJOR_TONICS, so a transposed chromatic/borrowed chord always reads as a
-    sharp, matching the app's own existing spelling convention exactly."""
-    assert transpose_chord_label("B", 1) == "A#"       # Db major -> C shapes (capo 1)
+def test_transpose_chord_label_without_a_shape_key_spells_with_sharps():
+    """With no shape key to spell in, a transposed chord reads as a plain sharp."""
+    assert transpose_chord_label("B", 1) == "A#"
     assert transpose_chord_label("Gb", 2) == "E"        # F# major -> E shapes (capo 2)
+
+
+def test_transpose_chord_label_spells_in_the_shape_key():
+    """Issue #7 review, F100/F101: Dm shapes are a flat key (their VI is Bb), and a borrowed bVII in C shapes is Bb."""
+    assert transpose_chord_label("B", 1, "Dm") == "Bb"          # Eb minor's VI (Cb/B) -> D-minor shapes
+    assert transpose_chord_label("B", 1, "C") == "Bb"           # Db major's bVII (Cb/B) -> C shapes
+    assert transpose_chord_label("B", 1, "C", prefer_flats=False) == "A#"
+    assert transpose_chord_label("Gb", 2, "E") == "E"
 
 
 def test_transpose_chord_label_leaves_no_chord_unchanged():
@@ -239,3 +228,70 @@ def test_capo_track_matches_accepts_the_real_transposition_and_rejects_anything_
     shifted_time = ChordTrack(events=[ChordEvent(0.1, 2.0, "D"), ChordEvent(2.0, 4.0, "Bm7"), ChordEvent(4.0, 5.0, "N")], key="D major", bpm=90.0)
     assert not capo_track_matches(original, shifted_time, 1)               # timing must be untouched
     assert not capo_track_matches(original, ChordTrack(events=good.events[:2], key="D major", bpm=90.0), 1)   # an event went missing
+
+
+# --- issue #7 review, F100/F101: spelling by what the chord does in the key ---------------------------------------------
+
+def test_spell_in_key_keeps_the_keys_own_letters():
+    from lyricvideo.chord_theory import spell_in_key
+    assert spell_in_key(10, "maj", 2, "major") == "Bb"        # bVI of D major
+    assert spell_in_key(10, "maj", 0, "major") == "Bb"        # bVII of C major
+    assert spell_in_key(3, "maj", 0, "major") == "Eb"         # bIII of C major
+    assert spell_in_key(6, "min", 0, "major") == "F#m"        # #iv of C major
+    assert spell_in_key(8, "maj", 9, "minor") == "G#"         # raised 7th of A minor
+    assert spell_in_key(1, "maj", 2, "minor") == "C#"         # raised 7th of D minor
+    assert spell_in_key(5, "maj", 6, "major") == "F"          # E# in F# major has no chord diagram: F
+    assert spell_in_key(11, "maj", 6, "major") == "B"         # IV of F# major
+    assert spell_in_key(11, "maj", 6, "major", prefer_flats=True) == "B"
+    assert spell_in_key(11, "maj", 1, "major") == "B"         # bVII of Db major is Cb: written B
+    assert spell_in_key(10, "maj", 2, "major", prefer_flats=False) == "A#"
+
+
+def test_spell_in_key_always_gives_the_same_chord_and_a_name_the_app_knows():
+    from lyricvideo.chord_shapes import CHORD_SHAPES
+    from lyricvideo.chord_theory import QUALITY_SUFFIX, spell_in_key
+    for tonic in range(12):
+        for mode in ("major", "minor"):
+            for root in range(12):
+                for quality in QUALITY_SUFFIX:
+                    for prefer_flats in (True, False):
+                        name = spell_in_key(root, quality, tonic, mode, prefer_flats)
+                        assert parse_chord_label(name) == (root, quality), (tonic, mode, root, quality, name)
+                        assert name in CHORD_SHAPES
+
+
+def test_spell_in_key_matches_the_keys_own_flat_or_sharp_convention_for_its_own_chords():
+    from lyricvideo.chord_theory import NOTES_FLAT, NOTES_SHARP, spell_in_key
+    major_steps, minor_steps = (0, 2, 4, 5, 7, 9, 11), (0, 2, 3, 5, 7, 8, 10)
+    for tonic in range(12):
+        for mode, steps in (("major", major_steps), ("minor", minor_steps)):
+            names = NOTES_FLAT if key_uses_flats(tonic, mode) else NOTES_SHARP
+            for step in steps:
+                root = (tonic + step) % 12
+                assert spell_in_key(root, "maj", tonic, mode) == names[root], (tonic, mode, root)
+
+
+def test_an_eb_minor_songs_easy_version_spells_d_minor_shapes_with_flats():
+    from lyricvideo.chord_theory import capo_track_matches
+    original = ChordTrack(events=[ChordEvent(0.0, 2.0, "Ebm"), ChordEvent(2.0, 4.0, "B"), ChordEvent(4.0, 6.0, "Gb"),
+                                  ChordEvent(6.0, 8.0, "Db"), ChordEvent(8.0, 9.0, "N")], key="Eb minor", bpm=90.0)
+    assert capo_and_shape_key("Eb minor") == (1, "Dm")
+    easy = transpose_chord_track(original, 1, "Dm")
+    assert [e.label for e in easy.events] == ["Dm", "Bb", "F", "C", "N"] and easy.key == "D minor"
+    assert capo_track_matches(original, easy, 1)
+    sharps = transpose_chord_track(original, 1, "Dm", prefer_flats=False)
+    assert [e.label for e in sharps.events][:2] == ["Dm", "A#"] and capo_track_matches(original, sharps, 1)
+
+
+def test_an_f_sharp_major_songs_easy_version_keeps_e_shape_sharps():
+    original = ChordTrack(events=[ChordEvent(0.0, 2.0, "F#"), ChordEvent(2.0, 4.0, "B"), ChordEvent(4.0, 6.0, "C#"),
+                                  ChordEvent(6.0, 8.0, "D#m")], key="F# major", bpm=90.0)
+    easy = transpose_chord_track(original, 2, "E")
+    assert [e.label for e in easy.events] == ["E", "A", "B", "C#m"] and easy.key == "E major"
+
+
+def test_a_c_shape_easy_version_spells_a_borrowed_bvii_as_bb():
+    original = ChordTrack(events=[ChordEvent(0.0, 2.0, "Db"), ChordEvent(2.0, 4.0, "B"), ChordEvent(4.0, 6.0, "Ab")],
+                          key="Db major", bpm=90.0)
+    assert capo_and_shape_key("Db major") == (1, "C")
+    assert [e.label for e in transpose_chord_track(original, 1, "C").events] == ["C", "Bb", "G"]

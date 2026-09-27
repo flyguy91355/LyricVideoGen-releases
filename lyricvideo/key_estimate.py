@@ -1,5 +1,5 @@
 """The song's key, worked out from its DETECTED CHORDS (owner, 2026-09-26: the old estimate -- the average pitch of the
-whole recording, `chord_theory.estimate_key` -- was right for only 55 of the 80 songs whose true key was checked against
+whole recording, Krumhansl-Schmuckler, since removed -- was right for only 55 of the 80 songs whose true key was checked against
 Musicnotes/Tunebat/Hooktheory; this chord-based estimate gets 73). Pure functions over a ChordTrack; nothing here reads
 audio or talks to a network. It is still only an estimate -- see key_decision.py, which never lets it stand alone."""
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .chord_theory import NOTES_FLAT, NOTES_SHARP, key_name, key_uses_flats, parse_chord_label, spell
+from .chord_theory import key_name, parse_chord_label, spell_in_key
 from .models import ChordEvent, ChordTrack
 
 TONIC_WEIGHT = 0.75     # how much time on the key's own chord counts (chosen on the 80 verified songs; 0.5-1.0 all score 72-73)
@@ -89,37 +89,46 @@ def chord_summary(track: ChordTrack, count: int = 8) -> str:
     return ", ".join(f"{label} {round(100 * secs / total)}%" for label, secs in top)
 
 
-_NOTE_PC = {name: pc for names in (NOTES_SHARP, NOTES_FLAT) for pc, name in enumerate(names)}
-_KEY_TEXT = re.compile(r"^([A-G][#b]?)\s*(major|maj|minor|min|m)?$")
+_LETTER_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+# letter, then an optional accidental (sign or word, "F-sharp"), then an optional mode word. Case is dealt with below.
+_KEY_TEXT = re.compile(
+    r"^([a-g])\s*-?\s*(#|b|sharp|flat)?\s*-?\s*(major|maj|minor|min|m)?$", re.IGNORECASE,
+)
 
 
 def parse_key(text: str | None) -> tuple[int, str] | None:
-    """"Bb major" / "F#m" / "a minor" / "Eb" -> (pitch class, "major"|"minor"); a bare note means major. None for
-    anything else (blank, a mode like "lydian", a made-up note) -- a key is never guessed."""
-    if not text or not text.strip():
+    """"Bb major" / "F#m" / "a minor" / "Eb" / "C♯ MINOR" / "F sharp minor" -> (pitch class, "major"|"minor"); a bare
+    note means major. Every real key spelling is accepted, including Cb, Fb, E# and B# (issue #7 review: those four
+    raised KeyError, which closed the Set Key dialog with no message and could fail a pipeline run on a "KEY: Cb major"
+    second opinion). None for anything else -- blank, a mode like "lydian", a note that does not exist ("H"), a double
+    accidental, or a lone capital "M" (major in chord symbols, minor to anyone typing in capitals) -- a key is never
+    guessed, and this never raises."""
+    if not isinstance(text, str):
         return None
-    cleaned = " ".join(text.split())
-    cleaned = cleaned[0].upper() + cleaned[1:]
-    m = _KEY_TEXT.match(cleaned.replace("♯", "#").replace("♭", "b"))
-    if m is None:
-        m = _KEY_TEXT.match(cleaned[0] + cleaned[1:].lower())    # "C# Minor", "D MAJOR"
+    cleaned = " ".join(text.replace("♯", "#").replace("♭", "b").split()).rstrip(".").strip()
+    m = _KEY_TEXT.match(cleaned)
     if m is None:
         return None
-    mode_word = (m.group(2) or "major").lower()
-    return _NOTE_PC[m.group(1)], "minor" if mode_word in ("minor", "min", "m") else "major"
+    letter, accidental, mode_word = m.group(1).upper(), (m.group(2) or "").lower(), m.group(3) or "major"
+    if mode_word == "M":
+        return None
+    shift = 1 if accidental in ("#", "sharp") else -1 if accidental in ("b", "flat") else 0
+    mode = "minor" if mode_word.lower() in ("minor", "min", "m") else "major"
+    return (_LETTER_PC[letter] + shift) % 12, mode
 
 
-def respell_chord_track(track: ChordTrack, key: str) -> ChordTrack:
-    """A copy of `track` whose chord names follow `key`'s flat/sharp convention (Gbm becomes F#m when the key turns out
-    to be F# minor) and whose .key is that key's canonical name. Same chords, same times; "N" is left alone."""
+def respell_chord_track(track: ChordTrack, key: str, prefer_flats: bool = True) -> ChordTrack:
+    """A copy of `track` whose chord names are spelled for `key` (chord_theory.spell_in_key: the key's own chords in its
+    flats or sharps -- Gbm becomes F#m when the key turns out to be F# minor -- and a borrowed chord by the step it
+    alters, so the bVI of D major is Bb) and whose .key is that key's name. Same chords, same times; "N" is left alone.
+    `prefer_flats` is Settings.prefer_flats ("Use flats in flat keys"): off, every chord and the key name use sharps."""
     parsed = parse_key(key)
     if parsed is None:
         raise ValueError(f"not a key: {key!r}")
     tonic, mode = parsed
-    use_flats = key_uses_flats(tonic, mode)
     events = []
     for e in track.events:
         chord = parse_chord_label(e.label)
-        label = spell(chord[0], chord[1], use_flats) if chord else e.label
+        label = spell_in_key(chord[0], chord[1], tonic, mode, prefer_flats) if chord else e.label
         events.append(ChordEvent(start=e.start, end=e.end, label=label))
-    return ChordTrack(events=events, key=key_name(tonic, mode, True), bpm=track.bpm)
+    return ChordTrack(events=events, key=key_name(tonic, mode, prefer_flats), bpm=track.bpm)

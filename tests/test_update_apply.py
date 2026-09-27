@@ -45,7 +45,9 @@ def test_top_level_py_file_is_updatable():
 def test_top_level_sh_file_is_updatable():
     assert is_path_updatable("run_lyricvideogen.sh") is True
     assert is_path_updatable("run_playalongvideoproduction.bat") is True
-    assert is_path_updatable("scripts/tool.bat") is False
+    # the top-level rule never reaches into a folder that is not itself allow-listed (scripts/ now is: see
+    # tests/test_update_manifest.py)
+    assert is_path_updatable("tools/tool.bat") is False
 
 
 def test_env_file_is_never_updatable():

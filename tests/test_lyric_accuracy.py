@@ -34,7 +34,7 @@ class _FakeAnthropicClient:
 def test_check_lyric_accuracy_true_when_claude_says_yes():
     client = _FakeAnthropicClient("LOOKS_ACCURATE: YES\nCONCERN:")
 
-    looks_accurate, concern = check_lyric_accuracy(client, "Imagine", "John Lennon", ["Imagine there's no heaven"])
+    looks_accurate, concern = check_lyric_accuracy(client, "Imagine", "John Lennon", ["Picture a lantern sky"])
 
     assert looks_accurate is True
     assert concern == ""
@@ -54,12 +54,12 @@ def test_check_lyric_accuracy_false_with_a_concern_when_claude_says_no():
 def test_check_lyric_accuracy_includes_title_artist_and_lines_in_the_prompt():
     client = _FakeAnthropicClient("LOOKS_ACCURATE: YES\nCONCERN:")
 
-    check_lyric_accuracy(client, "Imagine", "John Lennon", ["Imagine there's no heaven", "It's easy if you try"])
+    check_lyric_accuracy(client, "Imagine", "John Lennon", ["Picture a lantern sky", "Tin boats drift by"])
 
     prompt = client.messages.prompt_text()
     assert "Imagine" in prompt
     assert "John Lennon" in prompt
-    assert "Imagine there's no heaven" in prompt
+    assert "Picture a lantern sky" in prompt
 
 
 def test_check_lyric_accuracy_tolerates_reordered_labels():

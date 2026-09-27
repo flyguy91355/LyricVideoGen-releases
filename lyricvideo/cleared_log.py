@@ -12,11 +12,19 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 
+from .models import atomic_write_text
+
 CREDENTIALS_DIR = Path.home() / ".playalongvideoproduction"
 LOG_FILE = CREDENTIALS_DIR / "cleared_songs.json"
+
+# One writer at a time (issue #7 review): the Generate/Batch worker, Mark Verified on the Tk thread and the timing check can
+# all append at once; two unguarded read-append-replace passes lost entries, and a shared ".tmp" name made the second
+# os.replace fail.
+_LOCK = threading.Lock()
 
 
 def _path(path: Path | None) -> Path:
@@ -32,17 +40,34 @@ def history(path: Path | None = None) -> list[dict]:
         return []
 
 
+def _existing_records(target: Path) -> list[dict]:
+    """The history to append to. A file that exists but cannot be parsed is renamed aside
+    (`<name>.corrupt-<time>`) rather than silently replaced by a one-entry list: the record is meant to be permanent."""
+    try:
+        text = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, list):
+        return data
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    os.replace(target, target.with_name(f"{target.name}.corrupt-{stamp}"))
+    return []
+
+
 def _append(slug: str, status: str, note: str, path: Path | None, now: datetime | None) -> None:
-    records = history(path)
-    records.append({
-        "slug": slug, "status": status, "note": note,
-        "at": (now or datetime.now().astimezone()).isoformat(timespec="seconds"),
-    })
     target = _path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + ".tmp")
-    temporary.write_text(json.dumps(records, indent=2), encoding="utf-8")
-    os.replace(temporary, target)
+    with _LOCK:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        records = _existing_records(target)
+        records.append({
+            "slug": slug, "status": status, "note": note,
+            "at": (now or datetime.now().astimezone()).isoformat(timespec="seconds"),
+        })
+        atomic_write_text(target, json.dumps(records, indent=2))
 
 
 def record_cleared(slug: str, note: str = "", path: Path | None = None, now: datetime | None = None) -> None:

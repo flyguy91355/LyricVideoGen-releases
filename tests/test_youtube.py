@@ -516,14 +516,14 @@ def test_reserved_publish_datetimes_includes_both_scheduled_and_published_videos
 
     result = reserved_publish_datetimes(client)
 
-    assert result == {
+    assert result == [
         datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc).astimezone(),
         datetime(2026, 9, 20, 18, 0, tzinfo=timezone.utc).astimezone(),
-    }
+    ]
 
 
-def test_reserved_publish_datetimes_returns_empty_set_for_an_empty_channel():
-    assert reserved_publish_datetimes(_FakeChannelUploadsClient([])) == set()
+def test_reserved_publish_datetimes_returns_empty_list_for_an_empty_channel():
+    assert reserved_publish_datetimes(_FakeChannelUploadsClient([])) == []
 
 
 def test_reserved_publish_datetimes_ignores_videos_with_neither_field():
@@ -534,7 +534,17 @@ def test_reserved_publish_datetimes_ignores_videos_with_neither_field():
 
     result = reserved_publish_datetimes(client)
 
-    assert result == {datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc).astimezone()}
+    assert result == [datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc).astimezone()]
+
+
+def test_reserved_publish_datetimes_counts_every_video_sharing_one_publish_moment():
+    """Issue #7 review, F023: a set collapsed several videos scheduled for the same moment into ONE claim, so a day
+    holding a pile-up never looked full and kept attracting more uploads."""
+    client = _FakeChannelUploadsClient([
+        {"id": f"v{i}", "status": {"publishAt": "2026-11-01T14:00:00Z"}, "snippet": {}} for i in range(3)
+    ])
+
+    assert len(reserved_publish_datetimes(client)) == 3
 
 
 def _make_http_error(status: int):
@@ -604,3 +614,189 @@ def test_is_quota_exceeded_error_true_for_a_403_quota_exceeded():
 def test_is_quota_exceeded_error_false_for_a_403_with_another_reason():
     assert is_quota_exceeded_error(_make_403("commentsDisabled")) is False
     assert is_quota_exceeded_error(_make_403("forbidden")) is False
+
+
+# --- upload_video keeps the resumable session through a dropped connection or a 5xx (issue #7 review, F082) ----------
+
+class _ScriptedUploadRequest:
+    """next_chunk() raises each scripted exception in turn, then returns the finished video."""
+
+    def __init__(self, failures, video_id="V1"):
+        self._failures = list(failures)
+        self._video_id = video_id
+        self.calls = 0
+
+    def next_chunk(self):
+        self.calls += 1
+        if self._failures:
+            raise self._failures.pop(0)
+        return None, {"id": self._video_id}
+
+
+class _ScriptedVideos:
+    def __init__(self, request):
+        self.request = request
+        self.insert_calls = 0
+
+    def insert(self, **kwargs):
+        self.insert_calls += 1
+        return self.request
+
+
+class _ScriptedUploadClient:
+    def __init__(self, failures):
+        self._videos = _ScriptedVideos(_ScriptedUploadRequest(failures))
+
+    def videos(self):
+        return self._videos
+
+
+def _upload(client, tmp_path, slept):
+    video_path = tmp_path / "song.mp4"
+    video_path.write_bytes(b"fake video bytes")
+    return upload_video(
+        client, video_path, "T", "D", [], privacy="private", publish_at=None, category_id="27", made_for_kids=False,
+        sleep=slept.append,
+    )
+
+
+def test_upload_video_asks_the_same_request_again_after_a_timeout(tmp_path):
+    import socket
+
+    client = _ScriptedUploadClient([socket.timeout("timed out waiting for the reply")])
+    slept = []
+
+    assert _upload(client, tmp_path, slept) == "V1"
+    assert client._videos.request.calls == 2          # the SAME request object was asked again...
+    assert client._videos.insert_calls == 1           # ...never a second videos().insert (a duplicate video)
+    assert len(slept) == 1
+
+
+def test_upload_video_retries_a_server_error(tmp_path):
+    client = _ScriptedUploadClient([_make_http_error(503)])
+    slept = []
+
+    assert _upload(client, tmp_path, slept) == "V1"
+    assert client._videos.insert_calls == 1 and len(slept) == 1
+
+
+def test_upload_video_never_retries_a_quota_stop(tmp_path):
+    import pytest
+
+    client = _ScriptedUploadClient([_make_403("quotaExceeded")])
+    slept = []
+
+    with pytest.raises(Exception) as excinfo:
+        _upload(client, tmp_path, slept)
+
+    assert is_quota_exceeded_error(excinfo.value)     # still a quota stop the callers recognize
+    assert client._videos.request.calls == 1 and slept == []
+
+
+def test_upload_video_never_retries_the_upload_limit(tmp_path):
+    import pytest
+
+    client = _ScriptedUploadClient([_make_upload_limit_error()])
+    slept = []
+
+    with pytest.raises(Exception):
+        _upload(client, tmp_path, slept)
+
+    assert client._videos.request.calls == 1 and slept == []
+
+
+def test_upload_video_gives_up_after_the_retry_cap(tmp_path):
+    import socket
+
+    import pytest
+
+    client = _ScriptedUploadClient([socket.timeout("t")] * 20)
+    slept = []
+
+    with pytest.raises(TimeoutError):
+        video_path = tmp_path / "song.mp4"
+        video_path.write_bytes(b"x")
+        upload_video(client, video_path, "T", "D", [], privacy="private", publish_at=None, category_id="27",
+                     made_for_kids=False, max_retries=3, sleep=slept.append)
+
+    assert client._videos.request.calls == 4          # the first try plus 3 retries
+    assert len(slept) == 3
+
+
+def test_upload_video_recovers_a_video_youtube_already_stored_when_the_reply_was_lost(tmp_path):
+    """The real googleapiclient machinery (offline discovery, a fake transport -- no network): the media PUT stores
+    the whole file but the reply never arrives. Asking the same request again sends the `bytes */N` status query and
+    gets the finished video back -- instead of a second upload of the same song."""
+    import json
+    import socket
+
+    import httplib2
+    from googleapiclient.discovery import build
+
+    class _Transport:
+        def __init__(self):
+            self.calls = []
+            self.stored = False
+
+        def request(self, uri, method="GET", body=None, headers=None, redirections=5, connection_type=None):
+            headers = headers or {}
+            content_range = headers.get("Content-Range") or ""
+            self.calls.append((method, content_range))
+            if method == "POST":
+                return httplib2.Response({"status": 200, "location": "https://upload.example/session/1"}), b""
+            if method == "PUT" and content_range.startswith("bytes */"):
+                if self.stored:
+                    return httplib2.Response({"status": 200}), json.dumps({"id": "ALREADY_THERE"}).encode()
+                return httplib2.Response({"status": 308}), b""
+            if method == "PUT":
+                self.stored = True
+                raise socket.timeout("timed out waiting for YouTube's reply")
+            raise AssertionError(f"unexpected {method} {uri}")
+
+    transport = _Transport()
+    client = build("youtube", "v3", http=transport, static_discovery=True)
+    video_path = tmp_path / "song.mp4"
+    video_path.write_bytes(b"\x00" * 4096)
+
+    video_id = upload_video(
+        client, video_path, "T", "D", [], privacy="private", publish_at=None, category_id="27", made_for_kids=False,
+        sleep=lambda _s: None,
+    )
+
+    assert video_id == "ALREADY_THERE"
+    assert [m for m, _ in transport.calls].count("POST") == 1       # one upload session, never a second video
+
+
+def test_find_own_playlist_by_title_pages_through_the_channels_playlists():
+    pages = {
+        None: {"items": [{"id": "PL1", "snippet": {"title": "Other"}}], "nextPageToken": "p2"},
+        "p2": {"items": [{"id": "PL2", "snippet": {"title": "Play Along Videos - All"}}]},
+    }
+
+    class _Playlists:
+        def list(self, part, mine, maxResults, pageToken):
+            assert mine is True
+            return _FakeExecutable(pages[pageToken])
+
+    client = SimpleNamespace(playlists=lambda: _Playlists())
+
+    from lyricvideo.youtube import find_own_playlist_by_title
+
+    assert find_own_playlist_by_title(client, "Play Along Videos - All") == "PL2"
+    assert find_own_playlist_by_title(client, "Nothing Like This") is None
+
+
+def test_update_playlist_description_sends_the_title_too():
+    """playlists.update(part='snippet') replaces the whole snippet and requires snippet.title."""
+    sent = {}
+
+    class _Playlists:
+        def update(self, part, body):
+            sent.update(body)
+            return _FakeExecutable({})
+
+    from lyricvideo.youtube import update_playlist_description
+
+    update_playlist_description(SimpleNamespace(playlists=lambda: _Playlists()), "PL1", "EASY CHORD Play Along Songs", "New text")
+
+    assert sent == {"id": "PL1", "snippet": {"title": "EASY CHORD Play Along Songs", "description": "New text"}}

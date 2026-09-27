@@ -174,3 +174,26 @@ def test_align_words_span_count_mismatch_raises(tmp_path):
 
     with pytest.raises(AlignmentError):
         align_words(wav_path, ["a", "b", "c"], bundle=_BadBundle())
+
+
+def test_normalize_word_for_alignment_reads_comma_grouped_numbers_as_quantities():
+    """Issue #7 review: the thousands comma was dropped first, so '10,000' became a five-digit run read digit by digit."""
+    assert _normalize_word_for_alignment("10,000") == "tenthousand"
+    assert _normalize_word_for_alignment("100,000") == "onehundredthousand"
+    assert _normalize_word_for_alignment("1,000,000") == "onemillion"
+    assert _normalize_word_for_alignment("1,000") == "onethousand"
+    assert _normalize_word_for_alignment("867-5309") == "eightsixseven" + "fivethreeohnine"     # unchanged
+    assert _normalize_word_for_alignment("007") == "ohohseven"
+
+
+def test_normalize_word_for_alignment_keeps_an_ordinal_with_punctuation_attached():
+    assert _normalize_word_for_alignment("1st,") == "first"
+    assert _normalize_word_for_alignment("2nd.") == "second"
+    assert _normalize_word_for_alignment("(3rd)") == "third"
+
+
+def test_normalize_word_for_alignment_folds_accents_instead_of_dropping_letters():
+    assert _normalize_word_for_alignment("señor") == "senor"
+    assert _normalize_word_for_alignment("café") == "cafe"
+    assert _normalize_word_for_alignment("naïve") == "naive"
+    assert _normalize_word_for_alignment("Über") == "uber"

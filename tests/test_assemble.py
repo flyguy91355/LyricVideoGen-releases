@@ -1,8 +1,16 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Word, line_hash
+
+
+@pytest.fixture(autouse=True)
+def _skip_the_rendered_length_check(monkeypatch):
+    """The fake clips below write a few placeholder bytes, not a real video, so the read-back length check has
+    nothing to measure; tests/test_render_atomic_output.py covers that check against real ffmpeg output."""
+    monkeypatch.setattr("lyricvideo.assemble._check_rendered_video", lambda path, expected_seconds, fps: None)
 
 
 def _fake_clips(calls):
@@ -25,11 +33,12 @@ def _fake_clips(calls):
             calls["audio_clip"] = audio_clip
             return self
 
-        def write_videofile(self, path, fps, codec, audio_codec, ffmpeg_params=None):
+        def write_videofile(self, path, fps, codec, audio_codec, ffmpeg_params=None, temp_audiofile=None):
             calls["write_path"] = path
             calls["fps"] = fps
             calls["codec"] = codec
             calls["ffmpeg_params"] = ffmpeg_params
+            calls["temp_audiofile"] = temp_audiofile
             Path(path).write_bytes(b"fake-mp4")
 
     return _FakeAudioClip, _FakeVideoClip
@@ -56,9 +65,11 @@ def test_assemble_video_invokes_write_videofile(tmp_path, monkeypatch, test_font
     assert calls["duration"] == 2.0
     assert calls["fps"] == 24
     assert calls["codec"] == "libx264"
-    assert calls["ffmpeg_params"] == ["-crf", "20"]
+    # moviepy itself adds -pix_fmt yuv420p for libx264; the partial file's container is named explicitly.
+    assert calls["ffmpeg_params"] == ["-crf", "20", "-f", "mp4"]
     frame = calls["make_frame"](0.3)
     assert frame.shape[:2] == (1080, 1920)
+    assert out_path.read_bytes() == b"fake-mp4"
 
 
 def test_assemble_video_threads_chord_track_into_scene(tmp_path, monkeypatch, test_font_path):
@@ -182,7 +193,8 @@ def test_assemble_video_respects_custom_resolution_fps_encoder_crf(tmp_path, mon
 
     assert calls["fps"] == 30
     assert calls["codec"] == "libx265"
-    assert calls["ffmpeg_params"] == ["-crf", "24"]
+    # 4:2:0 + the hvc1 tag: without them libx265 wrote 4:4:4 RGB HEVC tagged hev1 that most players refuse.
+    assert calls["ffmpeg_params"] == ["-crf", "24", "-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-f", "mp4"]
     frame = calls["make_frame"](0.3)
     assert frame.shape[:2] == (720, 1280)
 
@@ -930,3 +942,131 @@ def test_assemble_video_hands_ken_burns_an_already_frame_sized_background(tmp_pa
     calls["make_frame"](0.5)
 
     assert seen_sizes and all(size == (1280, 720) for size in seen_sizes)
+
+
+# --- issue #7 review: outgoing Ken Burns progress, bounded background cache, lazy moviepy -------------------------
+
+def _two_lines_with_a_long_break():
+    """Line 1 sung 10-14 s, a 20 s instrumental break, line 2 sung 34-38 s (made-up words)."""
+    def line(words, start):
+        ws = [Word(word=w, start_time=start + i, end_time=start + i + 1.0) for i, w in enumerate(words)]
+        return LyricLine(words=ws, start_time=ws[0].start_time, end_time=ws[-1].end_time)
+    return [line(["zorp", "blee", "quix", "vosh"], 10.0), line(["mip", "tandle", "keem", "plin"], 34.0)]
+
+
+def _ken_burns_progress_per_frame(tmp_path, monkeypatch, test_font_path, times):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    FakeAudioClip.duration = 60.0
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+
+    from lyricvideo import assemble as assemble_module
+
+    progress_calls = []
+    real_apply_ken_burns = assemble_module.apply_ken_burns
+
+    def spying_apply_ken_burns(image, progress, *args, **kwargs):
+        progress_calls.append(progress)
+        return real_apply_ken_burns(image, progress, *args, **kwargs)
+
+    monkeypatch.setattr(assemble_module, "apply_ken_burns", spying_apply_ken_burns)
+    assemble_module.assemble_video(
+        _two_lines_with_a_long_break(), ChordTrack(), tmp_path, tmp_path / "audio.wav", tmp_path / "final.mp4",
+        font_path=test_font_path, countdown_beats=0, frame_size=(1280, 720),
+    )
+    per_frame = []
+    for t in times:
+        progress_calls.clear()
+        calls["make_frame"](t)
+        per_frame.append(list(progress_calls))
+    return per_frame
+
+
+def test_outgoing_line_image_keeps_its_own_pan_position_into_an_instrumental_crossfade(
+    tmp_path, monkeypatch, test_font_path,
+):
+    """A sung line's pan is paced to the NEXT line's start (34 s), but its image segment ends at 14 s when a break
+    follows, so it is only 1/6 through its pan there. The first crossfade frame is 100% the outgoing image; drawing
+    it at progress 1.0 snapped zoom and pan by up to 15% / ~160 px in one frame at every verse-to-break handoff."""
+    (last_line_frame,), (current, outgoing) = _ken_burns_progress_per_frame(
+        tmp_path, monkeypatch, test_font_path, [13.99, 14.0],
+    )
+
+    assert last_line_frame == pytest.approx(3.99 / 24, abs=1e-6)
+    assert current == pytest.approx(0.0)
+    assert outgoing == pytest.approx(4.0 / 24, abs=1e-4)  # where line 1's pan really stood -- not 1.0
+
+
+def test_outgoing_instrumental_image_still_ends_at_the_end_of_its_own_pan(tmp_path, monkeypatch, test_font_path):
+    """An instrumental block's pan is paced to its own segment, so handing off to the next line keeps ~1.0."""
+    ((current, outgoing),) = _ken_burns_progress_per_frame(tmp_path, monkeypatch, test_font_path, [34.0])
+
+    assert current == pytest.approx(0.0)
+    assert outgoing == pytest.approx(1.0, abs=1e-4)
+
+
+def test_background_cache_shares_one_image_across_missing_keys_and_stays_bounded(tmp_path, monkeypatch):
+    """Every missing key (e.g. an instrumental caption with no generated image) used to decode and keep its OWN
+    frame-sized copy of the same fallback file, and nothing was ever evicted until the render ended."""
+    from lyricvideo import assemble as assemble_module
+    from lyricvideo.assemble import _IMAGE_CACHE_SIZE, _BackgroundCache
+
+    for name in "abcdef":
+        Image.new("RGB", (8, 8), (ord(name), 0, 0)).save(tmp_path / f"{name}.png")
+    opened = []
+    real_open = assemble_module.Image.open
+
+    def counting_open(path, *args, **kwargs):
+        opened.append(Path(path).name)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(assemble_module.Image, "open", counting_open)
+    cache = _BackgroundCache(tmp_path, (32, 18), (1, 2, 3))
+
+    first = cache.get("missing-one")  # resolves to the first real image, a.png
+    assert cache.get("missing-two") is first
+    assert cache.get("a") is first
+    assert opened == ["a.png"]
+    assert first.size == (32, 18)
+
+    for name in "bcdef":
+        cache.get(name)
+    assert len(cache) <= _IMAGE_CACHE_SIZE
+    assert opened == ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"]
+
+
+def test_background_cache_falls_back_to_one_shared_flat_image_when_the_song_has_none(tmp_path):
+    from lyricvideo.assemble import _BackgroundCache
+
+    cache = _BackgroundCache(tmp_path, (32, 18), (1, 2, 3))
+
+    flat = cache.get("missing-one")
+    assert cache.get("missing-two") is flat
+    assert flat.getpixel((0, 0)) == (1, 2, 3)
+
+
+def test_importing_the_renderer_does_not_import_moviepy():
+    """pipeline.py (and so gui.py) imports this module; moviepy.editor alone took ~0.6 s of every GUI launch."""
+    import subprocess
+    import sys
+
+    probe = "import sys, lyricvideo.assemble; print('moviepy' in sys.modules)"
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, cwd=Path(__file__).resolve().parents[1],
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+
+
+def test_render_temp_files_sit_next_to_the_output_under_names_that_are_not_videos(tmp_path):
+    from lyricvideo.assemble import _partial_render_paths
+
+    out_path = tmp_path / "song-easychords.mp4"
+    partial, temp_audio, params = _partial_render_paths(out_path)
+
+    assert partial.parent == temp_audio.parent == tmp_path
+    assert not partial.name.endswith(".mp4")  # never mistaken for a finished video by a glob("*.mp4")
+    assert not temp_audio.name.endswith(".mp4")
+    assert partial.name.startswith(out_path.name) and temp_audio.name.startswith(out_path.name)
+    assert params == ["-f", "mp4"]

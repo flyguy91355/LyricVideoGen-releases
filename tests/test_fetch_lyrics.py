@@ -162,7 +162,7 @@ def test_fetch_lyric_lines_plain_sidecar_txt_works_without_a_duration(tmp_path, 
 def test_fetch_lyric_lines_verified_returns_the_first_source_that_passes(tmp_path, monkeypatch):
     audio_path = tmp_path / "song.mp3"
     audio_path.write_bytes(b"")
-    (tmp_path / "song.lrc").write_text("[00:00.00]Imagine there's no heaven\n", encoding="utf-8")
+    (tmp_path / "song.lrc").write_text("[00:00.00]Picture a lantern sky\n", encoding="utf-8")
     monkeypatch.setattr("lyricvideo.fetch_lyrics.check_lyric_accuracy", lambda *a, **k: (True, ""))
 
     def fail_if_called(*a, **k):
@@ -175,7 +175,7 @@ def test_fetch_lyric_lines_verified_returns_the_first_source_that_passes(tmp_pat
         audio_path, "Imagine", "John Lennon", 10.0, [], _FakeAnthropicClient(),
     )
 
-    assert lines == ["Imagine there's no heaven"]
+    assert lines == ["Picture a lantern sky"]
     assert source == "sidecar"
     assert concern == ""
 
@@ -189,7 +189,7 @@ def test_fetch_lyric_lines_verified_tries_the_next_source_when_the_first_fails_t
     )
     monkeypatch.setattr(
         "lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit",
-        lambda title, artist, providers=None: ("Imagine there's no heaven", False, 0.0),
+        lambda title, artist, providers=None: ("Picture a lantern sky", False, 0.0),
     )
 
     def fake_check(client, title, artist, lines, model="claude-sonnet-5"):
@@ -203,7 +203,7 @@ def test_fetch_lyric_lines_verified_tries_the_next_source_when_the_first_fails_t
         audio_path, "Imagine", "John Lennon", 10.0, [], _FakeAnthropicClient(),
     )
 
-    assert lines == ["Imagine there's no heaven"]
+    assert lines == ["Picture a lantern sky"]
     assert source == "Musixmatch"
     assert concern == ""
 
@@ -530,17 +530,17 @@ def test_credit_lines_from_a_lyrics_provider_are_not_lyrics():
     empty boxes (the font has no CJK glyphs)."""
     from lyricvideo.fetch_lyrics import _hit_to_lines
 
-    synced = "[00:00.00]作曲 : Bob Seger\n[00:01.00]作词 : Bob Seger\n[00:17.00]I was a little too tall\n[00:20.00]Could've used a few pounds\n"
+    synced = "[00:00.00]作曲 : Bob Seger\n[00:01.00]作词 : Bob Seger\n[00:17.00]I was a paper kite\n[00:20.00]Folded up in blue\n"
 
-    assert _hit_to_lines((synced, True, 0.0), 300.0) == ["I was a little too tall", "Could've used a few pounds"]
+    assert _hit_to_lines((synced, True, 0.0), 300.0) == ["I was a paper kite", "Folded up in blue"]
 
 
 def test_english_credit_lines_are_dropped_from_plain_lyrics_too():
     from lyricvideo.fetch_lyrics import _hit_to_lines
 
-    plain = "Composer: Bob Seger\nLyrics by: Bob Seger\nWritten by：Someone\nI was a little too tall\nProduced by - the band\n"
+    plain = "Composer: Bob Seger\nLyrics by: Bob Seger\nWritten by：Someone\nI was a paper kite\nProduced by - the band\n"
 
-    assert _hit_to_lines((plain, False, 0.0), 300.0) == ["I was a little too tall", "Produced by - the band"]
+    assert _hit_to_lines((plain, False, 0.0), 300.0) == ["I was a paper kite", "Produced by - the band"]
 
 
 def test_a_real_lyric_line_that_merely_contains_a_credit_word_is_kept():
@@ -587,10 +587,10 @@ def test_a_by_credit_at_the_start_is_dropped_but_a_lyric_that_starts_with_by_is_
     """Real: Girls Just Want to Have Fun began with 'By. DanChu' (the contributor's name), shown as the first lyric."""
     from lyricvideo.fetch_lyrics import _hit_to_lines
 
-    synced = "[00:00.50]By. DanChu\n[00:17.00]I come home in the morning light\n[00:30.00]By the river we sat\n[00:40.00]By: the end of the night\n"
+    synced = "[00:00.50]By. DanChu\n[00:17.00]I come round the purple lantern\n[00:30.00]By the river we sat\n[00:40.00]By: the end of the night\n"
 
     assert _hit_to_lines((synced, True, 0.0), 300.0) == [
-        "I come home in the morning light", "By the river we sat", "By: the end of the night",
+        "I come round the purple lantern", "By the river we sat", "By: the end of the night",
     ]
 
 
@@ -599,37 +599,37 @@ def test_a_title_and_artist_header_line_is_dropped_from_the_start():
     from lyricvideo.fetch_lyrics import _drop_header_lines
 
     lines, times = _drop_header_lines(
-        ["Rolling Stones - Wild Horses", "Childhood living", "Is easy to do"], [1.2, 6.0, 9.0], "Wild Horses", "The Rolling Stones",
+        ["Rolling Stones - Wild Horses", "Pebble season", "Is blue as glue"], [1.2, 6.0, 9.0], "Wild Horses", "The Rolling Stones",
     )
 
-    assert lines == ["Childhood living", "Is easy to do"] and times == [6.0, 9.0]
+    assert lines == ["Pebble season", "Is blue as glue"] and times == [6.0, 9.0]
 
 
 def test_a_header_line_works_in_either_order_and_without_times():
     from lyricvideo.fetch_lyrics import _drop_header_lines
 
-    assert _drop_header_lines(["Wild Horses - The Rolling Stones", "Childhood living"], None, "Wild Horses", "The Rolling Stones") == (
-        ["Childhood living"], None)
+    assert _drop_header_lines(["Wild Horses - The Rolling Stones", "Pebble season"], None, "Wild Horses", "The Rolling Stones") == (
+        ["Pebble season"], None)
 
 
 def test_a_real_lyric_that_is_just_the_title_or_appears_later_is_kept():
     from lyricvideo.fetch_lyrics import _drop_header_lines
 
-    lines = ["Wild horses", "Couldn't drag me away", "Wild horses - Rolling Stones", "Wild horses"]
+    lines = ["Wild horses", "Couldn't fold the day", "Wild horses - Rolling Stones", "Wild horses"]
 
     assert _drop_header_lines(lines[:2] + ["x"] * 2 + lines[2:], None, "Wild Horses", "The Rolling Stones")[0] == \
-        ["Wild horses", "Couldn't drag me away", "x", "x", "Wild horses - Rolling Stones", "Wild horses"]
+        ["Wild horses", "Couldn't fold the day", "x", "x", "Wild horses - Rolling Stones", "Wild horses"]
 
 
 def test_full_width_punctuation_is_normalised_and_a_stray_trailing_bracket_is_dropped():
-    """Real: 'And points all her own sitting way up high（' rendered a box at the end of the line."""
+    """Real: 'And marbles rolling all across the hall（' rendered a box at the end of the line."""
     from lyricvideo.fetch_lyrics import _hit_to_lines
 
-    text = "And points all her own sitting way up high（\n（Hey dudes!）\nWorkin' on mysteries, without any clues（\nHello，world\n"
+    text = "And marbles rolling all across the hall（\n（Hey dudes!）\nHumming on teacups, without any spoons（\nHello，world\n"
 
     assert _hit_to_lines((text, False, 0.0), 300.0) == [
-        "And points all her own sitting way up high", "(Hey dudes!)",
-        "Workin' on mysteries, without any clues", "Hello, world",
+        "And marbles rolling all across the hall", "(Hey dudes!)",
+        "Humming on teacups, without any spoons", "Hello, world",
     ]
 
 

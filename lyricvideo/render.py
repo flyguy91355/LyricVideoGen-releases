@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -87,6 +88,56 @@ def load_font(font_path: str, size: int) -> ImageFont.FreeTypeFont:
     if font is None:
         font = cache[key] = ImageFont.truetype(font_path, size)
     return font
+
+
+def overlay_patch(overlay: Image.Image) -> tuple[Image.Image, tuple[int, int]] | None:
+    """(the non-transparent part of an RGBA overlay, its top-left in the overlay), or None if nothing was drawn.
+    The patch is what composite_patch() needs; cached patches must never be mutated by a caller."""
+    bbox = overlay.getbbox()  # alpha channel only: a fully transparent pixel changes nothing when composited
+    if bbox is None:
+        return None
+    return overlay.crop(bbox), (bbox[0], bbox[1])
+
+
+def composite_patch(frame: Image.Image, *patches: tuple[Image.Image, tuple[int, int]] | None) -> Image.Image:
+    """Copy-on-write alpha composite of overlay_patch() results onto `frame`, in order, returning an RGB image.
+
+    Pixel-identical to the old per-frame `Image.alpha_composite(frame.convert("RGBA"), full_frame_overlay)
+    .convert("RGB")` -- a fully transparent overlay pixel leaves the frame pixel exactly as it was -- but only each
+    patch's own box is converted and composited. Four whole-frame RGB->RGBA->RGB round trips per frame (chord bar,
+    legend, capo badge, support overlay) were ~25 ms of a ~55 ms 1080p frame (issue #7 review). Patches passed
+    together must not overlap each other (they would otherwise stack, where one shared overlay would not)."""
+    if frame.mode != "RGB":
+        # Never hit by the renderer (its frames are RGB); keep the exact old semantics for anything else.
+        full = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        for patch in patches:
+            if patch is not None:
+                full.alpha_composite(patch[0], patch[1])
+        return Image.alpha_composite(frame.convert("RGBA"), full).convert("RGB")
+    out = frame.copy()
+    for patch in patches:
+        if patch is None:
+            continue
+        image, (x, y) = patch
+        left, top = max(0, x), max(0, y)
+        right, bottom = min(frame.width, x + image.width), min(frame.height, y + image.height)
+        if right <= left or bottom <= top:
+            continue
+        region = out.crop((left, top, right, bottom)).convert("RGBA")
+        region.alpha_composite(image, (0, 0), (left - x, top - y, right - x, bottom - y))
+        out.paste(region.convert("RGB"), (left, top))
+    return out
+
+
+_OVERLAY_CACHE_SIZE = 16
+
+
+def clear_overlay_caches() -> None:
+    """Drops the cached static overlay patches (Key/BPM badge, support overlay, countdown). assemble_video calls
+    this when a render ends so a finished render's patches never stay in memory for the rest of the session."""
+    _key_bpm_badge_patch.cache_clear()
+    _support_overlay_patch.cache_clear()
+    _countdown_patch.cache_clear()
 
 
 def crossfade_backgrounds(prev: Image.Image, current: Image.Image, blend: float) -> Image.Image:
@@ -391,7 +442,7 @@ def draw_chord_bar(
     label_font = load_font(font_path, 20)
     now_font = load_font(font_path, chord_now_size)
     next_font = load_font(font_path, chord_next_size)
-    small_font = load_font(font_path, 24)
+    small_font = load_font(font_path, _KEY_BPM_BADGE_FONT_SIZE)
     lane_font = load_font(font_path, 30)
 
     overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
@@ -460,28 +511,58 @@ def draw_chord_bar(
     # `key_label` (owner, 2026-09-23): an EASY CHORD (capo) video's chord_track.key is the SHAPE key it frets,
     # but a capo never changes the song's real key -- that video passes its original key here instead.
     key = key_label or chord_track.key
+    badge_patch = None
     if show_key_bpm and (key or chord_track.bpm):
         parts = []
         if key:
             parts.append(f"Key: {key}")
         if chord_track.bpm:
             parts.append(f"{int(round(chord_track.bpm))} BPM")
-        badge = "   ·   ".join(parts)
-        bx, by = badge_xy
-        badge_w = draw.textlength(badge, font=small_font)
-        # Real owner complaint, 2026-09-23: "too faint... needs to be just a little bit
-        # brighter" -- unlike every other piece of chord-bar text, this badge was drawn
-        # straight onto the video frame with no panel behind it, so it could wash out
-        # against a bright background image. Same panel_fill/rounded-rectangle language
-        # as the rest of this bar restores guaranteed contrast regardless of what's
-        # playing behind it.
-        pad_x, pad_y = 14, 8
-        badge_box = (bx - badge_w - pad_x, by - pad_y, bx + pad_x, by + small_font.size + pad_y)
-        draw.rounded_rectangle(badge_box, radius=10, fill=panel_fill)
-        draw.text((bx - badge_w, by), badge, font=small_font, fill=(*accent_color, 255))
+        # The badge sits far above the bar (upper right), never overlapping it, and never changes during a song,
+        # so it is its own cached patch instead of widening the bar's per-frame composite to most of the frame.
+        badge_patch = _key_bpm_badge_patch(
+            "   ·   ".join(parts), font_path, frame.size, tuple(badge_xy), tuple(panel_fill), tuple(accent_color),
+        )
 
-    composited = Image.alpha_composite(frame.convert("RGBA"), overlay)
-    return composited.convert("RGB")
+    return composite_patch(frame, overlay_patch(overlay), badge_patch)
+
+
+_KEY_BPM_BADGE_FONT_SIZE = 24
+_KEY_BPM_BADGE_PAD_X = 14
+_KEY_BPM_BADGE_PAD_Y = 8
+
+
+def key_bpm_badge_bottom(frame_size: tuple[int, int]) -> int:
+    """Lowest pixel row of the Key/BPM badge's panel at this frame size (draw_chord_bar's own geometry)."""
+    layout = CHORD_BOX_LAYOUT_DEFAULT if frame_size == FRAME_SIZE else compute_chord_bar_layout(frame_size)
+    return layout["badge_xy"][1] + _KEY_BPM_BADGE_FONT_SIZE + _KEY_BPM_BADGE_PAD_Y
+
+
+@lru_cache(maxsize=_OVERLAY_CACHE_SIZE)
+def _key_bpm_badge_patch(
+    badge: str,
+    font_path: str,
+    canvas_size: tuple[int, int],
+    badge_xy: tuple[int, int],
+    panel_fill: tuple[int, int, int, int],
+    accent_color: tuple[int, int, int],
+) -> tuple[Image.Image, tuple[int, int]] | None:
+    overlay = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    small_font = load_font(font_path, _KEY_BPM_BADGE_FONT_SIZE)
+    bx, by = badge_xy
+    badge_w = draw.textlength(badge, font=small_font)
+    # Real owner complaint, 2026-09-23: "too faint... needs to be just a little bit
+    # brighter" -- unlike every other piece of chord-bar text, this badge was drawn
+    # straight onto the video frame with no panel behind it, so it could wash out
+    # against a bright background image. Same panel_fill/rounded-rectangle language
+    # as the rest of this bar restores guaranteed contrast regardless of what's
+    # playing behind it.
+    pad_x, pad_y = _KEY_BPM_BADGE_PAD_X, _KEY_BPM_BADGE_PAD_Y
+    badge_box = (bx - badge_w - pad_x, by - pad_y, bx + pad_x, by + small_font.size + pad_y)
+    draw.rounded_rectangle(badge_box, radius=10, fill=panel_fill)
+    draw.text((bx - badge_w, by), badge, font=small_font, fill=(*accent_color, 255))
+    return overlay_patch(overlay)
 
 
 def draw_countdown(
@@ -498,8 +579,20 @@ def draw_countdown(
     visual style bolted onto the video (owner feedback, 2026-09-10: keep it
     modest, not "gaudy"). Returns a new image; `frame` is not mutated
     (matches draw_scene/draw_chord_bar's own copy-on-write style)."""
+    patch = _countdown_patch(seconds_remaining, font_path, frame.size, tuple(frame_size), tuple(accent_color))
+    return composite_patch(frame, patch)
+
+
+@lru_cache(maxsize=_OVERLAY_CACHE_SIZE)
+def _countdown_patch(
+    seconds_remaining: int,
+    font_path: str,
+    canvas_size: tuple[int, int],
+    frame_size: tuple[int, int],
+    accent_color: tuple[int, int, int],
+) -> tuple[Image.Image, tuple[int, int]] | None:
     w, h = frame_size
-    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     box_side = int(h * _COUNTDOWN_BOX_SIZE_FRAC)
@@ -511,14 +604,14 @@ def draw_countdown(
     label = str(seconds_remaining)
     label_w = draw.textlength(label, font=font)
     draw.text((cx - label_w / 2, cy - box_side * 0.28), label, font=font, fill=(*accent_color, 255))
-
-    return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
+    return overlay_patch(overlay)
 
 
 _SUPPORT_OVERLAY_MARGIN_X = 40  # from the right edge
-_SUPPORT_OVERLAY_MARGIN_TOP = 110  # clears the Key/BPM badge (drawn by draw_chord_bar,
-                                    # anchored around FRAME_SIZE[1]*0.06 -- roughly 65-95px
-                                    # tall at the default frame size), never the two together
+_SUPPORT_OVERLAY_MARGIN_TOP = 110  # the top at 720p/1080p -- clears the Key/BPM badge (drawn by
+                                    # draw_chord_bar, anchored at frame height * 0.06); taller frames
+                                    # move it further down, see _support_overlay_top
+_SUPPORT_OVERLAY_BADGE_GAP = 14  # clear rows between the badge's panel and this one (1080p's own gap)
 _SUPPORT_OVERLAY_BASE_FONT_SIZE = 28
 _SUPPORT_OVERLAY_PAD_X = 16
 _SUPPORT_OVERLAY_PAD_Y = 10
@@ -550,14 +643,36 @@ def draw_support_overlay(
     Copy-on-write, matching every other draw_* here."""
     if not text.strip():
         return frame
+    patch = _support_overlay_patch(
+        text, font_path, frame.size, tuple(frame_size), tuple(accent_color), tuple(panel_color), scale,
+    )
+    return composite_patch(frame, patch)
 
+
+def _support_overlay_top(frame_size: tuple[int, int]) -> int:
+    """The overlay's top row: the old fixed 110 px wherever that already clears the Key/BPM badge (720p/1080p,
+    unchanged), else just below the badge. The badge is anchored at 6% of the frame height with a fixed-size
+    font, so at 1440p its panel reached row 118 and the fixed 110 px top drew over it."""
+    return max(_SUPPORT_OVERLAY_MARGIN_TOP, key_bpm_badge_bottom(frame_size) + _SUPPORT_OVERLAY_BADGE_GAP)
+
+
+@lru_cache(maxsize=_OVERLAY_CACHE_SIZE)
+def _support_overlay_patch(
+    text: str,
+    font_path: str,
+    canvas_size: tuple[int, int],
+    frame_size: tuple[int, int],
+    accent_color: tuple[int, int, int],
+    panel_color: tuple[int, int, int],
+    scale: float,
+) -> tuple[Image.Image, tuple[int, int]] | None:
     font_size = max(1, int(_SUPPORT_OVERLAY_BASE_FONT_SIZE * scale))
     pad_x = int(_SUPPORT_OVERLAY_PAD_X * scale)
     pad_y = int(_SUPPORT_OVERLAY_PAD_Y * scale)
     margin_x = int(_SUPPORT_OVERLAY_MARGIN_X * scale)
-    margin_top = _SUPPORT_OVERLAY_MARGIN_TOP
+    margin_top = _support_overlay_top(frame_size)
 
-    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = load_font(font_path, font_size)
 
@@ -573,8 +688,7 @@ def draw_support_overlay(
     box = (box_left, box_top, box_right, box_bottom)
     draw.rounded_rectangle(box, radius=int(pad_y * 1.2), fill=(*panel_color, _SUPPORT_OVERLAY_ALPHA))
     draw.text((box_left + pad_x, box_top + pad_y), text, font=font, fill=(*accent_color, 255))
-
-    return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
+    return overlay_patch(overlay)
 
 
 CHORD_BOX_LAYOUT_DEFAULT = {

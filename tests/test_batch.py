@@ -312,3 +312,115 @@ def test_a_song_the_owner_removed_from_review_counts_as_already_processed_so_a_b
     monkeypatch.setattr("lyricvideo.batch.load_dismissed", lambda list_name: {"some-song"} if list_name == "flagged" else set())
 
     assert resolve_batch_items([audio], work_root)[0].already_done is True
+
+
+# --- one work folder per recording (issue #7 review, F027/F034) -------------------------------------------------------
+
+import json  # noqa: E402
+
+from lyricvideo.batch import holds_other_recording, work_dir_for  # noqa: E402
+
+
+def _info(title, artist):
+    return type("Info", (), {"title": title, "artist": artist})()
+
+
+def _existing_song(folder, title, artist, audio_name, video=True):
+    folder.mkdir(parents=True)
+    (folder / "song_info.json").write_text(json.dumps({"title": title, "artist": artist}), encoding="utf-8")
+    (folder / "lyrics_timed.json").write_text(json.dumps({"title": title, "audio_path": f"/staging/{audio_name}"}),
+                                              encoding="utf-8")
+    if video:
+        (folder / "paper-boat.mp4").write_bytes(b"video")
+
+
+def test_two_recordings_with_the_same_title_in_one_batch_get_their_own_folders(tmp_path, monkeypatch):
+    """F027: 'First Band - Paper Boat' and 'Second Band - Paper Boat' both ran in work/paper-boat -- the second overwrote
+    the first's video and inherited its upload record, owner key and edited lyrics."""
+    first, second = tmp_path / "first band - paper boat.mp3", tmp_path / "second band - paper boat.mp3"
+    for f in (first, second):
+        f.write_bytes(b"")
+    artists = {first: "First Band", second: "Second Band"}
+    monkeypatch.setattr("lyricvideo.batch.extract_metadata", lambda path: _info("Paper Boat", artists[path]))
+    work_root = tmp_path / "work"
+
+    items = resolve_batch_items([first, second], work_root)
+
+    assert [i.work_dir.name for i in items] == ["paper-boat", "paper-boat-second-band"]
+    assert [i.already_done for i in items] == [False, False]
+
+
+def test_a_folder_holding_another_recording_is_left_alone_and_not_counted_as_done(tmp_path, monkeypatch):
+    work_root = tmp_path / "work"
+    _existing_song(work_root / "paper-boat", "Paper Boat", "Second Band", "second band - paper boat.mp3")
+    first, second = tmp_path / "first band - paper boat.mp3", tmp_path / "second band - paper boat.mp3"
+    for f in (first, second):
+        f.write_bytes(b"")
+    artists = {first: "First Band", second: "Second Band"}
+    monkeypatch.setattr("lyricvideo.batch.extract_metadata", lambda path: _info("Paper Boat", artists[path]))
+
+    items = resolve_batch_items([first, second], work_root)
+
+    assert (items[0].work_dir.name, items[0].already_done) == ("paper-boat-first-band", False)
+    assert (items[1].work_dir.name, items[1].already_done) == ("paper-boat", True)      # its own, finished folder
+
+
+@pytest.mark.parametrize("stored_artist, new_artist", [
+    ("The Second Band", "Second Band"),          # the same act, spelled a little differently
+    ("Second Band", ""),                         # identify could not name the artist this time
+    ("", "Second Band"),                         # an older folder that never recorded one
+    ("Second Band", "Second Band & Friends"),    # a credit that only adds names
+])
+def test_an_existing_folder_of_the_same_song_still_maps_to_itself(tmp_path, stored_artist, new_artist):
+    """Backward compatibility: every existing folder keeps working for Redo and a Batch rerun of the same song."""
+    work_root = tmp_path / "work"
+    _existing_song(work_root / "paper-boat", "Paper Boat", stored_artist, "paper boat.mp3")
+
+    assert work_dir_for(work_root, "Paper Boat", new_artist, tmp_path / "other name.mp3") == work_root / "paper-boat"
+    assert holds_other_recording(work_root / "paper-boat", new_artist) is False
+
+
+def test_the_fallback_folder_is_numbered_when_it_too_holds_another_recording(tmp_path):
+    work_root = tmp_path / "work"
+    _existing_song(work_root / "paper-boat", "Paper Boat", "First Band", "a.mp3")
+    _existing_song(work_root / "paper-boat-second-band", "Paper Boat", "Third Band", "c.mp3")
+
+    assert work_dir_for(work_root, "Paper Boat", "Second Band", tmp_path / "b.mp3").name == "paper-boat-second-band-2"
+
+
+def test_an_unknown_artist_falls_back_to_the_file_name_for_a_second_file_in_the_batch(tmp_path):
+    taken = {"paper-boat"}
+
+    folder = work_dir_for(tmp_path / "work", "Paper Boat", "", tmp_path / "Paper Boat (demo take).mp3", taken)
+
+    assert folder.name == "paper-boat-paper-boat-demo-take"
+
+
+def test_two_rips_of_the_same_song_by_the_same_artist_share_one_folder_in_a_batch(tmp_path, monkeypatch):
+    """Review of the F027 fix: 'Paper Boat.mp3' and 'Paper Boat (1).mp3' by one band are the same song -- separate folders
+    would make it twice and upload it twice (a duplicate video). They share one folder, as before."""
+    first, second = tmp_path / "paper boat.mp3", tmp_path / "paper boat (1).mp3"
+    for f in (first, second):
+        f.write_bytes(b"")
+    monkeypatch.setattr("lyricvideo.batch.extract_metadata", lambda path: _info("Paper Boat", "First Band"))
+
+    items = resolve_batch_items([first, second], tmp_path / "work")
+
+    assert [i.work_dir.name for i in items] == ["paper-boat", "paper-boat"]
+
+
+def test_a_rerun_of_a_file_whose_artist_lookup_changed_keeps_its_own_folder(tmp_path, monkeypatch):
+    """A tagless file's artist comes from an online lookup that can answer differently from one run to the next; the folder
+    holding this very file's copy (same name, same size) is this song -- never a new folder and a second upload."""
+    work_root = tmp_path / "work"
+    _existing_song(work_root / "paper-boat", "Paper Boat", "First Band", "paper boat.mp3")
+    audio = tmp_path / "paper boat.mp3"
+    audio.write_bytes(b"same bytes")
+    (work_root / "paper-boat" / "paper boat.mp3").write_bytes(b"same bytes")
+    monkeypatch.setattr("lyricvideo.batch.extract_metadata", lambda path: _info("Paper Boat", "A Different Lookup"))
+
+    [item] = resolve_batch_items([audio], work_root)
+
+    assert (item.work_dir.name, item.already_done) == ("paper-boat", True)
+    assert holds_other_recording(work_root / "paper-boat", "A Different Lookup", audio) is False
+    assert holds_other_recording(work_root / "paper-boat", "A Different Lookup") is True

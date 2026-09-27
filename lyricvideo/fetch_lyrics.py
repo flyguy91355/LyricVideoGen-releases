@@ -25,7 +25,7 @@ from typing import Callable
 
 import requests
 
-from .lyric_accuracy import check_lyric_accuracy
+from .lyric_accuracy import UNCLEAR_REPLY_CONCERN, check_lyric_accuracy
 from .lyric_audio_match import AudioMatch, audio_match_badness, audio_match_passes, describe_mismatch
 from .lyric_arbiter import Arbitration, describe_arbitration
 from .lyric_reconcile import SUGGESTION_FILENAME
@@ -292,12 +292,15 @@ def title_variants(title: str, limit: int = 4) -> list[str]:
 
 
 def artist_matches(record_artist: str, wanted: str) -> bool:
+    """Same act: one name's words appear, whole and in order, inside the other's ("Alpha Beta" vs "Alpha Beta and
+    Gamma", a featured artist appended). Never a match inside a word -- "Lorn" is not "Florna Quartet" (issue #7
+    review: a letter-level substring let other artists' records into the edition vote)."""
     if not wanted:
         return True
     a, b = artist_key(record_artist or ""), artist_key(wanted)
     if not a or not b:
         return False
-    return a == b or a in b or b in a
+    return a == b or f" {a} " in f" {b} " or f" {b} " in f" {a} "
 
 
 def _lrclib_get(params: dict) -> dict | None:
@@ -428,19 +431,43 @@ _CREDIT_LINE_RE = re.compile(
 # considered, so a real lyric such as "By: the end of the night" later on stays.
 _BY_CREDIT_RE = re.compile(r"^\s*by\s*[.:：]\s*\S", re.IGNORECASE)
 _MISSING_SPACE_RE = re.compile(r"([,!?;])(?=[A-Za-z])")
+# Section markers are not sung (issue #7 review): Genius's "[Verse 1]" / "[Chorus: Some Singer]" (and any other row
+# that is only a bracketed/braced tag), a "Chorus:" header, or a bare repeat directive ("(x2)", "Repeat chorus").
+_SECTION_TAG_RE = re.compile(r"^[\[{][^\]}]*[\]}]$")
+_LEADING_SECTION_TAG_RE = re.compile(r"^\[[^\]]*\]\s*")
+_SECTION_NAMES = r"(?:pre-?chorus|chorus|verse|bridge|hook|refrain|intro|outro|interlude|instrumental|solo|coda)"
+_SECTION_HEADER_RE = re.compile(rf"^{_SECTION_NAMES}(?:\s*\d+)?\s*:$", re.IGNORECASE)
+# "(Chorus)" / "(Verse 2)" / "(Instrumental)": a bare section name in parentheses is a marker, not a backing vocal.
+_PAREN_SECTION_RE = re.compile(rf"^\(\s*{_SECTION_NAMES}(?:\s*\d+)?\s*\)$", re.IGNORECASE)
+_REPEAT_DIRECTIVE_RE = re.compile(
+    rf"^[(\[]?\s*(?:repeat(?:\s+(?:the\s+)?{_SECTION_NAMES}(?:\s*\d+)?)?(?:\s*[x×]\s*\d+)?|"
+    rf"(?:{_SECTION_NAMES}(?:\s*\d+)?\s*)?(?:[x×]\s*\d+|\d+\s*[x×]))\s*[)\]]?$",
+    re.IGNORECASE,
+)
+
+
+def _strip_section_markup(row: str) -> str:
+    """"" for a row that is only a section marker or repeat directive; a leading "[Chorus]" tag is taken off a row
+    that goes on with lyric text."""
+    if (_SECTION_TAG_RE.match(row) or _SECTION_HEADER_RE.match(row) or _PAREN_SECTION_RE.match(row)
+            or _REPEAT_DIRECTIVE_RE.match(row)):
+        return ""
+    return _LEADING_SECTION_TAG_RE.sub("", row, count=1) if row.startswith("[") else row
 
 
 def _clean_timed_rows(rows: list[tuple[str, float]]) -> tuple[list[str], list[float]]:
-    """Drops provider credit lines and normalises full-width punctuation ("（" -> "(", "，" -> ",") --
-    NetEase's Night Moves showed '作曲 : Bob Seger' as the first lyric for the whole intro, and a stray
-    full-width bracket at a line's end rendered as an empty box. A trailing unclosed "(" is dropped. Each
-    row's time (0.0 when there is none) stays attached to the line it belongs to."""
+    """Drops provider credit lines and section markers ("[Chorus]", "(x2)"), and normalises full-width punctuation
+    ("（" -> "(", "，" -> ",") -- NetEase's Night Moves showed '作曲 : Bob Seger' as the first lyric for the whole
+    intro, a stray full-width bracket at a line's end rendered as an empty box, and Genius's "[Verse 1]" headers were
+    sung and aligned as lyrics. A trailing unclosed "(" is dropped. Each row's time (0.0 when there is none) stays
+    attached to the line it belongs to."""
     lines: list[str] = []
     times: list[float] = []
     for position, (row, when) in enumerate(rows):
         if _CREDIT_LINE_RE.match(row) or (position < 3 and _BY_CREDIT_RE.match(row)):
             continue
         row = unicodedata.normalize("NFKC", row).strip()
+        row = _strip_section_markup(row)
         row = _MISSING_SPACE_RE.sub(r"\1 ", row)      # "Oh,when" -> "Oh, when" (NetEase); "1,000" is left alone
         if row.endswith("(") and row.count("(") > row.count(")"):
             row = row[:-1].rstrip()
@@ -454,22 +481,32 @@ def _plain(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", text).lower())
 
 
+def _is_title_artist_header(text: str, title_key: str, artist_key_: str) -> bool:
+    """True when `text` is the title and the artist, each removed once and in either order, leaving nothing (or a
+    bare "the"): every removal has to find its own copy."""
+    for first, second in ((title_key, artist_key_), (artist_key_, title_key)):
+        if first not in text:
+            continue
+        rest = text.replace(first, "", 1)
+        if second in rest and rest.replace(second, "", 1) in ("", "the"):   # "Wild Horses - The Rolling Stones"
+            return True
+    return False
+
+
 def _drop_header_lines(
     lines: list[str], times: list[float] | None, title: str, artist: str,
 ) -> tuple[list[str], list[float] | None]:
     """A provider's opening 'Rolling Stones - Wild Horses' is a header, not a lyric (real: Wild Horses). Only the first
-    three lines are considered, and only a line made of nothing but the title and the artist (either order); a real
-    lyric that is just the title, or that mentions it later, stays."""
-    wanted = [_plain(title), re.sub(r"^the", "", _plain(artist))]
+    three lines are considered, and only a line made of nothing but the title AND the artist (either order); a real
+    lyric that is just the title, or that mentions it later, stays -- also for a self-titled song, where the title and
+    the artist are the same words, or an artist whose name is part of the title (issue #7 review: both used to drop
+    a first line that was only the title)."""
+    title_key, artist_key_ = _plain(title), re.sub(r"^the", "", _plain(artist))
     keep = list(range(len(lines)))
-    if all(wanted):
+    if title_key and artist_key_:
         for i in range(min(3, len(lines))):
-            leftover = _plain(lines[i])
-            if all(w in leftover for w in wanted):
-                for w in wanted:
-                    leftover = leftover.replace(w, "", 1)
-                if leftover in ("", "the"):                 # "Wild Horses - The Rolling Stones"
-                    keep.remove(i)
+            if _is_title_artist_header(_plain(lines[i]), title_key, artist_key_):
+                keep.remove(i)
     return [lines[i] for i in keep], ([times[i] for i in keep] if times is not None else None)
 
 
@@ -507,6 +544,7 @@ def fetch_lyric_lines_verified(
     reconcile: Callable[[list[str], AudioMatch], tuple[list[str], list[str]] | None] | None = None,
     arbiter: Callable[[list[str], AudioMatch], Arbitration | None] | None = None,
     times_out: dict | None = None,
+    trim: Callable[[list[str], list[float] | None], tuple[list[str], list[float] | None, list[str]]] | None = None,
 ) -> tuple[list[str], str, str]:
     """Like fetch_lyric_lines(), but tries every real source in
     _ACCURACY_CHECK_SOURCES in order, checking each, and returns as soon as
@@ -535,7 +573,12 @@ def fetch_lyric_lines_verified(
     generation is never blocked and lyrics are never fabricated.
 
     `times_out` (a dict) receives "line_times": the chosen source's own timestamp for each returned line when
-    it was a synced source, else None -- a second opinion for the aligner (anchors.combine_anchors)."""
+    it was a synced source, else None -- a second opinion for the aligner (anchors.combine_anchors).
+
+    `trim(lines, times) -> (lines, times, dropped)` (optional) removes lines that are not part of the audio (a
+    provider's credits: lyric_audio_match.drop_unsung_leading_lines / drop_unsung_trailing_lines) from EACH candidate
+    before it is checked, so a candidate is judged -- and its concern numbers its lines -- exactly as it will be saved
+    (issue #7 review). A trim that raises leaves that candidate as it was."""
     def finish(lines, source, concern, times):
         if times_out is not None:
             times_out["line_times"] = times if times and len(times) == len(lines) else None
@@ -558,6 +601,16 @@ def fetch_lyric_lines_verified(
             continue
         lines, times = _hit_to_lines_and_times(hit, duration)
         lines, times = _drop_header_lines(lines, times, title, artist)
+        if trim is not None and lines:
+            try:
+                trimmed, trimmed_times, dropped = trim(lines, times)
+            except Exception as e:  # no audio evidence: keep every line
+                log.warning("Could not check %s's lines against the audio for credits: %s: %s", source, type(e).__name__, e)
+            else:
+                if trimmed:
+                    if dropped:
+                        log.info("%s: removed lines that are not part of the audio (credits): %s", source, "; ".join(dropped))
+                    lines, times = list(trimmed), (list(trimmed_times) if trimmed_times is not None else None)
         if not lines:
             continue
         if audio_check is not None:
@@ -570,9 +623,16 @@ def fetch_lyric_lines_verified(
                 best_concern, best_badness = describe_mismatch(match), badness
                 best_match = match
             continue
-        looks_accurate, concern = check_lyric_accuracy(anthropic_client, title, artist, lines, model=model)
+        try:
+            looks_accurate, concern = check_lyric_accuracy(anthropic_client, title, artist, lines, model=model)
+        except Exception as e:  # never stop the song over the text check; it is held for review instead
+            log.warning("Lyrics text check failed: %s: %s", type(e).__name__, e)
+            looks_accurate = False
+            concern = f"The lyrics text check could not run ({type(e).__name__}); please review these lyrics."
         if looks_accurate:
             return finish(lines, source, "", times)
+        # A failed check must never read as a pass: "" is what the pipeline and upload lists take for "passed".
+        concern = concern.strip() or UNCLEAR_REPLY_CONCERN
         if not best_lines:
             best_lines, best_source, best_concern, best_times = lines, source, concern, times
     if audio_check is not None and arbiter is not None and best_lines and best_match is not None:
@@ -627,4 +687,3 @@ def fetch_lyric_lines(audio_path: Path, title: str, artist: str, duration: float
         log.warning("No lyrics found for '%s' - '%s'", artist, title)
         return []
     return _hit_to_lines(hit, duration)
-    return [row.strip() for row in text.splitlines() if row.strip()]

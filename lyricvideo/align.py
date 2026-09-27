@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-import torch
-import torchaudio
-
+# torch/torchaudio are imported inside the functions that run the model, never at module import (issue #7: the GUI
+# imports pipeline -> align just for the song lists, and loading torch before the window could appear cost seconds).
 from .anchors import Block
 
 
@@ -41,8 +41,10 @@ _ORDINAL_IRREGULAR = {
 }
 _DIGIT_RUN = re.compile(r"\d+")
 _THOUSANDS_COMMA = re.compile(r"(?<=\d),(?=\d)")
+_GROUPED_NUMBER = re.compile(r"(?<![\d,])\d{1,3}(?:,\d{3})+(?!\d)")    # "10,000", "1,000,000": a quantity, read as one
 _DIGIT_HYPHEN = re.compile(r"(?<=\d)-(?=\d)")
-_ORDINAL_SUFFIX = re.compile(r"^(\d+)(st|nd|rd|th)$")
+_ORDINAL_SUFFIX = re.compile(r"^\W*(\d+)(st|nd|rd|th)\W*$")            # "1st", and "1st," / "(3rd)" with punctuation on
+_CARDINAL_LIMIT = 10 ** 12
 
 
 def _cardinal(n: int) -> str:
@@ -104,9 +106,20 @@ def _normalize_word_for_alignment(word: str) -> str:
     star token rather than an error. Real incident (GitHub issue #3,
     2026-09-14): a lyric line containing the word '31' raised
     AlignmentError here, aborting the whole align stage -- and since Redo
-    re-fetches the same lyrics, that song could never be processed at all."""
-    lowered = word.lower().replace("&", " and ")
-    lowered = _THOUSANDS_COMMA.sub("", lowered)   # "1,000" -> "1000"
+    re-fetches the same lyrics, that song could never be processed at all.
+    Accented letters are folded to their base letter ('señor' -> 'senor',
+    'café' -> 'cafe') instead of dropped, a comma-grouped number is read as
+    the quantity it is ('10,000' -> 'tenthousand', never digit by digit), and
+    an ordinal keeps its reading with punctuation attached ('1st,' ->
+    'first') -- issue #7 review."""
+    folded = unicodedata.normalize("NFKD", word.lower())
+    lowered = "".join(c for c in folded if not unicodedata.combining(c)).replace("&", " and ")
+    lowered = _GROUPED_NUMBER.sub(
+        lambda m: m.group() if int(m.group().replace(",", "")) >= _CARDINAL_LIMIT
+        else f" {_cardinal(int(m.group().replace(',', '')))} ",
+        lowered,
+    )
+    lowered = _THOUSANDS_COMMA.sub("", lowered)   # any other digit,digit comma ("1,2,3" -> "123")
     lowered = _DIGIT_HYPHEN.sub("", lowered)      # "867-5309" -> one 7-digit run, read digit by digit
     ordinal = _ORDINAL_SUFFIX.match(lowered.strip())
     if ordinal:
@@ -141,6 +154,8 @@ def _emission_in_pieces(model, waveform, piece_seconds: float = 75.0, pad_second
     are unchanged. Measured on real audio (Night Moves, 150 s): with 75 s pieces and 4 s padding no word's timing moved by
     more than 0.26 s and 94% moved by under 40 ms; 30 s pieces moved a hummed 'Mm-mm' by 3 s, so keep pieces long. A song no
     longer than one padded piece is simply run in one pass, as before."""
+    import torch
+
     samples = waveform.shape[1]
     piece = int(piece_seconds * sample_rate) // _FRAME_HOP * _FRAME_HOP
     pad = int(pad_seconds * sample_rate) // _FRAME_HOP * _FRAME_HOP
@@ -156,6 +171,9 @@ def _emission_in_pieces(model, waveform, piece_seconds: float = 75.0, pad_second
 
 
 def prepare_alignment(vocals_wav_path: Path, bundle=None) -> PreparedAlignment:
+    import torch
+    import torchaudio
+
     bundle = bundle or torchaudio.pipelines.MMS_FA
     model = bundle.get_model()
 
@@ -283,6 +301,8 @@ def align_words_anchored(
 
 def vocal_loudness(vocals_wav_path: Path, hop: float = 0.5) -> list[float]:
     """RMS level of the vocal track for every `hop` seconds (0.0 = silence)."""
+    import torchaudio
+
     waveform, sample_rate = torchaudio.load(str(vocals_wav_path))
     mono = waveform.mean(dim=0)
     step = max(1, int(hop * sample_rate))

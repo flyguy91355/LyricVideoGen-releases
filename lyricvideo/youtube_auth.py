@@ -6,13 +6,34 @@ See docs/superpowers/specs/2026-09-10-youtube-upload-design.md."""
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from pathlib import Path
+
+from .youtube_state import atomic_write_text
 
 log = logging.getLogger("playalongvideoproduction")
 
 CREDENTIALS_DIR = Path.home() / ".playalongvideoproduction"
 TOKEN_FILE = CREDENTIALS_DIR / "youtube_token.json"
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
+
+# The token file holds the channel's refresh token (full youtube.force-ssl control), so it is written owner-only (0600,
+# in a 0700 folder) and atomically; and only one thread at a time may read-refresh-rewrite it -- the tick, upload and
+# Approve workers all call load_credentials(), and after the hourly expiry two of them refreshing and rewriting the file
+# at once could leave it unparseable ("not connected" until the owner re-consents). Issue #7 review, F141.
+_TOKEN_LOCK = threading.RLock()
+
+
+def _write_token(token_path: Path, text: str) -> None:
+    token_path = Path(token_path)
+    token_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.name == "posix":
+        try:
+            os.chmod(token_path.parent, 0o700)
+        except OSError as exc:
+            log.warning("Could not restrict %s to owner-only: %s", token_path.parent, exc)
+    atomic_write_text(token_path, text, mode=0o600)
 
 
 def connect(client_secrets_path: Path, token_path: Path = TOKEN_FILE):
@@ -24,14 +45,21 @@ def connect(client_secrets_path: Path, token_path: Path = TOKEN_FILE):
 
     flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets_path), SCOPES)
     credentials = flow.run_local_server(port=0)
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(credentials.to_json(), encoding="utf-8")
+    with _TOKEN_LOCK:
+        _write_token(token_path, credentials.to_json())
     return credentials
 
 
 def load_credentials(token_path: Path = TOKEN_FILE):
     """None means "not connected" (never connected, or the stored token is
-    unusable) -- callers always treat None this way, never raise."""
+    unusable) -- callers always treat None this way, never raise. Serialized
+    (a second caller waits, then reads the token the first one just
+    refreshed instead of refreshing again)."""
+    with _TOKEN_LOCK:
+        return _load_credentials_locked(Path(token_path))
+
+
+def _load_credentials_locked(token_path: Path):
     if not token_path.exists():
         return None
     from google.auth.transport.requests import Request
@@ -46,7 +74,7 @@ def load_credentials(token_path: Path = TOKEN_FILE):
     if credentials and credentials.expired and credentials.refresh_token:
         try:
             credentials.refresh(Request())
-            token_path.write_text(credentials.to_json(), encoding="utf-8")
+            _write_token(token_path, credentials.to_json())
         except Exception as exc:
             log.warning("Could not refresh YouTube credentials: %s", exc)
             return None

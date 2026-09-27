@@ -11,19 +11,29 @@ _PAREN_NOISE = re.compile(
     r"live|explicit|clean|mono|stereo|visuali[sz]er|4k|1080p|from .*)[^\)\]\}]*[\)\]\}]",
     re.IGNORECASE,
 )
-# A track number needs a separator ("01 - ", "01. ", "1) ") or a leading zero ("01 Song");
-# a bare number followed by a space is part of the title ("99 Luftballons", "21 Guns").
-_TRACK_PREFIX = re.compile(r"^\s*(?:\d{1,3}\s*[-._)\]]\s*|0\d{1,2}\s+)")
+# A FILENAME's leading track number (issue #7 review): only a number with a leading zero ("01 - ", "01.", "01_",
+# "01 Song") or one or two digits whose separator is followed by a space ("1. Song", "12) Song", "3 - Song"). A
+# number glued to more of the title is part of it ("19-2000", "5.15", "1-800-273-8255", "2-4-6-8 Motorway"), as is
+# a bare number before a space ("99 Luftballons", "21 Guns"), and a three-digit number before " - " is far more
+# often a band named with a number ("747 - Some Song") than a track past 99.
+_TRACK_PREFIX = re.compile(r"^\s*(?:0\d{1,2}(?:\s*[-._)\]]\s*|\s+)|\d{1,2}\s*[-._)\]]\s+)")
 _ARTIST_STOP_WORDS = {"the", "and", "n", "feat", "featuring", "ft", "with"}
 _SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "in", "of", "on", "or", "the", "to", "vs"}
 
 
+def strip_title_noise(text: str) -> str:
+    """'(Official Video)'-style noise, extra spaces and stray separators removed; a leading number is KEPT -- for a
+    title from tags or MusicBrainz, which never carry a track number ("19-2000" is the title itself)."""
+    text = _PAREN_NOISE.sub("", text)
+    return re.sub(r"\s+", " ", text).strip(" -_")
+
+
 def clean_title(text: str) -> str:
-    """Remove '(Official Video)'-style noise and leading track numbers."""
+    """A title taken from a FILENAME: the noise strip_title_noise removes, plus a real track-number prefix (see
+    _TRACK_PREFIX) and separator debris."""
     text = _PAREN_NOISE.sub("", text)
     text = _TRACK_PREFIX.sub("", text)
-    text = re.sub(r"\s+", " ", text).strip(" -_.")
-    return text
+    return re.sub(r"\s+", " ", text).strip(" -_.")
 
 
 def normalize(text: str) -> str:

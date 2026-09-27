@@ -51,3 +51,33 @@ def test_chord_shapes_dict_has_exactly_85_entries():
     """17 distinct root spellings (7 naturals need one spelling, 5 accidentals
     need both sharp and flat) x 5 qualities."""
     assert len(CHORD_SHAPES) == 85
+
+
+def test_em7_is_the_standard_open_voicing():
+    """chords-db's first E m7 entry is the movable 2x222x barre slid to the nut: 0x000x, open strings with two of
+    them muted and no fretting hand to mute them -- unplayable for the beginners this app is for (issue #7 review)."""
+    shape = get_chord_shape("Em7")
+    assert shape.frets == (0, 2, 2, 0, 3, 0)
+    # the same two fingers as Em (022000), plus the pinky
+    assert shape.fingers[:3] == get_chord_shape("Em").fingers[:3] == (0, 2, 3)
+    assert shape.fingers == (0, 2, 3, 0, 4, 0)
+    assert shape.base_fret == 1
+
+
+def test_no_shape_puts_a_finger_on_an_open_or_muted_string():
+    for label, shape in CHORD_SHAPES.items():
+        for fret, finger in zip(shape.frets, shape.fingers):
+            if fret <= 0:
+                assert finger == 0, f"{label}: finger {finger} on a string that isn't fretted"
+
+
+def test_no_nut_shape_mutes_a_string_between_two_open_ones():
+    """Nothing can mute a string that sits between two ringing open strings at the nut."""
+    for label, shape in CHORD_SHAPES.items():
+        if shape.base_fret != 1:
+            continue
+        for i in range(1, 5):
+            if shape.frets[i] == -1:
+                left_open = 0 in shape.frets[:i]
+                right_open = 0 in shape.frets[i + 1:]
+                assert not (left_open and right_open), f"{label}: muted string {i} between open strings"

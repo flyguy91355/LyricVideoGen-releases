@@ -5,10 +5,14 @@ render.py/detect_chords.py."""
 
 from __future__ import annotations
 
-from PIL import Image, ImageDraw
+import math
+from dataclasses import dataclass
+from functools import lru_cache
+
+from PIL import Image, ImageDraw, ImageFont
 
 from .chord_shapes import ChordShape, get_chord_shape
-from .render import load_font
+from .render import composite_patch, load_font, overlay_patch
 
 ACCENT_COLOR_DEFAULT = (56, 189, 248)
 TEXT_COLOR_DEFAULT = (255, 255, 255)
@@ -25,6 +29,9 @@ _PANEL_ALPHA = 235
 _LABEL_HEIGHT_FRAC = 0.20       # fraction of diagram height reserved for the chord name
 _MUTE_OPEN_HEIGHT_FRAC = 0.12   # fraction reserved for the X/O row above the nut
 _GRID_SIDE_PAD_FRAC = 0.12      # fraction of diagram width padded on each side of the string grid
+_DOT_RADIUS_FRAC = 0.32         # fretted-dot radius, as a fraction of the smaller string/fret spacing
+_FRET_TAG_EDGE_GAP = 4          # px between the panel's left edge (incl. the 3 px highlight outline) and "Nfr"
+_FRET_TAG_DOT_GAP = 3           # px between "Nfr" and the low-E string's dot
 
 _LEGEND_MARGIN_FRAC = 0.03
 _LEGEND_GAP_FRAC = 0.012
@@ -63,24 +70,14 @@ def draw_single_chord_diagram(
     if highlighted:
         draw.rounded_rectangle((0, 0, bw - 1, bh - 1), radius=6, outline=(*accent_color, 255), width=3)
 
-    label_h = int(bh * _LABEL_HEIGHT_FRAC)
-    xo_h = int(bh * _MUTE_OPEN_HEIGHT_FRAC)
-    grid_y0 = label_h + xo_h
-    grid_h = bh - grid_y0 - 4
-    side_pad = int(bw * _GRID_SIDE_PAD_FRAC)
-    grid_x0 = side_pad
-    grid_w = bw - 2 * side_pad
-
-    label_font = load_font(font_path, max(10, label_h - 4))
-    small_font = load_font(font_path, max(8, xo_h - 2))
-    finger_font = load_font(font_path, max(8, int(grid_h / 4 * 0.5)))
+    geometry = _diagram_geometry(shape, box_size, font_path, draw)
+    label_h, xo_h = geometry.label_h, geometry.xo_h
+    string_xs, fret_ys, dot_radius = geometry.string_xs, geometry.fret_ys, geometry.dot_radius
+    label_font, small_font, finger_font = geometry.label_font, geometry.small_font, geometry.finger_font
 
     label_color = accent_color if highlighted else text_color
     label_w = draw.textlength(label, font=label_font)
     draw.text((bw / 2 - label_w / 2, 2), label, font=label_font, fill=(*label_color, 255))
-
-    string_xs = [grid_x0 + i * (grid_w / 5) for i in range(6)]
-    fret_ys = [grid_y0 + r * (grid_h / 4) for r in range(5)]
 
     for r, fy in enumerate(fret_ys):
         line_width = 3 if (r == 0 and shape.base_fret == 1) else 1
@@ -88,16 +85,7 @@ def draw_single_chord_diagram(
     for sx in string_xs:
         draw.line([(sx, fret_ys[0]), (sx, fret_ys[-1])], fill=(*dim_text_color, 255), width=1)
 
-    if shape.base_fret != 1:
-        tag = f"{shape.base_fret}fr"
-        tag_w = draw.textlength(tag, font=small_font)
-        draw.text(
-            (min(bw - tag_w - 2, string_xs[-1] + 4), fret_ys[0] - small_font.size * 0.5),
-            tag, font=small_font, fill=(*dim_text_color, 255),
-        )
-
     xo_y = label_h + (xo_h - small_font.size) / 2
-    dot_radius = min(grid_w / 5, grid_h / 4) * 0.32
     dot_color = accent_color if highlighted else dim_text_color
     for i in range(6):
         f = shape.frets[i]
@@ -121,7 +109,72 @@ def draw_single_chord_diagram(
                     ftext, font=finger_font, fill=(*panel_color, 255),
                 )
 
+    if geometry.fret_tag is not None:
+        # Drawn last, in its own clear space left of the grid, so no string, fret line or dot crosses it.
+        draw.text(geometry.fret_tag_xy, geometry.fret_tag, font=small_font, fill=(*dim_text_color, 255))
+
     return img
+
+
+@dataclass(frozen=True)
+class _DiagramGeometry:
+    label_h: int
+    xo_h: int
+    string_xs: list[float]      # low E .. high e
+    fret_ys: list[float]        # the 5 horizontal lines (top = nut, or the base fret's own row)
+    dot_radius: float
+    label_font: ImageFont.FreeTypeFont
+    small_font: ImageFont.FreeTypeFont
+    finger_font: ImageFont.FreeTypeFont
+    fret_tag: str | None = None                      # "Nfr" for a shape that doesn't start at the nut
+    fret_tag_xy: tuple[float, float] | None = None   # where draw.text() puts it
+
+
+def _diagram_geometry(
+    shape: ChordShape, box_size: tuple[int, int], font_path: str, draw: ImageDraw.ImageDraw,
+) -> _DiagramGeometry:
+    """Where every part of one fingering diagram goes. A nut shape keeps the original symmetric grid. A shape
+    higher up the neck gets its "Nfr" tag LEFT of the low-E string, centred on the first fret row (the usual
+    chord-chart spot); the default 12% side pad is narrower than the tag, so the left pad widens just enough. The
+    tag used to be squeezed in at the right, where the high-e string, the top fret line and that string's barre
+    dot all ran through it on every such shape (Abm/G#m, Abmaj7/G#maj7, C#m7/Dbm7)."""
+    bw, bh = box_size
+    label_h = int(bh * _LABEL_HEIGHT_FRAC)
+    xo_h = int(bh * _MUTE_OPEN_HEIGHT_FRAC)
+    grid_y0 = label_h + xo_h
+    grid_h = bh - grid_y0 - 4
+    side_pad = int(bw * _GRID_SIDE_PAD_FRAC)
+
+    label_font = load_font(font_path, max(10, label_h - 4))
+    small_font = load_font(font_path, max(8, xo_h - 2))
+    finger_font = load_font(font_path, max(8, int(grid_h / 4 * 0.5)))
+
+    fret_tag = f"{shape.base_fret}fr" if shape.base_fret != 1 else None
+    left_pad = side_pad
+    tag_w = 0.0
+    if fret_tag is not None:
+        tag_w = draw.textlength(fret_tag, font=small_font)
+        # The dot radius only shrinks as the grid narrows, so the full-width radius is a safe bound here.
+        widest_dot = min((bw - 2 * side_pad) / 5, grid_h / 4) * _DOT_RADIUS_FRAC
+        left_pad = max(side_pad, math.ceil(_FRET_TAG_EDGE_GAP + tag_w + _FRET_TAG_DOT_GAP + widest_dot))
+    grid_w = bw - left_pad - side_pad
+
+    string_xs = [left_pad + i * (grid_w / 5) for i in range(6)]
+    fret_ys = [grid_y0 + r * (grid_h / 4) for r in range(5)]
+    dot_radius = min(grid_w / 5, grid_h / 4) * _DOT_RADIUS_FRAC
+
+    fret_tag_xy = None
+    if fret_tag is not None:
+        first_row_center_y = (fret_ys[0] + fret_ys[1]) / 2
+        fret_tag_xy = (
+            string_xs[0] - dot_radius - _FRET_TAG_DOT_GAP - tag_w,
+            first_row_center_y - small_font.size / 2,
+        )
+    return _DiagramGeometry(
+        label_h=label_h, xo_h=xo_h, string_xs=string_xs, fret_ys=fret_ys, dot_radius=dot_radius,
+        label_font=label_font, small_font=small_font, finger_font=finger_font,
+        fret_tag=fret_tag, fret_tag_xy=fret_tag_xy,
+    )
 
 
 def _legend_layout(n_chords: int, frame_size: tuple[int, int], size_scale: float = 1.0) -> tuple[int, int]:
@@ -143,7 +196,10 @@ def _legend_layout(n_chords: int, frame_size: tuple[int, int], size_scale: float
 
     gap = w * _LEGEND_GAP_FRAC
     max_row_width = w * _LEGEND_MAX_ROW_WIDTH_FRAC
-    max_legend_height = h * _LEGEND_MAX_HEIGHT_FRAC
+    # draw_chord_legend starts drawing _LEGEND_MARGIN_FRAC down from the top, so that margin comes out of the
+    # height budget: the legend's bottom then never passes _LEGEND_MAX_HEIGHT_FRAC of the frame. Without it a
+    # 2-row legend (6-10 chords) reached 0.38h and draw_capo_badge (placed at 0.35h + a gap) covered its second row.
+    max_legend_height = h * _LEGEND_MAX_HEIGHT_FRAC - int(h * _LEGEND_MARGIN_FRAC)
 
     default_per_row = max(1, int((max_row_width + gap) // (default_box_w + gap)))
     rows = min(_LEGEND_MAX_ROWS, max(1, -(-n_chords // default_per_row)))  # ceil division
@@ -176,14 +232,46 @@ def draw_chord_legend(
     as needed (see _legend_layout for the sizing/wrapping guarantee). A label
     get_chord_shape() can't resolve is skipped, not an error. Returns a new
     image; `frame` is not mutated (matches draw_scene/draw_chord_bar's own
-    copy-on-write style)."""
+    copy-on-write style).
+
+    The legend only changes when the highlighted chord does, so each (chords, highlighted chord, size, colors)
+    state is drawn once and cached as a small patch (_legend_patch); a frame only composites that patch's own box
+    -- pixel-identical to the old per-frame full redraw + whole-frame composite, which cost ~10 ms a frame."""
     if not show_chord_legend or not chord_labels:
         return frame
 
+    patch = _legend_patch(
+        tuple(chord_labels), current_label, font_path, frame.size, tuple(frame_size), size_scale,
+        tuple(accent_color), tuple(text_color), tuple(dim_text_color), tuple(panel_color), panel_alpha,
+    )
+    if patch is None:
+        return frame
+    return composite_patch(frame, patch)
+
+
+# A song has one state per unique chord plus "none highlighted"; a miss only costs one redraw (~10 ms) at a chord
+# change, so a small cache is plenty and keeps a 4K legend's patches (~6 MB each) from piling up.
+_LEGEND_PATCH_CACHE_SIZE = 8
+
+
+@lru_cache(maxsize=_LEGEND_PATCH_CACHE_SIZE)
+def _legend_patch(
+    chord_labels: tuple[str, ...],
+    current_label: str | None,
+    font_path: str,
+    canvas_size: tuple[int, int],
+    frame_size: tuple[int, int],
+    size_scale: float,
+    accent_color: tuple[int, int, int],
+    text_color: tuple[int, int, int],
+    dim_text_color: tuple[int, int, int],
+    panel_color: tuple[int, int, int],
+    panel_alpha: int,
+) -> tuple[Image.Image, tuple[int, int]] | None:
     resolvable = [(label, get_chord_shape(label)) for label in chord_labels]
     resolvable = [(label, shape) for label, shape in resolvable if shape is not None]
     if not resolvable:
-        return frame
+        return None
 
     w, h = frame_size
     box_w, box_h = _legend_layout(len(resolvable), frame_size, size_scale)
@@ -192,7 +280,7 @@ def draw_chord_legend(
     margin_y = int(h * _LEGEND_MARGIN_FRAC)
     max_row_width = int(w * _LEGEND_MAX_ROW_WIDTH_FRAC)
 
-    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     row_start_x = margin_x
     x, y = margin_x, margin_y
 
@@ -209,8 +297,7 @@ def draw_chord_legend(
         overlay.alpha_composite(diagram, (x, y))
         x += box_w + gap
 
-    composited = Image.alpha_composite(frame.convert("RGBA"), overlay)
-    return composited.convert("RGB")
+    return overlay_patch(overlay)
 
 
 _CAPO_BADGE_GAP_FRAC = 0.015     # clear space below the legend's own reserved height before the badge starts
@@ -238,12 +325,31 @@ def draw_capo_badge(
     mutated (matches draw_chord_legend's own copy-on-write style)."""
     if capo is None:
         return frame
+    patch = _capo_badge_patch(
+        capo, font_path, frame.size, tuple(frame_size), tuple(accent_color), tuple(text_color), tuple(panel_color),
+        panel_alpha,
+    )
+    return composite_patch(frame, patch)
 
+
+@lru_cache(maxsize=4)
+def _capo_badge_patch(
+    capo: int,
+    font_path: str,
+    canvas_size: tuple[int, int],
+    frame_size: tuple[int, int],
+    accent_color: tuple[int, int, int],
+    text_color: tuple[int, int, int],
+    panel_color: tuple[int, int, int],
+    panel_alpha: int,
+) -> tuple[Image.Image, tuple[int, int]] | None:
+    """The badge never changes during a render: drawn once, composited per frame over its own small box only
+    (the old per-frame full-frame overlay cost ~7 ms a frame for a ~130x45 px box)."""
     w, h = frame_size
     margin_x = int(w * _LEGEND_MARGIN_FRAC)
     y = int(h * _LEGEND_MAX_HEIGHT_FRAC) + int(h * _CAPO_BADGE_GAP_FRAC)
 
-    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = load_font(font_path, int(h * 0.022))
     label = f"CAPO {capo}"
@@ -255,5 +361,10 @@ def draw_capo_badge(
         box, radius=int(_CAPO_BADGE_PAD_Y * 0.8), fill=(*panel_color, panel_alpha), outline=(*accent_color, 255), width=2,
     )
     draw.text((margin_x + _CAPO_BADGE_PAD_X, y + _CAPO_BADGE_PAD_Y), label, font=font, fill=(*text_color, 255))
+    return overlay_patch(overlay)
 
-    return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
+
+def clear_overlay_caches() -> None:
+    """Drops the cached legend/badge patches (assemble_video calls this when a render ends)."""
+    _legend_patch.cache_clear()
+    _capo_badge_patch.cache_clear()

@@ -4,8 +4,31 @@ burned-in Key badge is wrong ("📌 Song key: C minor (not D minor as shown in t
 
 from __future__ import annotations
 
-KEY_NOTE_MARKER = "📌"  # a description's FIRST paragraph starting with this is a key note (the earlier long
-                        # "📌 Correction: ..." notes count too, so the short one replaces them)
+KEY_NOTE_MARKER = "📌"  # every key note starts with this (the short "Song key" one, and the earlier long
+                        # "📌 Correction: ..." notes, which the short one replaces)
+# A paragraph starting with one of these is a key note WHEREVER it sits -- e.g. pushed below the support template's tip
+# line by an update_support_description run (issue #7 review, F054). These are the only two formats ever written; any
+# OTHER 📌 paragraph (say a support template whose top line starts with 📌) is ordinary text and is never lifted out
+# or replaced -- treating every leading 📌 paragraph as a note would delete that line, or duplicate it on a re-render.
+KEY_NOTE_PREFIXES = (f"{KEY_NOTE_MARKER} Song key:", f"{KEY_NOTE_MARKER} Correction")
+
+
+def _is_key_note(paragraph: str) -> bool:
+    return paragraph.strip().startswith(KEY_NOTE_PREFIXES)
+
+
+def split_key_note(description: str) -> tuple[str, str]:
+    """(the description's key note, everything else). The note is the top-most key-note paragraph (a "📌 Song key:" /
+    "📌 Correction" paragraph, wherever it sits); EVERY key-note paragraph is taken out of the rest, so a stale or
+    duplicated note can never linger in the body. ("", description) when there is none."""
+    paragraphs = (description or "").strip().split("\n\n")
+    note, rest = "", []
+    for paragraph in paragraphs:
+        if _is_key_note(paragraph):
+            note = note or paragraph.strip()
+            continue
+        rest.append(paragraph)
+    return note, "\n\n".join(rest).strip()
 
 
 def build_key_note(true_key: str, shown_key: str) -> str:
@@ -18,13 +41,11 @@ def build_key_note(true_key: str, shown_key: str) -> str:
 
 
 def apply_key_note(description: str, true_key: str, shown_key: str) -> str:
-    """The description with the key note as its first paragraph: an existing leading key note (short or the older
-    long "Correction") is replaced, anything else stays exactly as it was. Safe to apply twice."""
+    """The description with the key note as its first paragraph: every existing key note (short or the older long
+    "Correction"; leading, or pushed further down by a support-template re-render) is removed first, anything else
+    stays exactly as it was. Safe to apply twice, and never leaves two notes (issue #7 review, F054)."""
     note = build_key_note(true_key, shown_key)
-    text = (description or "").strip()
-    first, sep, rest = text.partition("\n\n")
-    if first.startswith(KEY_NOTE_MARKER):
-        text = rest.strip() if sep else ""
+    _old_note, text = split_key_note(description)
     return f"{note}\n\n{text}" if text else note
 
 

@@ -80,7 +80,11 @@ CHORD_SHAPES: dict[str, ChordShape] = {
     'Ebm7': ChordShape(frets=(-1, -1, 1, 3, 2, 2), fingers=(0, 0, 1, 4, 2, 3), base_fret=1),
     'Ebmaj7': ChordShape(frets=(-1, 1, 1, 3, 3, 3), fingers=(0, 1, 1, 3, 3, 3), base_fret=1),
     'Em': ChordShape(frets=(0, 2, 2, 0, 0, 0), fingers=(0, 2, 3, 0, 0, 0), base_fret=1),
-    'Em7': ChordShape(frets=(0, -1, 0, 0, 0, -1), fingers=(2, 0, 3, 3, 3, 0), base_fret=1),
+    # Em7 is the one hand-picked entry: chords-db's first E m7 position is the movable 2x222x m7 barre slid down
+    # to the nut (0x000x -- strum open strings while muting two of them with no fretting hand), which the
+    # "lowest baseFret, first entry" rule picked up. 022030 is the standard open voicing (also one of chords-db's
+    # own E m7 positions), fingered like Em's own 2/3 so going Em -> Em7 only adds the pinky.
+    'Em7': ChordShape(frets=(0, 2, 2, 0, 3, 0), fingers=(0, 2, 3, 0, 4, 0), base_fret=1),
     'Emaj7': ChordShape(frets=(0, 2, 1, 1, 0, 0), fingers=(0, 3, 1, 2, 0, 0), base_fret=1),
     'F': ChordShape(frets=(1, 3, 3, 2, 1, 1), fingers=(1, 3, 4, 2, 1, 1), base_fret=1),
     'F#': ChordShape(frets=(2, 4, 4, 3, 2, 2), fingers=(1, 3, 4, 2, 1, 1), base_fret=1),

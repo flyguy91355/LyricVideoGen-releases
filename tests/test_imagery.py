@@ -39,6 +39,17 @@ class _FakeAnthropicClient:
         self.messages = _FakeMessages(text)
 
 
+def _real_png_bytes(color=(200, 100, 50)) -> bytes:
+    """A small, complete, decodable picture that is not the plain-colour placeholder."""
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 36), color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def test_get_or_generate_image_reuses_backup_directory_instead_of_regenerating(tmp_path, monkeypatch):
     from lyricvideo.models import line_hash
 
@@ -51,7 +62,7 @@ def test_get_or_generate_image_reuses_backup_directory_instead_of_regenerating(t
     backup_dir = tmp_path / "images_backup_old"
     backup_dir.mkdir()
     key = line_hash("same line")
-    (backup_dir / f"{key}.png").write_bytes(b"previously-paid-for-bytes")
+    (backup_dir / f"{key}.png").write_bytes(_real_png_bytes())
 
     cache_dir = tmp_path / "images"
     path = get_or_generate_image(
@@ -59,7 +70,7 @@ def test_get_or_generate_image_reuses_backup_directory_instead_of_regenerating(t
         extra_cache_dirs=[backup_dir],
     )
 
-    assert path.read_bytes() == b"previously-paid-for-bytes"
+    assert path.read_bytes() == _real_png_bytes()
     assert calls["n"] == 0
 
 
@@ -80,7 +91,7 @@ def test_get_or_generate_image_uses_cache(tmp_path, monkeypatch):
 
     def fake_generate(replicate_token, prompt, out_path, model="black-forest-labs/flux-schnell"):
         calls["n"] += 1
-        out_path.write_bytes(b"fake-png-bytes")
+        out_path.write_bytes(_real_png_bytes())
         return out_path
 
     monkeypatch.setattr("lyricvideo.imagery.generate_line_image", fake_generate)
@@ -427,12 +438,12 @@ def test_the_library_is_consulted_once_and_the_saved_prompt_is_the_one_that_succ
 def test_an_already_cached_image_never_touches_the_library(tmp_path):
     from lyricvideo.models import line_hash
 
-    (tmp_path / f"{line_hash('same line')}.png").write_bytes(b"already here")
+    (tmp_path / f"{line_hash('same line')}.png").write_bytes(_real_png_bytes())
     library = _StubLibrary(hit_bytes=b"should not be used")
 
     path = get_or_generate_image(_FakeAnthropicClient(), "tok", "gist", "same line", tmp_path, library=library)
 
-    assert path.read_bytes() == b"already here"
+    assert path.read_bytes() == _real_png_bytes()
     assert library.lookups == [] and library.purchases == []
 
 
@@ -449,3 +460,234 @@ def test_a_failed_generation_never_files_a_placeholder_into_the_library(tmp_path
     get_or_generate_image(_FailingClient(), "tok", "gist", "a broken line", tmp_path, library=library)
 
     assert library.purchases == []
+
+
+# --- issue #7 review: placeholders and broken files are cache misses; Replicate network blips; atomic writes ---
+
+
+def _counting_generate(calls, color=(200, 100, 50)):
+    def fake_generate(token, prompt, out_path, model="black-forest-labs/flux-schnell"):
+        calls.append(prompt)
+        out_path.write_bytes(_real_png_bytes(color))
+        return out_path
+
+    return fake_generate
+
+
+def test_a_cached_plain_colour_placeholder_is_generated_again(tmp_path, monkeypatch):
+    """Run 1 had Replicate down for the whole song, leaving only placeholders; run 2 (a Redo that reuses images)
+    must retry them, not keep a flat-colour video forever."""
+    from lyricvideo.models import line_hash
+
+    cached = _make_image(tmp_path / f"{line_hash('a line')}.png", (30, 30, 40))
+    assert is_fallback_image(cached)
+    calls = []
+    monkeypatch.setattr("lyricvideo.imagery.generate_line_image", _counting_generate(calls))
+
+    path = get_or_generate_image(_FakeAnthropicClient(), "tok", "gist", "a line", tmp_path)
+
+    assert calls == ["a moody forest at dusk"]
+    assert path == cached and not is_fallback_image(path)
+
+
+def test_a_placeholder_in_a_backup_folder_is_not_copied_in(tmp_path, monkeypatch):
+    from lyricvideo.models import line_hash
+
+    backup = tmp_path / "images_backup_old"
+    backup.mkdir()
+    _make_image(backup / f"{line_hash('a line')}.png", (30, 30, 40))
+    calls = []
+    monkeypatch.setattr("lyricvideo.imagery.generate_line_image", _counting_generate(calls))
+
+    path = get_or_generate_image(
+        _FakeAnthropicClient(), "tok", "gist", "a line", tmp_path / "images", extra_cache_dirs=[backup],
+    )
+
+    assert len(calls) == 1 and not is_fallback_image(path)
+
+
+def test_a_truncated_cached_image_is_generated_again_instead_of_crashing_the_render(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from lyricvideo.models import line_hash
+
+    import numpy as np
+
+    noisy = Image.fromarray((np.random.default_rng(1).random((90, 160, 3)) * 255).astype("uint8"))
+    whole = tmp_path / "whole.png"
+    noisy.save(whole)
+    cached = tmp_path / "images" / f"{line_hash('a line')}.png"
+    cached.parent.mkdir()
+    cached.write_bytes(whole.read_bytes()[: whole.stat().st_size // 2])      # cut short by a kill / full disk
+    calls = []
+    monkeypatch.setattr("lyricvideo.imagery.generate_line_image", _counting_generate(calls))
+
+    path = get_or_generate_image(_FakeAnthropicClient(), "tok", "gist", "a line", tmp_path / "images")
+
+    assert len(calls) == 1
+    with Image.open(path) as img:
+        img.convert("RGB")          # the render's own call: must not raise "image file is truncated"
+
+
+class _PollingHttpClient:
+    """create -> 'starting' (with get and cancel urls); each status GET follows `poll_script` (an exception to
+    raise, or a status string); the output GET follows `download_script` (an exception or None for success)."""
+
+    def __init__(self, poll_script, download_script=(None,), create_statuses=(200,)):
+        self.poll_script = list(poll_script)
+        self.download_script = list(download_script)
+        self.create_statuses = list(create_statuses)
+        self.creates = 0
+        self.cancels = 0
+        self.polls = 0
+        self.downloads = 0
+
+    def post(self, url, **kwargs):
+        if url.endswith("/cancel"):
+            self.cancels += 1
+            return _FakeHttpResponse({})
+        self.creates += 1
+        status = self.create_statuses.pop(0) if self.create_statuses else 200
+        response = _FakeHttpResponse(
+            {"id": "p1", "status": "starting", "output": None,
+             "urls": {"get": "https://api/p1", "cancel": "https://api/p1/cancel"}},
+            status_code=status,
+        )
+        response.headers = {"retry-after": "2"}
+        return response
+
+    def get(self, url, **kwargs):
+        if url == "https://api/p1":
+            self.polls += 1
+            step = self.poll_script.pop(0) if self.poll_script else "processing"
+            if isinstance(step, Exception):
+                raise step
+            output = ["https://img/out.png"] if step == "succeeded" else None
+            return _FakeHttpResponse({"status": step, "output": output})
+        self.downloads += 1
+        step = self.download_script.pop(0) if self.download_script else None
+        if isinstance(step, Exception):
+            raise step
+        return _FakeHttpResponse(content=_real_png_bytes())
+
+
+def test_a_network_blip_while_polling_keeps_polling_the_same_prediction(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.imagery.REPLICATE_POLL_INTERVAL_SECONDS", 0.0)
+    client = _PollingHttpClient([httpx.ReadTimeout("read timed out"), httpx.ConnectError("reset"), "succeeded"])
+
+    out = generate_line_image("tok", "a prompt", tmp_path / "img.png", http_client=client)
+
+    assert out.read_bytes() == _real_png_bytes()
+    assert client.creates == 1 and client.polls == 3 and client.cancels == 0
+
+
+def test_a_timed_out_prediction_is_cancelled_before_giving_up(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.imagery.REPLICATE_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr("lyricvideo.imagery.REPLICATE_POLL_TIMEOUT_SECONDS", 0.0)
+    client = _PollingHttpClient([])
+
+    with pytest.raises(ImageGenError):
+        generate_line_image("tok", "a prompt", tmp_path / "img.png", http_client=client)
+
+    assert client.cancels == 1
+    assert not (tmp_path / "img.png").exists()
+
+
+def test_a_failed_download_of_a_paid_for_image_is_retried(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.imagery.REPLICATE_POLL_INTERVAL_SECONDS", 0.0)
+    client = _PollingHttpClient(["succeeded"], download_script=[httpx.ReadError("dropped"), None])
+
+    out = generate_line_image("tok", "a prompt", tmp_path / "img.png", http_client=client)
+
+    assert client.creates == 1 and client.downloads == 2
+    assert out.read_bytes() == _real_png_bytes()
+
+
+def test_a_rate_limited_create_waits_for_retry_after_then_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.imagery.REPLICATE_POLL_INTERVAL_SECONDS", 0.0)
+    slept = []
+    monkeypatch.setattr("lyricvideo.imagery.time.sleep", lambda s: slept.append(s))
+    client = _PollingHttpClient(["succeeded"], create_statuses=[429, 200])
+
+    generate_line_image("tok", "a prompt", tmp_path / "img.png", http_client=client)
+
+    assert client.creates == 2 and 2.0 in slept
+
+
+def test_network_failures_reuse_the_prompt_instead_of_asking_claude_again(tmp_path, monkeypatch):
+    """Three network failures in a row: one Claude prompt, not three (the prompt was never the problem)."""
+    from lyricvideo.imagery import ReplicateUnreachable
+
+    claude_calls = []
+
+    class _CountingMessages:
+        def create(self, **kwargs):
+            claude_calls.append(1)
+            return _FakeResponse("a prompt")
+
+    class _Client:
+        messages = _CountingMessages()
+
+    def unreachable(*a, **k):
+        raise ReplicateUnreachable("timed out")
+
+    monkeypatch.setattr("lyricvideo.imagery.generate_line_image", unreachable)
+
+    get_or_generate_image(_Client(), "tok", "gist", "a line", tmp_path)
+
+    assert len(claude_calls) == 1
+
+
+def test_a_failed_prediction_still_gets_a_rewritten_prompt(tmp_path, monkeypatch):
+    from lyricvideo.imagery import PredictionFailed
+
+    prompts = iter(["first prompt", "second prompt", "third prompt"])
+
+    class _Messages:
+        def create(self, **kwargs):
+            return _FakeResponse(next(prompts))
+
+    class _Client:
+        messages = _Messages()
+
+    tried = []
+
+    def rejecting(token, prompt, out_path, **k):
+        tried.append(prompt)
+        raise PredictionFailed("status='failed'")
+
+    monkeypatch.setattr("lyricvideo.imagery.generate_line_image", rejecting)
+
+    get_or_generate_image(_Client(), "tok", "gist", "a line", tmp_path)
+
+    assert tried == ["first prompt", "second prompt", "third prompt"]
+
+
+def test_an_interrupted_image_write_never_leaves_a_partial_file_under_the_cache_name(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.imagery.REPLICATE_POLL_INTERVAL_SECONDS", 0.0)
+    real_write_bytes = Path.write_bytes
+
+    def disk_full(self, data):
+        real_write_bytes(self, data[: len(data) // 2])
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", disk_full)
+    out_path = tmp_path / "img.png"
+
+    with pytest.raises(OSError):
+        generate_line_image("tok", "a prompt", out_path, http_client=_PollingHttpClient(["succeeded"]))
+
+    assert not out_path.exists()
+    assert list(tmp_path.iterdir()) == []           # no temp file left behind either
+
+
+def test_is_fallback_image_never_decodes_a_differently_sized_real_picture(tmp_path, monkeypatch):
+    from PIL import Image
+
+    real = tmp_path / "real.png"
+    Image.new("RGB", (1344, 768), (30, 30, 40)).save(real)      # the placeholder colour, but not the frame size
+    monkeypatch.setattr(
+        Image.Image, "convert", lambda *a, **k: (_ for _ in ()).throw(AssertionError("decoded a real picture")),
+    )
+
+    assert is_fallback_image(real) is False

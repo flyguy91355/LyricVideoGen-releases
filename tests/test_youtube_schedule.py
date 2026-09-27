@@ -17,6 +17,13 @@ from lyricvideo.youtube_schedule import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _whole_videos(monkeypatch):
+    """The mp4s here are a few fake bytes; schedule_upload's cut-short check (a real ffmpeg read of the file) is told
+    every video is whole. tests/test_upload_guard_truncated.py covers the check itself."""
+    monkeypatch.setattr("lyricvideo.youtube_schedule.rendered_stream_seconds", lambda path: (200.0, 200.0))
+
+
 def test_parse_upload_times_parses_and_sorts_a_comma_separated_list():
     assert parse_upload_times("14:00,9:30,19:00") == [time(9, 30), time(14, 0), time(19, 0)]
 
@@ -749,3 +756,305 @@ def test_an_easy_chord_video_built_for_a_different_key_than_the_songs_is_not_upl
         schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
 
     assert client._videos.insert_kwargs is None
+
+
+# --- daylight saving: every slot is localized for its OWN date (issue #7 review, F023) --------------------------------
+
+def _chicago():
+    zoneinfo = pytest.importorskip("zoneinfo")
+    try:
+        return zoneinfo.ZoneInfo("America/Chicago")
+    except zoneinfo.ZoneInfoNotFoundError:
+        pytest.skip("no tz database for America/Chicago on this machine")
+
+
+def _as_read_back(slot, tz):
+    """What the channel reports for a scheduled slot: its UTC publishAt, read back as local time at its own instant
+    (youtube._publish_at_string, then youtube.reserved_publish_datetimes)."""
+    from lyricvideo.youtube import _publish_at_string
+
+    utc = datetime.fromisoformat(_publish_at_string(slot).replace(".0Z", "+00:00"))
+    return utc.astimezone(tz)
+
+
+def test_a_slot_past_the_november_change_publishes_at_its_configured_local_time():
+    tz = _chicago()
+    now = datetime(2026, 10, 31, 22, 0, tzinfo=tz)            # still daylight time (-05:00)
+
+    slot = compute_next_publish_slot(now, [], [time(9, 0)], tz=tz)
+
+    assert slot.astimezone(timezone.utc) == datetime(2026, 11, 1, 15, 0, tzinfo=timezone.utc)   # 09:00 CST, not 08:00
+    assert _as_read_back(slot, tz).hour == 9
+
+
+def test_uploads_across_the_november_change_each_get_their_own_slot():
+    """The review's reproduction: before the fix all of these piled onto ONE moment (Nov 1 08:00 CST)."""
+    tz = _chicago()
+    now = datetime(2026, 10, 31, 22, 0, tzinfo=tz)
+    times = parse_upload_times("09:00,12:00,15:00,18:00,21:00")
+    claims = []
+
+    for _ in range(7):
+        slot = compute_next_publish_slot(now, claims, times, tz=tz)
+        claims.append(_as_read_back(slot, tz))
+
+    assert len(set(claims)) == 7
+    assert [f"{c:%m-%d %H:%M}" for c in claims] == [
+        "11-01 09:00", "11-01 12:00", "11-01 15:00", "11-01 18:00", "11-01 21:00", "11-02 09:00", "11-02 12:00",
+    ]
+
+
+def test_uploads_across_the_march_change_each_get_their_own_slot():
+    tz = _chicago()
+    now = datetime(2027, 3, 13, 22, 0, tzinfo=tz)             # still standard time (-06:00)
+    times = parse_upload_times("09:00,12:00,15:00,18:00,21:00")
+    claims = []
+
+    for _ in range(5):
+        slot = compute_next_publish_slot(now, claims, times, tz=tz)
+        claims.append(_as_read_back(slot, tz))
+
+    assert [f"{c:%m-%d %H:%M}" for c in claims] == ["03-14 09:00", "03-14 12:00", "03-14 15:00", "03-14 18:00", "03-14 21:00"]
+    assert claims[0].astimezone(timezone.utc).hour == 14      # 09:00 CDT, not 10:00
+
+
+def test_the_default_machine_zone_path_also_localizes_each_date():
+    """The app's own call (no tz): this machine's zone. Only meaningful where that zone changes offset at the start of
+    November 2026 (e.g. any US zone); skipped elsewhere."""
+    before, after = datetime(2026, 10, 31, 12, 0).astimezone(), datetime(2026, 11, 2, 12, 0).astimezone()
+    if before.utcoffset() == after.utcoffset():
+        pytest.skip("this machine's time zone has no daylight-saving change in early November 2026")
+    now = datetime(2026, 10, 31, 22, 0).astimezone()
+
+    slots = []
+    for _ in range(3):
+        slot = compute_next_publish_slot(now, [s.astimezone(timezone.utc).astimezone() for s in slots], [time(9, 0)])
+        slots.append(slot)
+
+    assert [s.astimezone().hour for s in slots] == [9, 9, 9]           # every one at 09:00 local, none at 08:00
+    assert len({s.date() for s in slots}) == 3
+
+
+def test_several_videos_at_one_moment_each_use_up_a_slot():
+    """A pile-up already on the channel (e.g. from before the fix) must make its day look full, not like one video."""
+    times = [time(9, 0), time(12, 0)]
+    now = datetime(2026, 11, 1, 7, 0, 0)
+    claims = [datetime(2026, 11, 1, 8, 0, 0)] * 2               # two videos at the same off-slot moment, still ahead
+
+    assert compute_next_publish_slot(now, claims, times) == datetime(2026, 11, 2, 9, 0, 0)
+
+
+# --- EASY CHORD checks run before any paid call, and compare keys as keys (issue #7 review, F086) ---------------------
+
+class _CountingAnthropicClient(_FakeAnthropicClient):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+        real_create = self.messages.create
+
+        def create(**kwargs):
+            self.calls += 1
+            return real_create(**kwargs)
+
+        self.messages.create = create
+
+
+def test_a_stale_easy_chord_version_is_refused_before_the_paid_description_call(tmp_path):
+    from lyricvideo.youtube_schedule import EasyChordVersionStale
+
+    work_dir = _make_capo_song_work_dir(tmp_path)
+    save_decision(work_dir, KeyDecision(status="confirmed", key="F major", source="owner", chord_key="Eb major"))
+    claude = _CountingAnthropicClient()
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    with pytest.raises(EasyChordVersionStale, match="make the EASY CHORD version again"):
+        schedule_upload(client, claude, work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    assert claude.calls == 0
+    assert client._videos.insert_kwargs is None
+
+
+def test_an_easy_chord_marker_spelling_the_same_key_differently_still_uploads(tmp_path):
+    """A marker written before 2026-09-26 with prefer_flats off says "D# major"; the settled key says "Eb major"."""
+    work_dir = _make_capo_song_work_dir(tmp_path)
+    save_easy_chord_capo_marker(work_dir, capo_fret=1, shape_key="D", original_key="D# major",
+                                original_title="Bridge Over Troubled Water")
+    client = _FakeYoutubeClient(video_id="vid123")
+
+    assert schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS)) == "vid123"
+    assert "(original key: Eb major)" in client._videos.insert_kwargs["body"]["snippet"]["description"]
+
+
+def _make_nested_easy_chord_dir(tmp_path, parent_chords, easy_chords, capo=1):
+    from lyricvideo.models import ChordEvent, ChordTrack
+
+    def track(labels, key):
+        return ChordTrack(key=key, events=[ChordEvent(start=float(i), end=float(i + 1), label=lab)
+                                           for i, lab in enumerate(labels)])
+
+    song_dir = tmp_path / "some-song"
+    song_dir.mkdir()
+    save_song(Song(title="Some Song", audio_path="a.mp3", lines=[LyricLine(words=[Word(word="la")])],
+                   chord_track=track(parent_chords, "Eb major")), song_dir / "lyrics_timed.json")
+    save_decision(song_dir, KeyDecision(status="confirmed", key="Eb major", source="agreed", chord_key="Eb major"))
+    easy_dir = song_dir / "easychords"
+    easy_dir.mkdir()
+    save_song(Song(title="Some Song EasyChords", audio_path="a.mp3", lines=[LyricLine(words=[Word(word="la")])],
+                   chord_track=track(easy_chords, "D major")), easy_dir / "lyrics_timed.json")
+    (easy_dir / "some-song-easychords.mp4").write_bytes(b"fake video bytes")
+    save_easy_chord_capo_marker(easy_dir, capo_fret=capo, shape_key="D", original_key="Eb major",
+                                original_title="Some Song")
+    return easy_dir
+
+
+def test_a_nested_easy_chord_version_whose_chords_match_the_song_uploads(tmp_path):
+    from lyricvideo.youtube_schedule import easy_chord_upload_problem
+
+    easy_dir = _make_nested_easy_chord_dir(tmp_path, ["Eb", "Ab", "Bb"], ["D", "G", "A"])
+    client = _FakeYoutubeClient(video_id="vid9")
+
+    assert easy_chord_upload_problem(easy_dir) == ""
+    assert schedule_upload(client, _FakeAnthropicClient(), easy_dir, SimpleNamespace(**_PUBLIC_SETTINGS)) == "vid9"
+
+
+def test_a_nested_easy_chord_version_whose_song_was_redone_with_other_chords_is_refused(tmp_path):
+    from lyricvideo.youtube_schedule import EasyChordVersionStale, easy_chord_upload_problem
+
+    easy_dir = _make_nested_easy_chord_dir(tmp_path, ["Eb", "Cm", "Bb"], ["D", "G", "A"])   # the song's chords changed
+    claude = _CountingAnthropicClient()
+    client = _FakeYoutubeClient(video_id="vid9")
+
+    assert "no longer the song's own chords" in easy_chord_upload_problem(easy_dir)
+    with pytest.raises(EasyChordVersionStale):
+        schedule_upload(client, claude, easy_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+    assert claude.calls == 0 and client._videos.insert_kwargs is None
+
+
+def test_easy_chord_upload_problem_is_blank_for_an_ordinary_song(tmp_path):
+    from lyricvideo.youtube_schedule import easy_chord_upload_problem
+
+    assert easy_chord_upload_problem(_make_song_work_dir(tmp_path)) == ""
+
+
+# --- a title YouTube would refuse never reaches YouTube (issue #7 review, F142) ----------------------------------------
+
+def test_a_very_long_song_title_is_fitted_to_youtubes_limit(tmp_path):
+    work_dir = _make_song_work_dir(tmp_path, artist="Some Very Long Band Name Indeed")
+    song = Song(title="An Extremely Long Made Up Song Title That Keeps Going On And On Past Any Limit",
+                audio_path="song.mp3", lines=[LyricLine(words=[Word(word="la")])])
+    save_song(song, work_dir / "lyrics_timed.json")
+    from lyricvideo.pipeline import slugify
+
+    (work_dir / f"{slugify(song.title)}.mp4").write_bytes(b"fake")
+    client = _FakeYoutubeClient(video_id="vid1")
+
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    title = client._videos.insert_kwargs["body"]["snippet"]["title"]
+    assert len(title) <= 100 and title.endswith("(Play Along Lyrics & Chords)")
+
+
+# --- uploads never overlap, and a pending retry never re-sends a finished song -----------------------------------------
+
+def test_a_pending_retry_does_not_resend_a_song_uploaded_meanwhile(tmp_path):
+    from lyricvideo.youtube_schedule import AlreadyUploaded
+    from lyricvideo.youtube_state import YoutubeState, save_youtube_state
+
+    work_dir = _make_song_work_dir(tmp_path)
+    save_youtube_state(work_dir, YoutubeState(video_id="first", uploaded_at="2026-09-26T10:00:00", title="t"))
+    claude = _CountingAnthropicClient()
+    client = _FakeYoutubeClient(video_id="second")
+
+    with pytest.raises(AlreadyUploaded):
+        schedule_upload(client, claude, work_dir, SimpleNamespace(**_PUBLIC_SETTINGS), only_if_not_uploaded=True)
+
+    assert client._videos.insert_kwargs is None and claude.calls == 0
+    # the owner's deliberate re-upload (the default) still goes through
+    assert schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS)) == "second"
+
+
+def test_two_uploads_at_once_run_one_after_the_other(tmp_path):
+    import threading
+    import time as _time
+
+    from lyricvideo.youtube_schedule import upload_in_progress
+
+    active, overlaps, seen_in_progress = [0], [0], []
+
+    class _SlowRequest:
+        def next_chunk(self):
+            active[0] += 1
+            overlaps[0] = max(overlaps[0], active[0])
+            seen_in_progress.append(upload_in_progress())
+            _time.sleep(0.05)
+            active[0] -= 1
+            return None, {"id": "v"}
+
+    class _Videos(_FakeVideosResource):
+        def insert(self, **kwargs):
+            self.insert_kwargs = kwargs
+            return _SlowRequest()
+
+    dirs = []
+    for i in range(3):
+        root = tmp_path / f"r{i}"
+        root.mkdir()
+        dirs.append(_make_song_work_dir(root))
+
+    def run(work_dir):
+        client = _FakeYoutubeClient()
+        client._videos = _Videos("v")
+        schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
+
+    threads = [threading.Thread(target=run, args=(d,)) for d in dirs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert overlaps[0] == 1                 # never two uploads in flight at once
+    assert seen_in_progress == [True, True, True]
+    assert upload_in_progress() is False
+
+
+# --- a key-correction note stays first through a support-template re-render (issue #7 review, F054) --------------------
+
+def test_rerendering_keeps_the_key_note_first_and_is_stable():
+    from lyricvideo.key_note import apply_key_note
+    from lyricvideo.youtube_schedule import rerender_description
+
+    noted = apply_key_note(render_description(_TEMPLATE, "Body."), "C minor", "D minor")
+
+    assert rerender_description(noted, _TEMPLATE, [_OLD]) == noted
+    assert apply_key_note(rerender_description(noted, _TEMPLATE, [_OLD]), "C minor", "D minor") == noted
+    assert noted.startswith("📌 Song key: C minor") and noted.count("📌") == 1
+
+
+def test_rerendering_moves_a_note_pushed_below_the_tip_back_to_the_top():
+    from lyricvideo.youtube_schedule import rerender_description
+
+    note = "📌 Song key: C minor (not D minor as shown in the video)"
+    pushed_down = f"{_TOP}\n\n{note}\n\nBody.\n\n{_BOTTOM}"
+
+    assert rerender_description(pushed_down, _TEMPLATE, [_OLD]) == f"{note}\n\n{_TOP}\n\nBody.\n\n{_BOTTOM}"
+
+
+def test_rerendering_a_description_without_a_note_is_unchanged_behavior():
+    from lyricvideo.youtube_schedule import rerender_description
+
+    assert rerender_description(f"A song.\n\n{_OLD}", _TEMPLATE, [_OLD]) == render_description(_TEMPLATE, "A song.")
+
+
+def test_a_template_whose_top_starts_with_a_pin_is_not_taken_for_a_key_note():
+    # Review follow-up: only "📌 Song key:" / "📌 Correction" paragraphs are key notes. A support template whose top line
+    # happens to start with 📌 must re-render unchanged -- never lifted out and then rendered a second time.
+    from lyricvideo.key_note import apply_key_note
+    from lyricvideo.youtube_schedule import rerender_description
+
+    pinned_template = "📌 Tip jar: https://example.invalid/tip\n\n{description}\n\nThanks!"
+    rendered = render_description(pinned_template, "Body.")
+
+    assert rerender_description(rendered, pinned_template, []) == rendered
+    noted = apply_key_note(rendered, "C minor", "D minor")
+    assert noted.startswith("📌 Song key: C minor") and "📌 Tip jar" in noted
+    assert rerender_description(noted, pinned_template, []) == noted

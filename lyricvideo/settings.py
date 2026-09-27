@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -177,22 +178,53 @@ class Settings:
         }
 
     def save(self, path: Path = CONFIG_FILE) -> None:
+        """Writes settings.json ATOMICALLY: the JSON goes to a temp file in the same folder, is flushed to disk,
+        then replaces the old file in one step -- a full disk or a crash mid-write leaves the previous
+        settings.json untouched instead of empty (an empty file loads as all-defaults, silently losing every
+        setting). RAISES OSError when the write fails, so the caller (Save Settings) can say so and keep its
+        unsaved-changes markers instead of showing a save that never happened."""
+        path = Path(path)
+        tmp_path = path.with_name(path.name + ".tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
-        except OSError as exc:  # pragma: no cover - disk issues
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(asdict(self), indent=2))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except OSError as exc:
             log.warning("Could not save settings: %s", exc)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     @staticmethod
     def from_dict(data: dict) -> "Settings":
-        """Tolerant of missing/unknown keys -- shared by load() and by the
-        SettingsPanel's own value-collection, so there is exactly one place that
-        decides how a flat dict becomes a Settings object."""
-        valid = {f.name for f in fields(Settings)}
-        return Settings(**{k: v for k, v in data.items() if k in valid})
+        """Tolerant of missing/unknown keys AND of wrong-typed values -- shared by load() and by the
+        SettingsPanel's own value-collection, so there is exactly one place that decides how a flat dict
+        becomes a Settings object. A value that cannot be read as its field's type (a hand-edited
+        `"lyric_size": null`, a string where a number belongs) falls back to that field's default with a
+        warning, rather than reaching the Settings panel's Tk variables or a render as the wrong type."""
+        if not isinstance(data, dict):
+            log.warning("Settings data is not a JSON object (%s); using defaults", type(data).__name__)
+            return Settings()
+        defaults = Settings()
+        values = {}
+        for f in fields(Settings):
+            if f.name not in data:
+                continue
+            value = _coerce_to_type_of(data[f.name], getattr(defaults, f.name))
+            if value is _INVALID:
+                log.warning("Ignoring settings value %s=%r (wrong type); using the default", f.name, data[f.name])
+                continue
+            values[f.name] = value
+        return Settings(**values)
 
     @staticmethod
     def load(path: Path = CONFIG_FILE) -> "Settings":
+        path = Path(path)
         if not path.exists():
             return Settings()
         try:
@@ -201,6 +233,53 @@ class Settings:
             log.warning("Could not read settings (%s); using defaults", exc)
             return Settings()
         return Settings.from_dict(data)
+
+
+_INVALID = object()
+
+
+def _coerce_to_type_of(value, default):
+    """`value` as the type of `default` (bool / int / float / str), or _INVALID. Lenient only where the meaning
+    is unambiguous: an int for a float field, a whole-number float or numeric text for an int field, a number
+    for a text field (e.g. a category id typed as 27), 0/1 for a checkbox."""
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        return _INVALID
+    if isinstance(default, int):
+        if isinstance(value, bool):
+            return _INVALID
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                number = float(value.strip())
+            except ValueError:
+                return _INVALID
+            return int(number) if number.is_integer() else _INVALID
+        return _INVALID
+    if isinstance(default, float):
+        if isinstance(value, bool):
+            return _INVALID
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                return _INVALID
+        return _INVALID
+    if isinstance(default, str):
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        return _INVALID
+    return value
 
 
 def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:

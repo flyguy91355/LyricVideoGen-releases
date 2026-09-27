@@ -203,9 +203,58 @@ def test_detect_chords_defaults_match_module_constants(tmp_path):
 def test_simplify_chord_label_minor_major_seventh_keeps_its_minor_third():
     """crema's real vocabulary (pumpp's '3567s' set) includes minmaj7; it was
     missing from the quality map, so "A:minmaj7" silently became plain A
-    major -- the wrong third (found by code review, 2026-09-14)."""
+    major -- the wrong third (found by code review, 2026-09-14). With sevenths
+    on it must still be plain Am, never Am7: m7's flat seventh (G) clashes a
+    semitone with the G# the recording actually has (issue #7 review)."""
     assert _simplify_chord_label("A:minmaj7", include_seventh_chords=False, use_flats=False) == "Am"
-    assert _simplify_chord_label("A:minmaj7", include_seventh_chords=True, use_flats=False) == "Am7"
+    assert _simplify_chord_label("A:minmaj7", include_seventh_chords=True, use_flats=False) == "Am"
+
+
+# The notes each crema quality really contains (semitones above the root, folded into one octave).
+_CREMA_QUALITY_INTERVALS = {
+    "maj": {0, 4, 7}, "min": {0, 3, 7}, "dim": {0, 3, 6}, "aug": {0, 4, 8},
+    "maj7": {0, 4, 7, 11}, "min7": {0, 3, 7, 10}, "7": {0, 4, 7, 10}, "dim7": {0, 3, 6, 9},
+    "hdim7": {0, 3, 6, 10}, "minmaj7": {0, 3, 7, 11}, "maj6": {0, 4, 7, 9}, "min6": {0, 3, 7, 9},
+    "sus2": {0, 2, 7}, "sus4": {0, 5, 7}, "9": {0, 4, 7, 10, 2}, "maj9": {0, 4, 7, 11, 2},
+    "min9": {0, 3, 7, 10, 2}, "11": {0, 4, 7, 10, 2, 5}, "13": {0, 4, 7, 10, 2, 5, 9},
+    "1": {0}, "5": {0, 7},
+}
+
+
+def test_every_simplified_quality_keeps_the_real_third_and_never_adds_a_seventh_the_chord_lacks():
+    """The collapsed label may drop notes (and a sus/dim/aug/power chord's fifth or third is approximated),
+    but it must never tell the player to play a third or a seventh the recorded chord does not have."""
+    from lyricvideo.chord_theory import QUALITY_INTERVALS
+    from lyricvideo.detect_chords import _QUALITY_TO_TRIAD_OR_SEVENTH
+
+    assert set(_QUALITY_TO_TRIAD_OR_SEVENTH) <= set(_CREMA_QUALITY_INTERVALS)
+    for source, target in _QUALITY_TO_TRIAD_OR_SEVENTH.items():
+        real = _CREMA_QUALITY_INTERVALS[source]
+        shown = set(QUALITY_INTERVALS[target])
+        for seventh in (10, 11):
+            if seventh in shown:
+                assert seventh in real, f"{source} -> {target} adds a seventh ({seventh}) the chord lacks"
+        if real & {3, 4}:
+            assert shown & {3, 4} <= real, f"{source} -> {target} changes the chord's third"
+
+
+def test_detect_chords_leaves_the_key_to_the_key_check_and_skips_the_old_hpss_estimate(tmp_path, monkeypatch):
+    """The whole-song HPSS + CQT key estimate cost ~12 s per song and settle_song_key() always replaced it
+    (issue #7 review): detect_chords must not run it, returns key "" and spells provisionally with sharps."""
+    import librosa
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("detect_chords must not run the whole-song HPSS/CQT key estimate")
+
+    monkeypatch.setattr(librosa.effects, "harmonic", must_not_run)
+    monkeypatch.setattr(librosa.feature, "chroma_cqt", must_not_run)
+    wav_path = _make_test_tone(tmp_path, freq=233.08, duration=6)      # a Bb-ish tone
+
+    track = detect_chords(wav_path)
+
+    assert track.key == ""
+    assert track.events
+    assert not any("b" in e.label[1:2] for e in track.events if e.label != "N")      # sharps only, never "Bb"
 
 
 def test_simplify_chord_label_maps_every_quality_crema_can_emit_explicitly():

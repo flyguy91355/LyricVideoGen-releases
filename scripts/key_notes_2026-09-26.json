@@ -1,0 +1,33 @@
+{
+  "_comment": "Songs whose burned-in Key badge is wrong, checked against Musicnotes/Tunebat/Hooktheory and the video's own chords (2026-09-26). label = the work folder (a nested EASY CHORD video is '<song>/easychords'). true = the song's real key, shown = what the video's badge says. 'fixes' = exact wording swaps for a description that itself states the wrong key.",
+  "notes": [
+    {"label": "a-day-in-the-life", "true": "G major", "shown": "E minor"},
+    {"label": "all-for-love", "true": "D major", "shown": "F# minor"},
+    {"label": "all-along-the-watchtower", "true": "C minor", "shown": "Eb major"},
+    {"label": "alone", "true": "Bb minor", "shown": "Db major"},
+    {"label": "cinnamon-girl", "true": "D major", "shown": "D minor"},
+    {"label": "cracklin-rosie", "true": "Db major", "shown": "Eb minor"},
+    {"label": "head-over-feet", "true": "C major", "shown": "G major"},
+    {"label": "hello-in-there", "true": "C major", "shown": "G major"},
+    {"label": "i-got-you-i-feel-good", "true": "D major", "shown": "G major"},
+    {"label": "landslide", "true": "Bb major", "shown": "G minor"},
+    {"label": "old-man", "true": "D major", "shown": "D minor"},
+    {"label": "papa-don-t-preach", "true": "F minor", "shown": "Ab major"},
+    {"label": "the-real-slim-shady", "true": "C minor", "shown": "D minor"},
+    {"label": "when-i-m-sixty-four", "true": "Db major", "shown": "Ab major"},
+    {"label": "white-room", "true": "D minor", "shown": "G major"},
+    {"label": "wind-of-change", "true": "C major", "shown": "G major"},
+    {"label": "evil-ways", "true": "G minor", "shown": "G major"},
+    {"label": "wild-world", "true": "A minor", "shown": "C major"},
+    {"label": "great-balls-of-fire", "true": "C major", "shown": "C minor"},
+    {"label": "a-change-is-gonna-come/easychords", "true": "Bb major", "shown": "A major"},
+    {"label": "all-along-the-watchtower/easychords", "true": "C minor", "shown": "D major"},
+    {"label": "all-for-love/easychords", "true": "D major", "shown": "E minor"},
+    {"label": "baba-o-riley/easychords", "true": "F major", "shown": "E major"},
+    {"label": "bridge-over-troubled-water/easychords", "true": "Eb major", "shown": "D major"},
+    {"label": "cracklin-rosie/easychords", "true": "Db major", "shown": "Eb minor",
+     "fixes": [["play it in Dm shapes (original key: Eb minor)", "play it in C shapes (original key: Db major)"]]},
+    {"label": "great-balls-of-fire/easychords", "true": "C major", "shown": "C minor",
+     "fixes": [["play it in Am shapes (original key: C minor)", "play it in A shapes (original key: C major)"]]}
+  ]
+}

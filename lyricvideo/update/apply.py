@@ -30,11 +30,20 @@ DENIED_FILENAME_PREFIXES = (".env",)
 
 ALLOWED_PATH_PREFIXES = (
     "lyricvideo/",
+    "deep_review/",     # its tests ship under tests/deep_review/, which cannot even be collected without it
+    "scripts/",         # the tools CLAUDE.md and the app's own log messages tell the owner to run
     "tests/",
     "docs/",
     "requirements.txt",
     "CLAUDE.md",
 )
+
+# Written by scripts/cut_release.sh at the release root: every path that release ships, one per line. Like
+# RELEASE_SOURCE_COMMIT it is not in the allow-list, so it is never itself copied into the install.
+RELEASE_MANIFEST_FILE = "RELEASE_MANIFEST"
+# The install's own record of what the last applied release shipped (also outside the allow-list), so the next
+# apply can remove what a newer release no longer ships.
+APPLIED_MANIFEST_FILE = ".release_manifest"
 
 
 def _matches_path_entry(normalized: str, entry: str) -> bool:
@@ -180,14 +189,86 @@ def is_source_commit_already_applied(source_commit: str | None, repo_root: str) 
     return result.returncode == 0
 
 
-def copy_updatable_files(source_dir: str, target_dir: str) -> list[str]:
+def _read_manifest(path: Path) -> list[str] | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return [line.strip().replace("\\", "/") for line in text.splitlines() if line.strip()]
+
+
+def read_release_manifest(extracted_root: str) -> list[str] | None:
+    """Every path the extracted release ships (cut_release.sh's RELEASE_MANIFEST), or None for a release cut
+    before the manifest existed -- which simply means nothing is removed on that apply."""
+    return _read_manifest(Path(extracted_root) / RELEASE_MANIFEST_FILE)
+
+
+def read_applied_manifest(target_dir: str) -> list[str] | None:
+    """What the release last applied to this install shipped, or None when no manifest was ever recorded here."""
+    return _read_manifest(Path(target_dir) / APPLIED_MANIFEST_FILE)
+
+
+def write_applied_manifest(target_dir: str, paths: list[str]) -> None:
+    (Path(target_dir) / APPLIED_MANIFEST_FILE).write_text("\n".join(paths) + "\n", encoding="utf-8")
+
+
+def remove_stale_files(target_dir: str, previous_manifest: list[str], new_manifest: list[str]) -> list[str]:
+    """Deletes each file the PREVIOUS applied release shipped that the new one no longer does (a module or test
+    deleted upstream would otherwise stay importable and collected by pytest forever). Only ever a regular file on
+    an allow-listed path that is not a symlink and does not resolve outside the allow-list -- never a denied path,
+    and never anything the previous release did not ship (the owner's own untracked files are safe). Folders
+    this leaves empty are removed too. Returns the sorted relative paths removed."""
+    target_path = Path(target_dir)
+    keep = {p.replace("\\", "/") for p in new_manifest}
+    removed: list[str] = []
+    for relative in sorted({p.replace("\\", "/") for p in previous_manifest} - keep):
+        if not is_path_updatable(relative):
+            continue
+        destination = _safe_destination(target_path, relative)
+        if destination is None or destination.is_symlink() or not destination.is_file():
+            continue
+        try:
+            destination.unlink()
+        except OSError as exc:
+            logger.warning("Update: could not remove %s, which this release no longer ships: %s", relative, exc)
+            continue
+        removed.append(relative)
+        if destination.suffix == ".py":
+            # Its compiled copy too: a folder left holding only __pycache__/ would still import as a namespace package.
+            cache_dir = destination.parent / "__pycache__"
+            for compiled in cache_dir.glob(f"{destination.stem}.*.pyc") if cache_dir.is_dir() else []:
+                try:
+                    compiled.unlink()
+                except OSError:
+                    pass
+            try:
+                cache_dir.rmdir()
+            except OSError:
+                pass
+        parent = destination.parent
+        while parent != target_path and target_path in parent.parents:
+            try:
+                parent.rmdir()          # only succeeds when empty
+            except OSError:
+                break
+            parent = parent.parent
+    return removed
+
+
+def copy_updatable_files(source_dir: str, target_dir: str, remove_stale: bool = True) -> list[str]:
     """Walks source_dir, copies every file whose path (relative to
     source_dir) passes is_path_updatable() into the same relative path
     under target_dir, creating parent directories as needed. Returns the
     sorted list of relative paths actually copied. Never touches anything
     outside that allow-list, even if the source tree contains a denied
     path -- the deny check in is_path_updatable() is authoritative
-    regardless of what's on disk in target_dir already."""
+    regardless of what's on disk in target_dir already.
+
+    With `remove_stale` (the default) and a release that carries a
+    RELEASE_MANIFEST, files the previously applied release shipped but this
+    one no longer does are then removed (remove_stale_files), and this
+    release's manifest is recorded for the next apply. The first apply that
+    has a manifest removes nothing -- there is no earlier record to compare."""
     source_path = Path(source_dir)
     target_path = Path(target_dir)
     copied: list[str] = []
@@ -209,5 +290,17 @@ def copy_updatable_files(source_dir: str, target_dir: str) -> list[str]:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(file_path, destination)
         copied.append(relative)
+
+    new_manifest = read_release_manifest(source_dir) if remove_stale else None
+    if new_manifest is not None:
+        previous_manifest = read_applied_manifest(target_dir)
+        if previous_manifest is not None:
+            removed = remove_stale_files(target_dir, previous_manifest, new_manifest)
+            if removed:
+                logger.info("Update: removed %d file(s) this release no longer ships: %s", len(removed), ", ".join(removed))
+        try:
+            write_applied_manifest(target_dir, new_manifest)
+        except OSError as exc:
+            logger.warning("Update: could not record this release's file list: %s", exc)
 
     return sorted(copied)

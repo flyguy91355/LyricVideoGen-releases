@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from lyricvideo.key_decision import KeyDecision, save_decision
 from lyricvideo.models import LyricLine, Song, Word, save_song
 
 from deep_review.diagnosis import Category, diagnose_song
@@ -55,8 +56,13 @@ def _write_transcript(work_dir, words):
     )
 
 
+def _confirm_key(work_dir, key="G major"):
+    save_decision(work_dir, KeyDecision(status="confirmed", key=key, source="owner", chord_key=key))
+
+
 def test_a_song_with_no_recorded_concern_already_passes(tmp_path):
     _write_song(tmp_path, [_line(k) for k in range(8)])
+    _confirm_key(tmp_path)
 
     result = diagnose_song(tmp_path)
 

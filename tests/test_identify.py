@@ -93,3 +93,120 @@ def test_extract_metadata_falls_back_to_filename_when_no_tags(tmp_path, monkeypa
     assert info.artist == "Rolling Stones"
     assert info.title == "Angie"
     assert info.source == "filename"
+
+
+# --- issue #7 review: titles that start with a number, underscore filenames, Xing-less VBR MP3 lengths ---
+
+
+def test_parse_filename_keeps_a_number_that_is_part_of_the_title():
+    assert parse_filename("Numberband - 19-2000") == ("Numberband", "19-2000")
+    assert parse_filename("Numberband - 5.15") == ("Numberband", "5.15")
+    assert parse_filename("1-800-273-8255") == ("", "1-800-273-8255")
+    assert parse_filename("2-4-6-8 Motorway") == ("", "2-4-6-8 Motorway")
+    assert parse_filename("99 Balloons") == ("", "99 Balloons")
+    # a band named with a three-digit number is never mistaken for a track number
+    assert parse_filename("747 - Some Song") == ("747", "Some Song")
+
+
+def test_parse_filename_still_strips_real_track_numbers():
+    assert parse_filename("01. Some Band - Some Song") == ("Some Band", "Some Song")
+    assert parse_filename("01 - Some Band - Some Song") == ("Some Band", "Some Song")
+    assert parse_filename("07 Some Song") == ("", "Some Song")
+    assert parse_filename("3. Some Song") == ("", "Some Song")
+    assert parse_filename("12) Some Song") == ("", "Some Song")
+    assert parse_filename("Some Band - 04 - Some Song") == ("Some Band", "Some Song")
+
+
+def test_parse_filename_underscore_separator_turns_underscores_into_spaces():
+    assert parse_filename("Some_Band_-_Some_Long_Song_Name") == ("Some Band", "Some Long Song Name")
+    assert parse_filename("01_-_Some_Band_-_Some_Song") == ("Some Band", "Some Song")
+
+
+def test_extract_metadata_keeps_a_tag_title_that_starts_with_a_number(tmp_path, monkeypatch):
+    audio_path = tmp_path / "whatever.mp3"
+    for tag_title in ("2-4-6-8 Motorway", "19-2000", "5.15", "01 Numbered On Purpose", "...And Then Some"):
+        monkeypatch.setattr(
+            "lyricvideo.identify.read_tags", lambda path, t=tag_title: (t, "Some Band", "", 200.0),
+        )
+        assert extract_metadata(audio_path).title == tag_title
+
+
+def test_extract_metadata_still_strips_video_noise_from_a_tag_title(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lyricvideo.identify.read_tags", lambda path: ("19-2000 (Official Video)", "Some Band", "", 200.0),
+    )
+    assert extract_metadata(tmp_path / "x.mp3").title == "19-2000"
+
+
+def _ffmpeg_has_lame() -> bool:
+    import subprocess
+
+    from lyricvideo.audio_decode import FFmpegNotFound, find_ffmpeg
+
+    try:
+        out = subprocess.run([find_ffmpeg(), "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    except (FFmpegNotFound, OSError):
+        return False
+    return "libmp3lame" in out
+
+
+def _xingless_vbr_mp3(path: Path, quiet_seconds: float = 3.0, loud_seconds: float = 15.0) -> Path:
+    """A VBR MP3 with NO Xing/LAME header that starts quiet: its first frame's bitrate is tiny, so a header-based
+    length guess (size * 8 / first bitrate) comes out several times too long."""
+    import subprocess
+
+    from lyricvideo.audio_decode import find_ffmpeg
+
+    subprocess.run(
+        [find_ffmpeg(), "-v", "error", "-y",
+         "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+         "-f", "lavfi", "-i", f"anoisesrc=r=44100:color=pink:d={loud_seconds}",
+         "-filter_complex", f"[0]atrim=0:{quiet_seconds}[q];[q][1]concat=n=2:v=0:a=1",
+         "-c:a", "libmp3lame", "-q:a", "0", "-write_xing", "0", str(path)],
+        check=True,
+    )
+    return path
+
+
+def test_extract_metadata_measures_a_xingless_vbr_mp3_instead_of_trusting_the_header_guess(tmp_path, monkeypatch):
+    import pytest
+
+    if not _ffmpeg_has_lame():
+        pytest.skip("this FFmpeg build has no libmp3lame encoder")
+    from mutagen import File as MutagenFile
+
+    audio_path = _xingless_vbr_mp3(tmp_path / "Some Band - Some Song.mp3")
+    guessed = MutagenFile(str(audio_path), easy=True).info.length
+    assert guessed > 25.0          # the fixture really reproduces the bad header guess (real length is 18 s)
+    monkeypatch.setattr("lyricvideo.identify.lrclib_artist_for_title", lambda title: None)
+    monkeypatch.setattr("lyricvideo.identify.musicbrainz_lookup", lambda *a, **k: None)
+
+    info = extract_metadata(audio_path)
+
+    assert abs(info.duration - 18.0) < 1.0
+
+
+def test_read_tags_only_decodes_when_the_mp3_length_is_a_header_guess(tmp_path, monkeypatch):
+    """A file with a real length in its header (a CBR/Info or Xing header, or any non-MP3) is never decoded."""
+    import subprocess
+
+    import pytest
+
+    from lyricvideo.audio_decode import find_ffmpeg
+    from lyricvideo.identify import read_tags
+
+    if not _ffmpeg_has_lame():
+        pytest.skip("this FFmpeg build has no libmp3lame encoder")
+    audio_path = tmp_path / "with_header.mp3"
+    subprocess.run(
+        [find_ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono", "-t", "2", str(audio_path)],
+        check=True,
+    )
+    monkeypatch.setattr(
+        "lyricvideo.identify.decoded_duration",
+        lambda path: (_ for _ in ()).throw(AssertionError("must not decode a file whose header has its length")),
+    )
+
+    _title, _artist, _album, duration = read_tags(audio_path)
+
+    assert abs(duration - 2.0) < 0.2

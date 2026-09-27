@@ -246,6 +246,151 @@ def test_generate_video_metadata_raises_instead_of_returning_a_blank_description
     assert len(client.messages.calls) == 3      # tried three times, then gave up rather than guess
 
 
+_THINKING_ONLY = [type("Block", (), {"type": "thinking", "thinking": ""})()]
+
+
+class _CutOffResponse:
+    stop_reason = "max_tokens"
+
+    def __init__(self, text):
+        self.content = [_FakeTextBlock(text)]
+
+
+# --- comment replies, genres and engagement comments: thinking off, retried, never a blank or cut-off answer ----------
+# Issue #7 review, F084/F085: with Sonnet 5's default adaptive thinking these small calls could return no text at all
+# (a thinking-only reply), which aborted the whole comment scan / playlist organization, and classify_genre's 50-token
+# budget could cut a genre in half ("Classic Ro") that then became a permanent public playlist.
+
+def test_draft_comment_reply_turns_thinking_off():
+    client = _ScriptedClient(["IS_ERROR_REPORT: NO\nREPLY: Thanks!"])
+
+    draft_comment_reply(client, "nice video", "My Song")
+
+    assert client.messages.calls[0]["thinking"] == {"type": "disabled"}
+
+
+def test_draft_comment_reply_retries_a_reply_with_no_text():
+    client = _ScriptedClient([_THINKING_ONLY, "IS_ERROR_REPORT: NO\nREPLY: Thanks for playing along!"])
+
+    reply, is_error = draft_comment_reply(client, "nice video", "My Song")
+
+    assert reply == "Thanks for playing along!" and is_error is False
+    assert len(client.messages.calls) == 2
+
+
+def test_draft_comment_reply_raises_rather_than_returning_a_blank_draft():
+    import pytest
+
+    from lyricvideo.youtube_metadata import MetadataGenError
+
+    client = _ScriptedClient([_THINKING_ONLY, "IS_ERROR_REPORT: NO\nREPLY:", _THINKING_ONLY])
+
+    with pytest.raises(MetadataGenError):
+        draft_comment_reply(client, "nice video", "My Song")
+    assert len(client.messages.calls) == 3
+
+
+def test_classify_genre_turns_thinking_off_with_room_to_answer():
+    client = _ScriptedClient(["GENRE: Classic Rock"])
+
+    classify_genre(client, "Some Song", "Some Band", "la la", known_genres=["Classic Rock"])
+
+    call = client.messages.calls[0]
+    assert call["thinking"] == {"type": "disabled"} and call["max_tokens"] >= 100
+
+
+def test_classify_genre_returns_blank_instead_of_raising_when_no_text_ever_comes_back():
+    client = _ScriptedClient([_THINKING_ONLY] * 3)
+
+    assert classify_genre(client, "Some Song", "Some Band", "la la", known_genres=["Classic Rock"]) == ""
+
+
+def test_classify_genre_never_returns_a_cut_off_genre():
+    class _Messages:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **kwargs):
+            self.calls += 1
+            return _CutOffResponse("GENRE: Classic Ro")
+
+    client = type("Client", (), {"messages": _Messages()})()
+
+    assert classify_genre(client, "Some Song", "Some Band", "la la", known_genres=[]) == ""
+    assert client.messages.calls == 3
+
+
+def test_classify_genre_returns_blank_for_a_reply_without_a_genre_line():
+    client = _ScriptedClient(["I think it is rock.", "Hmm.", "Rock, probably."])
+
+    assert classify_genre(client, "Some Song", "Some Band", "la la", known_genres=[]) == ""
+
+
+def test_classify_genre_leaves_blank_genres_out_of_the_prompt():
+    client = _ScriptedClient(["GENRE: Country"])
+
+    classify_genre(client, "Some Song", "Some Band", "la la", known_genres=["Country", "", "  "])
+
+    assert "\n- \n" not in client.messages.calls[0]["messages"][0]["content"]
+
+
+def test_draft_engagement_comment_turns_thinking_off_and_raises_rather_than_returning_blank():
+    import pytest
+
+    from lyricvideo.youtube_metadata import MetadataGenError
+
+    client = _ScriptedClient([_THINKING_ONLY, "COMMENT:", "no label here"])
+
+    with pytest.raises(MetadataGenError):
+        draft_engagement_comment(client, "Some Song")
+    assert all(call["thinking"] == {"type": "disabled"} for call in client.messages.calls)
+
+
+# --- titles always fit YouTube's rules (issue #7 review, F142) ----------------------------------------------------------
+
+_LONG_TITLE = "Everything Is Fine Except the Weather and the Neighbors and the Old Car in the Yard"
+
+
+def test_a_long_play_along_title_is_fitted_to_100_characters_keeping_its_suffix():
+    title = build_play_along_title(_LONG_TITLE, "The Made Up Band")
+
+    assert len(title) <= 100
+    assert title.endswith(" - (Play Along Lyrics & Chords)")
+
+
+def test_a_long_easy_chord_title_is_fitted_and_keeps_its_capo_suffix():
+    title = build_easy_chord_title(_LONG_TITLE, "The Made Up Band", 3)
+
+    assert len(title) <= 100
+    assert title.endswith("(EASY CHORDS Play Along - Capo 3)")
+
+
+def test_the_artist_is_dropped_before_the_song_title_is_shortened():
+    title = build_play_along_title("A" * 60, "B" * 30)
+
+    assert title == "A" * 60 + " - (Play Along Lyrics & Chords)"
+
+
+def test_a_150_character_title_is_shortened_with_an_ellipsis():
+    title = build_play_along_title("x" * 150, "")
+
+    assert len(title) == 100
+    assert title.endswith("… - (Play Along Lyrics & Chords)")
+
+
+def test_angle_brackets_are_taken_out_of_titles():
+    title = build_play_along_title("<Song> Title", "Band >")
+
+    assert "<" not in title and ">" not in title
+    assert title == "Song Title - Band - (Play Along Lyrics & Chords)"
+
+
+def test_short_titles_are_unchanged():
+    assert build_play_along_title("November Rain", "Guns N' Roses") == (
+        "November Rain - Guns N' Roses - (Play Along Lyrics & Chords)"
+    )
+
+
 def test_generate_video_metadata_turns_thinking_off_and_tells_claude_not_to_comment_on_the_lyrics():
     client = _ScriptedClient([_GOOD])
 

@@ -1,8 +1,10 @@
-"""Music-theory helpers: pitch classes, chord templates, key estimation, spelling.
+"""Music-theory helpers: pitch classes, chord templates, key names, spelling.
 
 Ported from LyricChord's chords/theory.py. Chord "qualities" are kept deliberately
 small (triads plus optional sevenths) so the on-screen chords stay playable for a
-strumming guitarist/pianist.
+strumming guitarist/pianist. The song's key is worked out from its chords in
+key_estimate.py (the old average-pitch Krumhansl-Schmuckler estimator that lived
+here had no caller left and was removed, issue #7 review).
 """
 
 from __future__ import annotations
@@ -30,10 +32,6 @@ QUALITY_SUFFIX: dict[str, str] = {"maj": "", "min": "m", "7": "7", "min7": "m7",
 TRIADS = ["maj", "min"]
 SEVENTHS = ["7", "min7", "maj7"]
 
-# Krumhansl-Schmuckler key profiles.
-KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-KS_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
-
 # Keys conventionally written with flats (major tonics; minors via relative major).
 _FLAT_MAJOR_TONICS = {5, 10, 3, 8, 1, 6}  # F Bb Eb Ab Db Gb
 
@@ -53,20 +51,6 @@ def build_templates(qualities: list[str]) -> tuple[list[Chord], np.ndarray]:
             rows.append(vec / np.linalg.norm(vec))
             chords.append((root, q))
     return chords, np.vstack(rows)
-
-
-def estimate_key(chroma_mean: np.ndarray) -> tuple[int, str, float]:
-    """Krumhansl-Schmuckler key finding. Returns (tonic_pc, 'major'|'minor', confidence)."""
-    c = np.asarray(chroma_mean, dtype=float)
-    if c.sum() <= 0:
-        return 0, "major", 0.0
-    best = (0, "major", -2.0)
-    for tonic in range(12):
-        for mode, profile in (("major", KS_MAJOR), ("minor", KS_MINOR)):
-            score = float(np.corrcoef(c, np.roll(profile, tonic))[0, 1])
-            if score > best[2]:
-                best = (tonic, mode, score)
-    return best
 
 
 def diatonic_chords(tonic: int, mode: str, include_sevenths: bool = False) -> set[Chord]:
@@ -96,6 +80,33 @@ def key_name(tonic: int, mode: str, prefer_flats: bool = True) -> str:
 def spell(root: int, quality: str, use_flats: bool) -> str:
     names = NOTES_FLAT if use_flats else NOTES_SHARP
     return names[root % 12] + QUALITY_SUFFIX.get(quality, quality)
+
+
+_LETTERS = "CDEFGAB"
+_LETTER_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+# The scale step (0 = the key's own letter ... 6) a chord root that many semitones above the tonic is written on. One
+# table serves both modes: a major key's flat side (bII bIII bVI bVII) and its #IV, and a minor key's raised 3rd, 6th
+# and 7th and its #iv, each keep the letter of the step they alter -- so the bVI of D major is Bb (not A#), the bVII of
+# C major Bb, and the raised 7th of D minor C# (not Db).
+_STEP_OF_INTERVAL = (0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6)
+
+
+def spell_in_key(root: int, quality: str, tonic: int, mode: str, prefer_flats: bool = True) -> str:
+    """A chord's name spelled by what it does in the key (`tonic`, `mode`), the way a chart in that key writes it: the
+    key's own chords take its scale's letters (the same flats/sharps as key_name), and a borrowed or altered chord takes
+    the letter of the step it alters (issue #7 review: every chord used to get one blanket sharp-or-flat choice, so a
+    D-minor shape's VI read "A#" and a D-major song's bVI "A#"). Only the 17 names the app and its chord diagrams use are
+    ever returned -- Cb/Fb/E#/B# and double accidentals become their plain name (Cb -> B). `prefer_flats=False` (Settings'
+    "Use flats" box off) spells every chord with sharps, as the app did before flats existed."""
+    if not prefer_flats:
+        return spell(root, quality, False)
+    tonic_letter = key_name(tonic, mode, True)[0]
+    letter = _LETTERS[(_LETTERS.index(tonic_letter) + _STEP_OF_INTERVAL[(root - tonic) % 12]) % 7]
+    offset = (root - _LETTER_PC[letter] + 6) % 12 - 6
+    name = letter + {0: "", 1: "#", -1: "b"}.get(offset, "?")
+    if name not in NOTES_SHARP and name not in NOTES_FLAT:
+        name = NOTES_SHARP[root % 12] if offset > 0 else NOTES_FLAT[root % 12]
+    return name + QUALITY_SUFFIX.get(quality, quality)
 
 
 # Owner, 2026-09-23, the full arc: "the keys that have the most easy chords ... c major D major a minor",
@@ -152,28 +163,50 @@ def parse_chord_label(label: str) -> tuple[int, str] | None:
     return None
 
 
-def transpose_chord_label(label: str, capo: int) -> str:
+def _shape_tonic_and_mode(shape_key: str) -> tuple[int, str] | None:
+    """(pitch class, "major"|"minor") of a capo shape key -- "Dm", "E", or written out ("D minor"); None if unreadable."""
+    text = shape_key.strip()
+    if " " in text:
+        tonic, _, mode = text.partition(" ")
+        mode = mode.strip().lower()
+    elif text.endswith("m"):
+        tonic, mode = text[:-1], "minor"
+    else:
+        tonic, mode = text, "major"
+    names = NOTES_SHARP if tonic in NOTES_SHARP else NOTES_FLAT
+    if tonic not in names or mode not in ("major", "minor"):
+        return None
+    return names.index(tonic), mode
+
+
+def transpose_chord_label(label: str, capo: int, shape_key: str | None = None, prefer_flats: bool = True) -> str:
     """A chord label re-spelled `capo` semitones DOWN -- what you'd actually finger with that capo on to
-    sound the original chord. "N" and anything unparseable pass through unchanged. Always spells with sharps:
-    none of the CAGED shape keys (C D E G A Am Dm Em) are in _FLAT_MAJOR_TONICS, so this matches the app's
-    own existing spelling convention exactly, with no separate flats-lookup needed."""
+    sound the original chord. "N" and anything unparseable pass through unchanged. Spelled by what the chord
+    does in `shape_key` (spell_in_key) when it is given: Dm shapes are a FLAT key (their VI is Bb), and a
+    borrowed bVII in C shapes is Bb too (issue #7 review: this used to spell every chord with sharps, on the
+    mistaken belief that no shape key uses flats). Without a shape key, plain sharps."""
     parsed = parse_chord_label(label)
     if parsed is None:
         return label
     root, quality = parsed
-    return spell((root - capo) % 12, quality, use_flats=False)
+    shape = _shape_tonic_and_mode(shape_key) if shape_key else None
+    if shape is None:
+        return spell((root - capo) % 12, quality, use_flats=False)
+    return spell_in_key((root - capo) % 12, quality, shape[0], shape[1], prefer_flats)
 
 
-def transpose_chord_track(chord_track: ChordTrack, capo_fret: int, shape_key: str) -> ChordTrack:
+def transpose_chord_track(chord_track: ChordTrack, capo_fret: int, shape_key: str, prefer_flats: bool = True) -> ChordTrack:
     """The whole track re-spelled for a capo at `capo_fret`, fretting `shape_key`'s open shapes
     (e.g. ("D", 1) for Eb major -- see capo_and_shape_key). Timing is untouched -- only each
-    event's own label is transposed (transpose_chord_label) and the track's key is renamed to
-    the shape actually fretted, e.g. "D major"/"E minor" (a minor shape_key like "Em" carries its
-    trailing "m", stripped here since ChordTrack.key spells minors as "<tonic> minor", the same
-    convention key_name() uses elsewhere)."""
-    events = [ChordEvent(start=e.start, end=e.end, label=transpose_chord_label(e.label, capo_fret))
+    event's own label is transposed (transpose_chord_label, spelled in the shape key) and the track's
+    key is renamed to the shape actually fretted, e.g. "D major"/"E minor" (a minor shape_key like "Em"
+    carries its trailing "m", stripped here since ChordTrack.key spells minors as "<tonic> minor", the
+    same convention key_name() uses elsewhere). `prefer_flats` is Settings.prefer_flats (off: sharps)."""
+    events = [ChordEvent(start=e.start, end=e.end, label=transpose_chord_label(e.label, capo_fret, shape_key, prefer_flats))
               for e in chord_track.events]
-    if shape_key.endswith("m"):
+    if " " in shape_key.strip():
+        key = shape_key.strip()                     # already written out ("D minor")
+    elif shape_key.endswith("m"):
         key = f"{shape_key[:-1]} minor"
     else:
         key = f"{shape_key} major"

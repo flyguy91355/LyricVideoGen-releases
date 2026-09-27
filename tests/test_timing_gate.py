@@ -3,6 +3,7 @@ of its judged lines are. Owner's standard, 2026-09-20, after 'Like a Prayer' (se
 by a check that let a repeated chorus excuse a misplaced line. Song text is invented."""
 
 from dataclasses import replace
+from pathlib import Path
 
 from lyricvideo.anchors import HeardWord
 from lyricvideo.models import ChordTrack, LyricLine, Song, Word, load_song, save_song
@@ -208,11 +209,15 @@ def test_a_rendered_song_that_fails_the_check_is_not_offered_for_upload(tmp_path
 
 
 def test_a_rendered_song_that_fails_the_check_appears_for_review_with_the_reason(tmp_path):
+    from lyricvideo.pipeline import review_concern
     _rendered(tmp_path, "good", placed())
     _rendered(tmp_path, "bad", placed({1: 1.0, 6: -1.0}))
+    before = (tmp_path / "bad" / "lyrics_timed.json").read_bytes()
 
     assert list_flagged_songs(tmp_path) == ["bad"]
-    assert "80%" in load_song(tmp_path / "bad" / "lyrics_timed.json").lyrics_accuracy_concern
+    assert "80%" in review_concern(tmp_path / "bad")
+    # issue #7 review: a listing is read-only -- the hold is judged at the current bar, never written back
+    assert (tmp_path / "bad" / "lyrics_timed.json").read_bytes() == before
 
 
 def test_a_nested_easychords_variant_that_fails_the_check_is_flagged_under_its_own_slug(tmp_path):
@@ -221,6 +226,96 @@ def test_a_nested_easychords_variant_that_fails_the_check_is_flagged_under_its_o
     _rendered(tmp_path / "bridge-over-troubled-water", "easychords", placed({1: 1.0, 6: -1.0}))
 
     assert list_flagged_songs(tmp_path) == ["bridge-over-troubled-water/easychords"]
+
+
+def _easy_variant_like_production(song_dir):
+    """What build_capo_variant writes into <song>/easychords: the song's own lines with the chords respelled, its own
+    video -- and NO transcript.json (issue #7 review: the test above gives the variant one, which production never does)."""
+    variant = song_dir / "easychords"
+    variant.mkdir()
+    song = load_song(song_dir / "lyrics_timed.json")
+    save_song(replace(song, title="T EasyChords", chord_track=ChordTrack(key="D major")), variant / "lyrics_timed.json")
+    (variant / "t-easychords.mp4").write_bytes(b"video")
+    # Its marker, made for the song's settled (hard) key: without one it is an EASY version to rebuild, never uploadable.
+    from lyricvideo.chord_theory import save_easy_chord_capo_marker
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    save_easy_chord_capo_marker(variant, 1, "D", "Eb major", "T")
+    save_decision(song_dir, KeyDecision(status="confirmed", key="Eb major", source="agreed", chord_key="Eb major"))
+    return variant
+
+
+def test_an_easy_chord_variant_is_judged_against_its_songs_transcript_and_offered_when_it_passes(tmp_path):
+    _rendered(tmp_path, "hard-song", placed({4: 1.0}))                      # 90%: passes the default bar
+    _easy_variant_like_production(tmp_path / "hard-song")
+
+    assert check_saved_song(tmp_path / "hard-song" / "easychords").share == 0.9
+    assert list_uploadable_songs(tmp_path) == ["hard-song", "hard-song/easychords"]
+    assert list_pending_uploads(tmp_path) == ["hard-song", "hard-song/easychords"]
+
+
+def test_an_easy_chord_variant_is_held_with_its_song_when_the_bar_rises(tmp_path):
+    _rendered(tmp_path, "hard-song", placed({4: 1.0}))
+    _easy_variant_like_production(tmp_path / "hard-song")
+
+    use_pass_share_from(lambda: 0.95)
+
+    assert list_pending_uploads(tmp_path) == []                             # the tick can no longer auto-upload it
+    assert list_uploadable_songs(tmp_path) == []
+    assert list_flagged_songs(tmp_path) == ["hard-song", "hard-song/easychords"]
+
+
+def test_an_easy_chord_variant_built_while_its_song_was_held_is_released_with_it(tmp_path):
+    _rendered(tmp_path, "hard-song", placed({1: 1.0, 6: -1.0}))             # 80%
+    path = tmp_path / "hard-song" / "lyrics_timed.json"
+    save_song(replace(load_song(path), lyrics_accuracy_concern=check_saved_song(tmp_path / "hard-song").concern), path)
+    _easy_variant_like_production(tmp_path / "hard-song")                   # Render Anyway copied the timing concern
+    assert list_flagged_songs(tmp_path) == ["hard-song", "hard-song/easychords"]
+
+    use_pass_share_from(lambda: 0.80)
+
+    assert list_flagged_songs(tmp_path) == []
+    assert list_pending_uploads(tmp_path) == ["hard-song", "hard-song/easychords"]
+
+
+def test_the_hold_command_records_an_easy_chord_variant_under_its_own_slug(tmp_path, monkeypatch):
+    from lyricvideo import cleared_log
+    monkeypatch.setattr(cleared_log, "LOG_FILE", tmp_path / "cleared.json")
+    _rendered(tmp_path, "hard-song", placed({1: 1.0, 6: -1.0}))
+    variant = _easy_variant_like_production(tmp_path / "hard-song")
+
+    reason = hold_if_timing_fails(variant)
+
+    assert "80%" in reason and load_song(variant / "lyrics_timed.json").lyrics_accuracy_concern == reason
+    assert cleared_log.history()[-1]["slug"] == "hard-song/easychords"      # never a bare "easychords" shared by every song
+
+
+def test_a_failure_to_update_the_cleared_record_never_stops_the_hold(tmp_path, monkeypatch, capsys):
+    import lyricvideo.timing_gate as timing_gate
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(timing_gate, "record_removed", broken)
+    _save(tmp_path / "bad", placed({1: 1.0, 6: -1.0}))
+
+    reason = hold_if_timing_fails(tmp_path / "bad")
+
+    assert "80%" in reason and load_song(tmp_path / "bad" / "lyrics_timed.json").lyrics_accuracy_concern == reason
+    assert "could not update the cleared-songs record" in capsys.readouterr().err
+
+
+def test_an_alignment_that_moves_a_line_into_silence_never_beats_one_a_little_late_on_the_singing():
+    """Issue #7 review: ranking each candidate by its OWN share let one that threw a line into a solo (where nothing is heard,
+    so the line drops out of its count) beat one that placed the same line 0.8 s late on its own singing."""
+    a_little_late = placed({3: 0.8})                                        # line 4 is 0.8 s late, on its own singing
+    into_silence = placed({9: 20.0})                                        # the last line shown 20 s after it is sung
+    assert check_sync(WORDS, into_silence, HEARD).share == 1.0               # its own share looks perfect: merely "unjudged"
+
+    for preferred in ("whole-song", "anchored"):
+        name, times, report = pick_by_sync(
+            {"whole-song": a_little_late, "anchored": into_silence}, WORDS, HEARD, preferred=preferred,
+        )
+        assert name == "whole-song" and times == a_little_late and report.share == 0.9
 
 
 def test_a_fresh_render_takes_the_alignment_that_is_in_sync_and_reports_no_concern():
@@ -447,23 +542,45 @@ def _set_key(work_root, name, key: str) -> None:
     save_song(replace(load_song(song_dir / "lyrics_timed.json"), chord_track=ChordTrack(key=key)), song_dir / "lyrics_timed.json")
 
 
+def _buildable(work_root, name, key: str) -> None:
+    """What build_capo_variant needs besides the key: a song_info.json with a title, the audio in the song's folder, and
+    the key settled as that same key (the backfill list only offers a song the build will really make)."""
+    import json
+    from lyricvideo.key_decision import KeyDecision, save_decision
+    song_dir = work_root / name
+    _set_key(work_root, name, key)
+    (song_dir / "song_info.json").write_text(json.dumps({"title": "T", "artist": "a"}), encoding="utf-8")
+    (song_dir / "a.mp3").write_bytes(b"audio")
+    save_decision(song_dir, KeyDecision(status="confirmed", key=key, source="agreed", chord_key=key))
+
+
 def test_easy_chord_backfill_lists_only_a_passing_hard_key_song(tmp_path):
     _rendered(tmp_path, "hard", placed())
-    _set_key(tmp_path, "hard", "Eb major")
+    _buildable(tmp_path, "hard", "Eb major")
     _rendered(tmp_path, "easy", placed())
-    _set_key(tmp_path, "easy", "C major")
+    _buildable(tmp_path, "easy", "C major")
     _rendered(tmp_path, "failing", placed({1: 1.0, 6: -1.0}))
-    _set_key(tmp_path, "failing", "Eb major")
+    _buildable(tmp_path, "failing", "Eb major")
 
     assert list_easy_chord_backfill_candidates(tmp_path) == ["hard"]
 
 
-def test_easy_chord_backfill_excludes_a_song_already_converted(tmp_path):
+def test_easy_chord_backfill_offers_a_song_whose_easy_folder_has_no_video_and_excludes_a_current_one(tmp_path, monkeypatch):
+    import lyricvideo.pipeline as pipeline
+    from lyricvideo.pipeline import easy_chord_backfill_listing
     _rendered(tmp_path, "hard", placed())
-    _set_key(tmp_path, "hard", "Eb major")
-    (tmp_path / "hard" / "easychords").mkdir()   # already has its own capo variant -- don't offer it again
+    _buildable(tmp_path, "hard", "Eb major")
+    (tmp_path / "hard" / "easychords").mkdir()   # a killed render leaves a folder with no video: still offered
 
-    assert list_easy_chord_backfill_candidates(tmp_path) == []
+    listing = easy_chord_backfill_listing(tmp_path)
+    assert listing.songs == ["hard"] and "no video" in listing.labels["hard"]
+
+    def fake_assemble(lines, chords, images_dir, audio_path, final_path, *args, **kwargs):
+        Path(final_path).write_bytes(b"video")
+    monkeypatch.setattr(pipeline, "assemble_video", fake_assemble)
+    assert pipeline.build_capo_variant(tmp_path / "hard") is not None
+
+    assert list_easy_chord_backfill_candidates(tmp_path) == []   # it has a current EASY CHORD video now
 
 
 def test_the_note_under_the_upload_list_says_how_many_videos_are_hidden_and_below_what():
@@ -494,6 +611,51 @@ def test_a_redo_that_changes_the_timing_voids_the_verification(tmp_path):
     save_song(song, _rewrite)
 
     assert verification(tmp_path / "a") is None
+
+
+def test_a_key_correction_that_leaves_the_timing_alone_keeps_the_owners_verification(tmp_path):
+    """Issue #7 review: Set Key / scripts/settle_keys.py --apply rewrite lyrics_timed.json with only the key changed; hashing
+    the whole file silently undid the owner's approval and sent the song back to Flagged."""
+    _rendered(tmp_path, "checked", placed({1: 1.0, 6: -1.0}))              # 80%: fails the 90% bar
+    mark_verified(tmp_path / "checked", automatic_share=0.8)
+    path = tmp_path / "checked" / "lyrics_timed.json"
+
+    save_song(replace(load_song(path), chord_track=ChordTrack(key="E major")), path)
+
+    assert verification(tmp_path / "checked") is not None
+    assert list_uploadable_songs(tmp_path) == ["checked"] and list_flagged_songs(tmp_path) == []
+
+
+def test_a_concern_written_into_the_file_keeps_the_owners_verification(tmp_path):
+    _save(tmp_path / "a", placed({1: 1.0, 6: -1.0}))
+    mark_verified(tmp_path / "a", automatic_share=0.8)
+    path = tmp_path / "a" / "lyrics_timed.json"
+
+    save_song(replace(load_song(path), lyrics_accuracy_concern=check_saved_song(tmp_path / "a").concern), path)
+
+    assert verification(tmp_path / "a") is not None
+    assert hold_if_timing_fails(tmp_path / "a") == ""
+
+
+def test_a_verification_recorded_in_the_older_whole_file_format_is_honored_and_survives_a_key_fix(tmp_path):
+    import hashlib
+    import json
+    _rendered(tmp_path, "older", placed({1: 1.0, 6: -1.0}))
+    path = tmp_path / "older" / "lyrics_timed.json"
+    (tmp_path / "older" / "owner_verified.json").write_text(json.dumps({
+        "fingerprint": hashlib.sha256(path.read_bytes()).hexdigest(), "verified_at": "2026-09-22T10:00:00+00:00",
+        "automatic_share": 0.8, "needed": 0.9,
+    }), encoding="utf-8")
+    assert verification(tmp_path / "older") is not None
+
+    save_song(replace(load_song(path), chord_track=ChordTrack(key="E major")), path)      # carried over, then rewritten
+    assert verification(tmp_path / "older") is not None
+    assert list_uploadable_songs(tmp_path) == ["older"]
+
+    song = load_song(path)
+    song.lines[0].words[0].start_time += 0.7                                # a redo's new timing: the approval lapses
+    save_song(song, path)
+    assert verification(tmp_path / "older") is None
 
 
 def test_a_verified_song_that_fails_the_bar_is_offered_for_upload_and_is_not_held_or_flagged(tmp_path):
@@ -574,6 +736,7 @@ def _gui_with_a_failing_song(tmp_path, monkeypatch, answer):
         settings=Settings(),
         _invalidate_upload_list=lambda: refreshed.append("upload"), _invalidate_pending_list=lambda: refreshed.append("pending"),
         _invalidate_flagged_list=lambda: refreshed.append("flagged"),
+        _invalidate_easy_chord_backfill_list=lambda: refreshed.append("easy"),
     )
     return stub, asked, refreshed
 
@@ -586,7 +749,7 @@ def test_marking_verified_asks_first_shows_the_automatic_score_then_records_the_
 
     assert len(asked) == 1 and "80%" in asked[0] and "90%" in asked[0]
     assert verification(tmp_path / "work" / "hard-song")["automatic_share"] == 0.8
-    assert sorted(refreshed) == ["flagged", "pending", "upload"]
+    assert {"flagged", "pending", "upload"} <= set(refreshed)
 
 
 def test_saying_no_to_the_verify_prompt_records_nothing(tmp_path, monkeypatch):

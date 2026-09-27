@@ -27,10 +27,16 @@ crema, torch, and demucs all coexist correctly in one environment.
 crema handles beat-independent segmentation, chord identity, AND silence
 ("N") detection all as part of its own trained output -- unlike the old
 pipeline, this module no longer needs its own beat-tracking-based
-segmentation or RMS-based silence heuristic for chord identity. Key and BPM
-are still estimated independently via librosa (unrelated to chord identity,
-never implicated in either past incident), purely for the on-screen Key/BPM
-badge and the countdown lead-in's tempo.
+segmentation or RMS-based silence heuristic for chord identity. BPM is still
+estimated via librosa's beat tracker, for the Key/BPM badge and the countdown
+lead-in's tempo.
+
+The KEY is not decided here: the returned track's `key` is "" and its labels
+are provisionally spelled with sharps. The pipeline hands the track straight
+to key_decision.settle_song_key(), which settles the key from the chords
+(key_estimate.py) plus a second opinion and respells every label to it
+(issue #7 review: the whole-song HPSS + CQT average-pitch key this module
+used to compute cost ~12 s per song and was always replaced).
 """
 
 from __future__ import annotations
@@ -83,12 +89,15 @@ _PITCH_CLASS.update({name: i for i, name in enumerate(theory.NOTES_FLAT)})
 _QUALITY_TO_TRIAD_OR_SEVENTH: dict[str, str] = {
     "maj": "maj", "min": "min", "maj7": "maj7", "min7": "min7", "7": "7",
     "dim": "min", "dim7": "min", "hdim7": "min7", "aug": "maj",
-    # minor-major 7th: a MINOR third with a major seventh. crema's real
+    # minor-major 7th: a MINOR third with a MAJOR seventh. crema's real
     # vocabulary (pumpp's '3567s' set) does emit it, and it was missing here,
     # so the .get() default below relabeled e.g. "A:minmaj7" as plain A major
     # -- the wrong third, the one interval a strummer can't fudge (found by
-    # code review against pumpp's QUALITIES table, 2026-09-14).
-    "minmaj7": "min7",
+    # code review against pumpp's QUALITIES table, 2026-09-14). It maps to the
+    # plain minor triad, NOT min7: m7 would tell the player to play the FLAT
+    # seventh (G over Am) where the recording has the major one (G#) -- the
+    # same reason dim7 maps to min (issue #7 review).
+    "minmaj7": "min",
     "sus2": "maj", "sus4": "maj", "maj6": "maj", "min6": "min",
     "9": "7", "maj9": "maj7", "min9": "min7", "11": "7", "13": "7",
     "1": "maj", "5": "maj",
@@ -176,6 +185,13 @@ def detect_chords(
 ) -> ChordTrack:
     """Analyse an audio file and return its ChordTrack.
 
+    The track's key is "" and its labels are spelled with sharps: the caller
+    settles the key (key_decision.settle_song_key) and respells the labels to
+    it. prefer_flats is therefore not used here -- the Settings box ("Use
+    flats in flat keys") takes effect where the spelling is decided,
+    settle_song_key(prefer_flats=...) -- and is accepted only so existing
+    callers and Settings files keep working.
+
     snap_chords_to_key is accepted for backward compatibility with existing
     Settings files and the Settings panel's own checkbox, but no longer
     changes chord identity: it was the old template-matching pipeline's
@@ -193,14 +209,11 @@ def detect_chords(
     if y.size < SR:  # < 1 s of audio
         return ChordTrack()
 
-    # Key and BPM are estimated independently of chord identity, purely for the
-    # on-screen Key/BPM badge and the countdown's beat-synced tempo -- unrelated
-    # to (and never implicated in) either past chord-accuracy incident.
-    y_harm = librosa.effects.harmonic(y=y, margin=3.0)
-    chroma = librosa.feature.chroma_cqt(y=y_harm, sr=SR, hop_length=HOP)
-    tonic, mode, _key_conf = theory.estimate_key(chroma.mean(axis=1))
-    use_flats = prefer_flats and theory.key_uses_flats(tonic, mode)
+    # Provisional sharp spelling: settle_song_key() respells every label to the
+    # settled key, so no key is estimated here (see the module docstring).
+    use_flats = False
 
+    # BPM, for the on-screen Key/BPM badge and the countdown's beat-synced tempo.
     try:
         tempo, _beats = librosa.beat.beat_track(y=y, sr=SR, hop_length=HOP, units="frames")
         tempo = _fold_tempo(float(np.atleast_1d(tempo)[0]))
@@ -233,4 +246,4 @@ def detect_chords(
     if events:
         events[-1].end = max(events[-1].end, duration)
 
-    return ChordTrack(events=events, key=theory.key_name(tonic, mode, prefer_flats), bpm=round(tempo, 1))
+    return ChordTrack(events=events, key="", bpm=round(tempo, 1))

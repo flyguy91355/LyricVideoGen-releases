@@ -292,7 +292,7 @@ def test_retries_stop_early_once_the_song_is_no_longer_lyrics_wrong(tmp_path, mo
     _lyrics_wrong(tmp_path, "song-r")
     state = {"redone": False}
 
-    def fake_diagnose(work_dir):
+    def fake_diagnose(work_dir, needed=None):
         if state["redone"]:
             return Diagnosis(DiagCategory.ALIGNMENT_ONLY, detail="now only alignment is off", sync_share=0.875)
         return Diagnosis(DiagCategory.LYRICS_WRONG, detail="lyrics wrong", sync_share=0.625, mismatched_lines=[6, 7, 8])

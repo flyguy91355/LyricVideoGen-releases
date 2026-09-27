@@ -148,3 +148,81 @@ def test_next_chord_after_finds_next_different_label():
 def test_next_chord_after_returns_none_at_end_of_track():
     track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C")])
     assert next_chord_after(track, 1.0) is None
+
+
+def test_original_song_dir_is_the_parent_only_for_an_easychords_variant():
+    from lyricvideo.models import original_song_dir
+
+    assert original_song_dir(Path("work") / "some-song") == Path("work") / "some-song"
+    assert original_song_dir(Path("work") / "some-song" / "easychords") == Path("work") / "some-song"
+
+
+def test_save_song_writes_what_it_always_wrote(tmp_path):
+    from dataclasses import asdict
+
+    song = Song(title="T", audio_path="a.mp3", lines=[LyricLine(words=[Word("hum", 1.0, 1.4)])])
+    path = tmp_path / "lyrics_timed.json"
+
+    save_song(song, path)
+
+    assert path.read_text(encoding="utf-8") == json.dumps(asdict(song), indent=2)
+    assert [p.name for p in tmp_path.iterdir()] == ["lyrics_timed.json"]
+
+
+def test_a_save_that_fails_part_way_leaves_the_previous_file_whole(tmp_path, monkeypatch):
+    """Issue #7 review: save_song truncated the file and then wrote it, so a kill mid-save (earlyoom, closing the app
+    mid-run) left an empty lyrics_timed.json. It now writes a temp file and swaps it in atomically."""
+    import os
+
+    import pytest
+
+    path = tmp_path / "lyrics_timed.json"
+    save_song(Song(title="Old", audio_path="a.mp3"), path)
+    before = path.read_bytes()
+
+    def interrupted(src, dst):
+        raise OSError("killed mid-save")
+
+    monkeypatch.setattr(os, "replace", interrupted)
+    with pytest.raises(OSError):
+        save_song(Song(title="New", audio_path="a.mp3"), path)
+
+    assert path.read_bytes() == before and load_song(path).title == "Old"
+    assert [p.name for p in tmp_path.iterdir()] == ["lyrics_timed.json"]   # the temp file is cleaned up
+
+
+def test_a_reader_never_sees_a_half_written_song(tmp_path):
+    """A song list reading the file while a worker saves it must see the old or the new song, never a torn one."""
+    import threading
+
+    path = tmp_path / "lyrics_timed.json"
+    big = Song(title="T", audio_path="a.mp3", lines=[
+        LyricLine(words=[Word(f"hum{i}x{j}", i + j * 0.1, i + j * 0.1 + 0.05) for j in range(8)]) for i in range(400)
+    ])
+    save_song(big, path)
+    stop = threading.Event()
+    torn = []
+
+    def writer():
+        for n in range(40):
+            big.title = f"T{n}"
+            save_song(big, path)
+        stop.set()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                load_song(path)
+            except PermissionError:                             # Windows: the file is being swapped right now
+                continue
+            except ValueError as e:                             # a torn read
+                torn.append(e)
+
+    threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert torn == []
+    assert load_song(path).title == "T39"

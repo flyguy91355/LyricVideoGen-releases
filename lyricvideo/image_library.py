@@ -142,7 +142,20 @@ class ImageLibrary:
         return None
 
     def copy_to(self, image_id: str, dest: Path) -> None:
-        Path(dest).write_bytes(self.image_path(image_id).read_bytes())
+        """Copies a library picture to `dest` through a private temp name, so an interrupted or disk-full copy
+        never leaves a half-written picture under a song's cache name (issue #7 review)."""
+        dest = Path(dest)
+        data = self.image_path(image_id).read_bytes()       # FileNotFoundError here = the library's PNG is gone
+        tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, dest)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
     def record_reuse(self, image_id: str, song_slug: str) -> None:
         self._db.execute(

@@ -3,496 +3,386 @@
 Generates synced lyric+chord "play along" videos from nothing but an audio file:
 karaoke-style scrolling lyrics (forced-aligned to the real vocal stem) and a
 NOW/NEXT/timeline chord bar (chords detected directly from the audio, never a
-tab/chord sheet) composited over an AI-generated, Ken-Burns background
-image that changes per lyric line — and per chord during instrumental
-gaps — to follow the song. A separate `deep_review/` program retries the
-backlog, cost-tracked (3 searches/attempt, 5-cent/song cap, skips 85%+
-untouched) -- HISTORY 9-22. Original tab-PDF design in
-`docs/superpowers/specs/2026-09-06-tab-pdf-video-generator-design.md` (superseded,
-see below); plan
-`docs/superpowers/plans/2026-09-06-tab-pdf-video-generator.md`. MP3-only merge
-design: `docs/superpowers/specs/2026-09-09-chord-detection-merge-design.md`, plan
-`docs/superpowers/plans/2026-09-09-mp3-only-chord-merge.md`. GUI uses
-CustomTkinter with an owner-tunable Settings panel (output resolution/fps/encoder/
-crf, chord-bar typography/colors/toggles, chord-detection tuning) — design
-`docs/superpowers/specs/2026-09-09-customtkinter-settings-gui-design.md`, plan
-`docs/superpowers/plans/2026-09-09-customtkinter-settings-gui.md`.
+tab/chord sheet) composited over AI-generated Ken-Burns backgrounds that change
+per lyric line -- and per chord during instrumental gaps. `deep_review/` retries
+the flagged backlog (below). Specs/plans live in `docs/superpowers/` (the 9-06
+tab-PDF design is superseded by the 9-09 MP3-only merge; CustomTkinter Settings
+GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
 
 ## Running it
 
-- **Linux and Windows both supported.** Launchers: `run_playalongvideoproduction.sh`
-  (Linux/macOS) and `run_playalongvideoproduction.bat` (Windows). Code never
-  hardcodes the venv interpreter path -- `lyricvideo/venv.py`'s `venv_python()`
-  resolves `.venv/bin/python` vs `.venv/Scripts/python.exe`; read every
-  `.venv/bin/python` below that way.
-  `.gitattributes` keeps `*.sh`/`.githooks/*` LF and `*.bat` CRLF.
-- **GUI (normal use):** double-click the `PlayAlongVideoProduction` desktop icon, or
-  run `./run_playalongvideoproduction.sh` from the repo root. Launchers call the
-  venv's own `python` directly, never `source .venv/bin/activate` (stale baked-in
-  `VIRTUAL_ENV` path; HISTORY 9-09). Supply an audio
-  file — title/artist/lyrics are identified and fetched automatically, chords are
-  detected from the audio, and the title field is an editable override, not
-  a required input — then click Generate; work dir (no Browse) falls back to
-  the filename if identification isn't done (HISTORY). A "New Song"
-  button beside Generate resets the form/log/progress bar (no relaunch).
-  The window's X (`WM_DELETE_WINDOW` -> `_on_close_window`) confirms first while a Generate/Redo/Batch
-  runs (closing kills the pipeline and any in-flight upload; no resume), else closes at once (HISTORY 9-22).
-  Tests invoke the registered Tcl callback, not the Python method (HISTORY 9-10). A
-  "Batch: Process a Folder" section (`lyricvideo/batch.py` finds/resolves the
-  files) runs every audio file in a folder through the pipeline sequentially --
-  one up-front confirmation decides whether already-done songs are skipped or
-  regenerated (backing up each one first, like Redo) for the whole batch; a
-  file that errors is logged and skipped, never aborting the rest. An
-  interrupted item whose Demucs stems already exist resumes at
-  `BatchItem.resume_stage="fetch_lyrics"` instead of redoing the slowest
-  stage from scratch (HISTORY 9-18). `batch.py`'s `release_memory()` (gc.collect() + Linux malloc_trim) runs
-  after every song, success or failure -- RSS climbs over a long Batch
-  without it (HISTORY 9-18). The chosen folder path is never `.strip()`'d; `resolve_existing_folder()` recovers a trailing-space name the picker dropped (HISTORY 9-10). The batch folder field
-  also remembers the last folder used (`load_last_batch_folder`/
-  `save_last_batch_folder` in `lyricvideo/batch.py`, a separate JSON file --
-  not a `Settings` field, since `SettingsPanel.collect()` wholesale-replaces
-  `Settings` and would silently reset any field with no widget behind it) --
-  prefilled on launch and used as the Browse
-  dialog's `initialdir`. Built with CustomTkinter
-  (`lyricvideo/gui.py`): a two-column layout, left = the single-song form/Generate/
-  Redo/log console/generation progress bar, right = the YouTube connect status/
-  button/comments panel plus a "⚙ Settings" button. Settings (live preview + the
-  scrollable Settings panel) live in their own popup window (`_open_settings_window`,
-  same transient/grab_set/lift/focus_force/brief-topmost treatment as the Update
-  Available dialog) rather than an embedded tab (HISTORY 9-11) -- re-opening
-  while already open lifts the existing window instead of
-  building a second `SettingsPanel` bound to the same `Settings` object. Closing the
-  popup (its own X button) with unsaved changes prompts the same discard
-  confirmation as the panel's own Discard button, then reverts `self.settings` to
-  the on-disk baseline before destroying the window. Constructing a `SettingsPanel` there (and at startup)
-  is wrapped in `self._suppress_settings_save = True`, since `load_from()` fires `on_change` early (HISTORY
-  2026-09-11); startup resets the flag once, so a later construction re-arms it. The scrollable Settings panel
-  (`lyricvideo/settings_panel.py`) is bound to a `Settings` object
-  (`lyricvideo/settings.py`, persisted to `~/.playalongvideoproduction/settings.json`,
-  loaded on launch and saved only on explicit Save). Every field shows its own default (`_default_text`,
-  from a fresh `Settings()`); every slider has a typeable box (`_parse_clamped_float`, tolerant of a
-  "%"/"s" suffix), driven off a trace on the slider's Tk variable, not `CTkSlider`'s `command`, which
-  only fires on a live drag (HISTORY 9-11). An unsaved field's label is bold+orange
-  (`_dirty_fields()`/itemized confirm before Save).
-  `render.py`/`detect_chords.py`/`assemble_video()` all take plain keyword arguments
-  for every Settings-backed value (colors as RGB tuples, sizes as int, toggles as
-  bool) and default to the program's original hardcoded values — they do not import
-  `settings.py`; `run_pipeline()` is the sole integration point that accepts a real
-  `Settings` object and unpacks it.
-- **CLI (staged/resumable, useful for debugging one stage):**
+- **Linux and Windows.** Launchers `run_playalongvideoproduction.sh`/`.bat` call the venv's own `python`, never
+  `source .venv/bin/activate` (HISTORY 9-09); `venv.py`'s `venv_python()` resolves `.venv/bin/python` vs
+  `.venv/Scripts/python.exe` -- read every `.venv/bin/python` below that way. `.gitattributes`: `*.sh`/`.githooks/*`
+  LF, `*.bat` CRLF.
+- **GUI** (`gui.py`, CustomTkinter; desktop icon or the launcher): pick an audio file -- title/artist/lyrics are
+  identified and fetched, chords detected; the title field is an optional override (its live YouTube-title preview
+  is not fed into it) -- then Generate. Picking another file always clears the identified artist and identifies the
+  new one (an identify-filled title is replaced, a typed one kept; a late result for another file is ignored). "New
+  Song" resets the form; the work dir falls back to the file name until identify finishes. Left column: form/Generate/Redo/log/progress; right: YouTube status/Connect, "⚙ Settings",
+  comment panels. Main window 1600x1000.
+  - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
+    googleapiclient, tensorflow, crema (`tests/test_gui_perf_imports.py`) -- gui's `_LazyAnthropic` and `build()`
+    wrapper, pipeline's lazy `anthropic` proxy, align's in-function torch import, assemble's `_load_moviepy`.
+  - Quit: X (`WM_DELETE_WINDOW` -> `_on_close_window`; tests invoke the registered Tcl callback, HISTORY 9-10) and
+    Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
+    Update runs (closing kills it; no resume). `_shut_down` withdraws the window at once, then destroys it; `_closing`
+    stops new scans.
+  - Work folders (`batch.work_dir_for`, `holds_other_recording(folder, artist, audio_path=None)`): a folder holding
+    this very file's copy (same name+size) is this song; else one whose `song_info.json` artist is known and differs
+    (`artist_key`; a word-subset is the same act) holds another recording, and the file gets `<title-artist>`
+    (`<title-file stem>` if the artist is unknown), then -2, -3... Generate then asks Yes = new folder / No = replace
+    (backed up) / Cancel; Yes also backs up a folder that holds this recording, and generating over the same song
+    backs up its video and timing first. Generate/Redo refuse up front, naming the path, when the audio is gone.
+  - **Batch: Process a Folder** (`batch.py`): every audio file in a folder, in turn. One prompt: Yes = skip done songs
+    / No = regenerate all (each backed up like Redo) / Cancel (Esc, X). An erroring file is logged and skipped. In one
+    Batch a folder already given to the SAME known artist's file is shared (two rips are never made or uploaded
+    twice); any other artist gets its own folder as above. Existing stems -> `BatchItem.resume_stage="fetch_lyrics"`.
+    `release_memory()` (gc + Linux malloc_trim) after every song, pass or fail (RSS creep, HISTORY 9-18). The folder
+    path is never `.strip()`'d (`resolve_existing_folder()`, 9-10); the last folder lives in its own JSON
+    (`load_last_batch_folder`/`save_last_batch_folder`) -- not a Settings field: `SettingsPanel.collect()` replaces
+    `Settings` wholesale and would reset any field with no widget.
+  - `render.py`/`detect_chords.py`/`assemble_video()` take plain keyword args for every Settings value (colors as RGB
+    tuples) defaulting to the original values, never importing `settings.py`; `run_pipeline()` alone takes a
+    `Settings` and unpacks it (`Settings.render_kwargs()`; an unknown resolution -> 1080p with a warning).
+- **CLI** (staged/resumable):
   ```bash
-  cd <repo root>
-  .venv/bin/python -m lyricvideo.pipeline --audio <path> --work-dir <dir> \
-      [--title "<override>"] \
+  .venv/bin/python -m lyricvideo.pipeline --audio <path> --work-dir <dir> [--title "<override>"] [--font <ttf>] \
       [--stage identify|separate|fetch_lyrics|align|detect_chords|images|render]
   ```
-  `--stage` resumes from a later stage using artifacts already written to
-  `--work-dir` by an earlier run -- useful since `separate`/`fetch_lyrics`/
-  `detect_chords`/`images` are the slow/expensive stages.
-  `run_pipeline()`'s `end_stage` stops early (no chords/images/render) for
-  free vetting (9-22).
-- Requires `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` at the repo
-  root (both are set locally; see `.env.example` for the template). No
-  Alpaca/trading credentials -- unrelated to AITrading, which lives beside it.
+  `--stage` resumes from artifacts already in `--work-dir`; `run_pipeline()`'s `end_stage` stops early (9-22).
+- Needs `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` (template `.env.example`). No trading credentials --
+  unrelated to AITrading beside it.
 
 ## Pipeline stages (`lyricvideo/pipeline.py`, `STAGES`)
 
-1. **identify** (`identify.py`) — resolves title/artist/duration from ID3/Vorbis/
-   M4A tags, filename parsing, and (if the artist is still unknown) lrclib-artist-
-   consensus + MusicBrainz-by-duration lookups. Written to `work_dir/song_info.json`.
-   A caller-supplied `--title` overrides the identified title for display/filename
-   purposes only — artist/duration always come from this stage's own resolution.
-2. **separate** (`separate.py`) — Demucs two-stem split of `--audio` into
-   vocals/instrumental on `compute_device()` -- `cuda` only when torch sees a
-   GPU AND its own build has kernels for that GPU's compute capability
-   (`cuda_build_supports_device()`, torch's same-major cubin rule; issue #5:
-   `torch.cuda.is_available()` was true on the GT 1030 under a cu130 wheel
-   built for sm_75+, and Demucs died on its first kernel launch), else `cpu`,
-   logging why; `LYRICVIDEO_DEVICE=cpu|cuda` overrides and is never second-guessed. Stems >3% shorter than the song are rejected. An auto-picked GPU run that still fails is retried once on
-   CPU. Output path convention
-   (`work_dir/htdemucs/<audio_stem>/{vocals,no_vocals}.wav`) is what makes
-   `--stage` resumption work — later stages look for the file at that same
-   path; a resume at fetch_lyrics/align/detect_chords whose stems are missing
-   re-runs Demucs instead of crashing. Demucs's own output is relayed through
-   `sys.stdout` (`_run_demucs`) so the GUI log shows its progress.
-3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`; HISTORY
-   2026-09-18/19) -- `fetch_lyric_lines_verified()` tries each source in turn (sidecar
-   `.lrc`/`.txt` beside `work_dir`'s audio copy, 9-15; lrclib.net edition-consensus
-   voting, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes,
-   into `lyric_lines.json`/`Song`. Passing = matching what faster-whisper HEARS in the
-   vocal stem (medium, VAD off): >=70% in-order word coverage, no run of >3 unmatched lines
-   or >12 sung words the lyrics lack (backing vocals ignored; unsung lead/tail lines dropped). None passing keeps the least-bad match flagged: no auto-upload, listed in "Flagged for Lyrics Review". Claude then
-   JUDGES unmatched stretches (`lyric_arbiter.py`: all recognizer failures -> accepted);
-   its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. `python -m
-   lyricvideo.verify_lyrics -h` re-checks finished songs; `replace_report` lists uploaded.
-   Whisper unavailable -> old Claude text check. LRC timestamps discarded.
-4. **align** — forced word-level alignment (`align.py`, model run in 75 s pieces: flat ~4 GB)
-   of `fetch_lyrics`'s text against the vocal stem; `combine.py` merges it onto the lines (a last word
-   microseconds past the stem's end is tolerated, issue #6; an empty lyric list
-   raises a clear RuntimeError). One whole-song CTC pass DRIFTED 20-50 s on repeated
-   choruses, so Whisper word times (`anchors.py`; words in silence dropped) checked
-   against lrclib's line timestamps (`combine_anchors`) bound each line to its own
-   window (`align_words_anchored`); `precision.py`/`sync.py` only suggest; `timing_gate.py` alone decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's singing) -- best of whole-song/anchored/blended else set aside; pending/flagged lists hold failing older songs, a failing song is HELD before chords/images/render (Flagged: Render Anyway; Remove = hide only); the Upload list (`list_uploadable_songs`) shows only passing; `owner_verified.py` (Mark Verified, or an Upload Anyway the daily limit skips) overrides every check until a Redo; `python -m lyricvideo.timing_gate` reports. A cleared song's real % (not the bar) is in cleared_log.py's note (9-23). MMS_FA knows
-   only a-z and `'`: `_normalize_word_for_alignment` spells digits out ("31" ->
-   "thirtyone"), reads `&` as "and", and gives a word with nothing left the `*` star
-   token (issue #3). Display text never changes.
-5. **detect_chords** (`detect_chords.py` + `chord_theory.py`) — real chord
-   identity, independent of lyrics: `crema` (trained CNN/CRNN, ISC) analyzes
-   Demucs's `no_vocals.wav`; its 602-class vocabulary collapses to this
-   app's 5 qualities via `_simplify_chord_label()` (every pumpp `3567s`
-   quality mapped explicitly, `minmaj7` included -- the `.get()` default `maj` is wrong for minor thirds). Replaced CQT-chroma
-   template matching 9-13 (HISTORY). Needs old TF/Keras/sklearn, no 3.12
-   wheels — **`.venv` runs on Python 3.11**; see
-   `requirements.txt` pins first. Only chord source, no tab/sheet.
-   **Key check** (`key_decision.py`, HISTORY 9-26; owner: the video and description MUST show the song's real key): after detect_chords, `settle_song_key()` sets `chord_track.key` -- the chord-based estimate (`key_estimate.py`; right for 73/80 verified songs, the old average-pitch guess 55/80) must AGREE with a Claude second opinion that picks among its candidate keys (`key_opinion.py`); else the song is HELD before images/video and shown in Flagged with **Set Key** (`key_owner.json`, always wins, survives Redo; Render Anyway resumes at images/render). `key_decision.json` records it. `schedule_upload` refuses a song without a settled key (`KeyNotConfirmed`), opens the description with `🎸 Song key: X` and checks an EASY video's marker key matches; `build_capo_variant` needs a settled key and proves its chords are the song's shifted by the capo (`capo_track_matches`); unsettled songs stay out of the pending lists (`key_needs_attention`; uploaded songs untouched). `scripts/settle_keys.py` (dry run; `--apply`) re-checks made-but-not-uploaded songs; `scripts/add_key_note.py` puts `📌 Song key: X (not Y as shown in the video)` on live descriptions. `is_quota_exceeded_error` also treats HTTP 403 `quotaExceeded` as a quota stop.
-6. **images** — `imagery.py`: one Claude call summarizes the whole song's gist
-   once (`summarize_song_gist`), then each *unique* lyric line AND each
-   instrumental-stretch caption (`layout.instrumental_image_captions()` -- the
-   SAME gap/segment walk `build_image_timeline()` renders from, so every key the
-   render looks up was generated; an uncovered sliver adopts its neighboring
-   chord's caption, and the generic `[Instrumental]` caption only exists for a
-   song with no chords at all) gets its own generated background image
-   (Replicate), cached by content hash so a repeated chorus or chord reuses one
-   image. Also reuses any `images_backup_*/` archive in the work dir.
-   `get_or_generate_image` retries a failed generation `_MAX_GENERATION_ATTEMPTS`
-   (3) times, then reuses the song's own most-recent real image
-   (`pipeline.py`'s `last_real_image`) instead of a plain color whenever a
-   real predecessor exists -- only a song's first image still falls
-   back to plain color (HISTORY 9-18). `substitute_fallback_images`
-   still replaces any remaining placeholder with the nearest real image in
-   the song's own sequence (`is_fallback_image`: a single perfectly solid
-   color), unless every image failed. `assemble_video()`'s `get_image`
-   applies the same rule per
-   frame: a key with no file behind it renders the nearest real image, never a
-   flat color. A missing `REPLICATE_API_TOKEN` raises a clear RuntimeError here.
-   **Shared image library** (spec `2026-09-25-shared-image-library-design.md`; `Settings.use_image_library`, OFF
-   until the owner reviews `scripts/preview_library_matches.py`'s leave-one-out contact sheet in `reports/`, and
-   `image_library_min_score`, provisional 0.34):
-   before buying, the images stage looks in `~/PlayAlongVideoProductionImages/` (`image_library.py`: SQLite + PNGs
-   deduped by picture; env `PLAYALONG_IMAGE_LIBRARY`) for a picture close to Claude's prompt by local CLIP
-   (`clip_embedder.py`; a pipeline run never downloads the ~605 MB weights -- only `scripts/import_image_library.py`
-   [`--dry-run`/`--limit N`; re-runnable; skips plain-colour placeholders], which also catches up old images, may). `library_session.py`'s `LibrarySession` COPIES a hit into
-   `work/<song>/images/` (one picture serves one line per song), files every purchase with its real prompt, and on
-   any error disables itself for that song. Redo's "Generate new images" passes `fresh_images=True` (skips the
-   lookup). `python -m lyricvideo.image_library stats` shows savings.
-7. **render** — `assemble.py`/`layout.py`/`render.py`: composites scrolling lyrics
-   (karaoke word-highlight sweep, Ken Burns pans), a NOW/NEXT/segmented-timeline
-   chord bar, a Key/BPM badge (paneled, 9-23), and a chord fingering legend
-   (`lyricvideo/chord_shapes.py` + `chord_diagram.py`) over the audio into the
-   final mp4 (`work_dir/<slugified-title>.mp4`); all text is drawn via
-   `render.load_font()` (a per-thread font cache -- never share FreeType faces
-   across the GUI and worker threads). `assemble_video()` closes its
-   `AudioFileClip` in a `finally` (moviepy never does; each render leaked an
-   ffmpeg reader) and caches backgrounds pre-scaled to the frame so
-   `apply_ken_burns()` skips a per-frame resample. The legend shows one small
-   guitar diagram per unique chord in the song (`pipeline.ordered_unique_chords()`,
-   first-appearance order), upper-left, with the currently-playing chord's
-   diagram highlighted; fingering data is extracted from `tombatossals/chords-db`
-   (MIT licensed), not hand-authored — every one of the 12 roots x 5 qualities
-   `detect_chords()` can produce resolves to a real shape. `chord_diagram.py`'s
-   `_legend_layout()` sizes the diagrams from the song's actual chord count
-   (HISTORY 9-09) -- never more than 2 rows, shrinking as needed to
-   fit within a reserved upper region, and never growing past `Settings.
-   chord_legend_size` (percent, owner-adjustable, default 100%). Each diagram's
-   own panel opacity is its own owner-tunable slider,
-   `Settings.chord_diagram_panel_alpha` (0-255, default 235/near-opaque;
-   made adjustable 2026-09-10, previously a fixed constant). Every video
-   opens with a `Settings.countdown_beats` lead-in (default 4; 0 disables) -- N *beats*, so `assemble_video()`
-   uses `beat_duration = 60 / bpm` from `chord_track.bpm` (120 if undetected) and the count-in lasts
-   `countdown_beats * beat_duration` (HISTORY 9-10). It sits on a GUARANTEED-real background (Ken Burns held at
-   its start; `_first_available_image_key()` picks the first moment's own image, else ANY real image, NEVER the
-   flat `fallback_color`; HISTORY 9-10) under a small centered `render.draw_countdown()` panel (chord-bar box
-   style, capped ~15% of the frame). `make_frame(T)` runs on the OUTER countdown-extended timeline
-   (`song_t = T - countdown_duration`) and the audio is delayed to match
-   (`CompositeAudioClip([audio_clip.set_start(countdown_duration)])`). Long lyric lines
-   wrap onto multiple rows at commas (preferred) or by word (fallback) instead of
-   running off the frame edges or ever shrinking the font (`render.py`'s
-   `_split_line_into_rows`). `draw_scene`'s current/next-line vertical spacing is
-   computed from each shown line's actual (possibly multi-row) height
-   (`_rows_and_block_height`), not a fixed single-row gap, so a wrapped
-   current line's lower rows never render on top of the next-line preview
-   underneath it. During an instrumental
-   gap (past a line's own `end_time`, before the next line's `start_time`, or
-   outside any line at all) the background image follows the active chord
-   instead of freezing on the last-sung line — `layout.py`'s `_in_a_line()`
-   decides which applies, using `_plausible_sung_intervals()` rather than a
-   line's raw `start_time`/`end_time` envelope: a single misaligned word can
-   otherwise claim an implausible duration (HISTORY 9-09) and make the next
-   several minutes falsely read as "still singing," suppressing both the per-chord
-   image-follow and Ken Burns pacing. `layout.build_image_timeline()` builds
-   the whole song's image schedule once up front (one segment per sung line,
-   unchanged; one per instrumental chord otherwise) and merges consecutive
-   instrumental chords shorter than `Settings.image_min_hold_seconds`
-   (default 2.0s, owner-adjustable) forward into one block until the combined
-   span reaches that minimum (HISTORY 9-11). A too-short gap gets no
-   segment -- the prior image holds through it (9-15). Every block boundary is still a
-   real chord onset lifted from the detected chord track (never an
-   independent timer), so a merged block can only show a chord's own image a
-   little LONGER than that chord's raw span, never out of sync with the
-   music. `build_scene()`'s Ken Burns window during an instrumental stretch
-   paces to that block's own span (not a single absorbed chord's), so a
-   merged block's pan doesn't reset partway through. Any image swap crossfades over `Settings.image_transition_seconds` (0.25s, `render.crossfade_backgrounds()`), capped to 40% of either neighbor segment's length.
-   `render.draw_support_overlay()` optionally burns a small semi-transparent "support this channel" watermark
-   into the LAST `Settings.support_overlay_lead_seconds` (default 20s) only -- never the countdown -- upper-RIGHT
-   below the Key/BPM badge (HISTORY 9-11). `Settings.support_overlay_text` (blank = off) drives only the overlay;
-   the separate `Settings.support_description_text` (blank = off; multi-line box) is a TEMPLATE -- text above, the
-   marker `{description}`, text below -- rendered by `schedule_upload()` via `render_description` (HISTORY 9-26) --
-   deliberately two fields, since a video frame is never clickable but the description needs the real `https://`
-   link. Field labels in `settings_panel.py` must stay short (one long label once broke the WHOLE panel; see
-   `_add()`). `scripts/update_support_description.py` (manual, re-runnable, backs up first, `--only`/`--status`/
-   `--old-text`/`--dry-run`) re-renders already-uploaded videos; `backfill_support_overlay_description.py` is the older one.
-   `scroll_progress` uses `_plausible_line_end()` (the outlier-capped end `_plausible_sung_intervals()` uses), not the raw `end_time` (HISTORY 9-10); word-highlight timing keys only on a word's own start.
-   CURRENT-LINE text is gated on `_in_a_line()` (HISTORY 9-10): past a line's plausible end, "current" advances early to the NEXT line as the same unsung preview the pre-first-line intro uses (9-15); past the last line it blanks. A preview stays hidden until `Settings.lyric_preview_lead_seconds` (3.0s) before its line -- no lyrics through an intro or solo.
-   A timeline-lane chord label shrinks (floor 18pt, `_lane_label_font`) to fit a short chord's box, else is omitted (`_lane_label_visible`) -- the colored block still draws (HISTORY 9-10). No song title/artist text is drawn into the frame (owner, 9-09); only the chord bar, Key/BPM badge and chord legend are added.
+1. **identify** (`identify.py`) -- title/artist/duration from tags, the filename, then (artist unknown) lrclib-artist
+   consensus + MusicBrainz-by-duration; written atomically to `song_info.json`, with `artists` (MusicBrainz's credited
+   names) on a fresh identify. An MP3 with no Xing/VBRI header is measured by decoding (`decoded_duration`). Tag and
+   MusicBrainz titles use `text_clean.strip_title_noise` (a leading number is kept: "19-2000"); filename titles use
+   `clean_title`, which strips only a leading-zero or 1-2 digit "N. "/"N) " track number ("747 - Song" keeps it).
+   `--title` overrides display/filename only (never artist or lyrics search). A resume past identify re-runs it when song_info.json is missing,
+   unreadable or has no title.
+2. **separate** (`separate.py`) -- Demucs two-stem split on `compute_device()`: `cuda` only when torch sees a GPU AND
+   its build has kernels for that compute capability (`cuda_build_supports_device()`, issue #5), else `cpu`, logged;
+   `LYRICVIDEO_DEVICE=cpu|cuda` overrides; an auto-picked GPU failure retries once on CPU. Output
+   `work_dir/htdemucs/<audio_stem>/{vocals,no_vocals}.wav` is what `--stage` resumes from; missing stems re-run
+   Demucs; its output relays through `sys.stdout` (`_run_demucs`). Stems >3% shorter than song_info's duration are
+   truncated -- except that for an MP3 with no Xing/VBRI/LAME header (`_length_may_be_a_header_guess`) a
+   `decoded_duration` agreeing with the stems within max(3 s, 3%) accepts them and corrects song_info
+   (`_stems_are_complete`). A run starting at align or earlier refreshes work_dir's audio copy (atomically) when the
+   source was replaced (other size, or other bytes with a new mtime), deleting old stems and transcript.json; a resume
+   past align keeps its audio. Redo reads the copy, so Generate from a replaced file.
+3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`; HISTORY 9-18/19) --
+   `fetch_lyric_lines_verified()` tries each source (sidecar `.lrc`/`.txt` beside the audio copy; lrclib
+   edition-consensus vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
+   `lyric_lines.json`/`Song`. Pass = matching what faster-whisper HEARS in the vocal stem (medium, VAD off): >=70%
+   in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing vocals ignored).
+   The tokenizer (`lyric_audio_match._tokens`, shared by timing_gate, anchors, lyric_reconcile, deep_review) folds
+   curly apostrophes and accents. Section markers are not lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
+   "Chorus:", "(x2)"/"Repeat chorus"; a leading "[..]" tag stripped). Unsung lead/tail credit lines are trimmed per
+   candidate before the check (`trim=`, from `pipeline._build_unsung_trim`: line times, Whisper words, vocal
+   loudness) only when none of their words were heard. `artist_matches` compares whole words. None passing keeps the
+   least-bad match flagged (no auto-upload). Claude then JUDGES unmatched stretches (`lyric_arbiter.py`: recognizer
+   failures -> accepted), confirming only if coverage with those ranges excused (`coverage_excusing`) is still >=70%;
+   its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. Whisper unavailable -> a Claude text check
+   (thinking off; an unclear/blank reply or API error is a non-empty concern). LRC timestamps discarded.
+   `python -m lyricvideo.verify_lyrics -h` re-checks finished songs: owner-typed lyrics (source "owner") are never
+   checked or held (`owner-lyrics`); `--flag` releases old holds a report-only run verified or marked owner-lyrics; a
+   failing song whose only concern is the timing gate's gets the lyric reason put first. `replace_report` lists uploads.
+4. **align** -- forced word alignment (`align.py`, 75 s pieces, flat ~4 GB) against the vocal stem (length from its WAV
+   header, `_vocal_stem_seconds`); `combine.py` merges onto the lines (a last word microseconds past the stem end is
+   tolerated, issue #6; no lyrics -> clear RuntimeError). Whisper word times (`anchors.py`; words in silence dropped)
+   checked against lrclib's line times (`combine_anchors`) bound each line to its own window
+   (`align_words_anchored`; one whole-song CTC pass drifted 20-50 s). `precision.py`/`sync.py` only suggest;
+   `timing_gate.py` alone decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's
+   singing): best of whole-song/anchored/blended (`pick_by_sync`, ranked over the lines all can judge; ties -> fewer
+   lines in silence), else the song is HELD before chords/images/render (Flagged: Render Anyway; Remove = hide only).
+   Lists judge older songs READ-ONLY at the current bar (`timing_verdict`) and never write; only `python -m
+   lyricvideo.timing_gate --hold` writes holds; `pipeline.review_concern()` gives the current reason. EASY variants are
+   judged against their song's transcript (`models.original_song_dir`). `owner_verified.py` (Mark Verified, or an
+   Upload Anyway the daily cap skips) overrides every check until the lyric words or their times change
+   (`timing_fingerprint`: a Redo usually lapses it, a key fix keeps it). A cleared song's real % is in cleared_log's
+   note. When new timing replaces a song that has a video, `<slug>.mp4` becomes `<slug>.previous.mp4` and
+   `held_before_video.json` (`REDO_STOPPED_REASON`) holds it until a render: a Redo that dies mid-run shows in
+   Flagged with Render Anyway, never in Pending/Upload. MMS_FA knows only a-z and `'`:
+   `_normalize_word_for_alignment` spells numbers out ("31" -> "thirtyone", "10,000" -> "tenthousand"), folds
+   accents, reads `&` as "and", else gives the `*` token (issue #3). Display text never changes.
+5. **detect_chords** (`detect_chords.py`, `chord_theory.py`) -- `crema` (CNN/CRNN, ISC) on `no_vocals.wav`, collapsed
+   to 5 qualities by `_simplify_chord_label()` (every pumpp `3567s` quality mapped explicitly; `minmaj7` -> minor
+   triad); returns sharp labels and key "". Needs old TF/Keras/sklearn -- **`.venv` is Python 3.11**; see
+   `requirements.txt` pins. A resume past this stage whose song has no chords runs it (and the key settle) first;
+   `gui._stage_to_resume`: no chords -> detect_chords, chords + video -> render, chords + key decision -> images.
+   **Key check** (`key_decision.py`, HISTORY 9-26/9-27; owner: video and description MUST show the real key):
+   `settle_song_key()` sets `chord_track.key` when the chord-based estimate (`key_estimate.py`) AGREES with a Claude
+   second opinion among its candidates (`key_opinion.py`); else the song is HELD before images and Flagged with **Set
+   Key** (`key_owner.json`, always wins, survives Redo). A Set Key the saved chords already carry confirms at once
+   (`confirm_owner_key`; the video needs no remaking); otherwise Render Anyway's resume runs `apply_saved_owner_key`
+   (respells, and records the confirmed decision even when nothing changed). During a job Set Key shows a message; a
+   non-key says 'Not a key'. On an uploaded song (listed only while its EASY version waits on the key,
+   `easy_version_waits_on_key`, reason 'key (EASY waits)') `_settle_key_of_uploaded_song` respells and confirms without
+   re-rendering, then offers Rebuild EASY version. `key_decision.json` records it. `parse_key` accepts every real
+   spelling (Cb/Fb/E#/B#, ♯/♭, sharp/flat, any case, m/min/minor/maj/major), refuses double accidentals and a lone
+   capital 'M', never raises. `chord_theory.spell_in_key` spells by function: the key's own chords in its letters and
+   flats/sharps, a borrowed chord by the step it alters (D major's bVI is Bb); Cb/E# etc. become B/F, so only
+   `CHORD_SHAPES` names result (`respell_chord_track`, `transpose_chord_track`). `Settings.prefer_flats` ('Use flats
+   in flat keys') off -> chords and the Key label use sharps ('A# major'); `key_decision.json`/`key_owner.json` always
+   store the flat spelling; applied in settle_song_key, apply_saved_owner_key, transpose_chord_track, settle_keys.py.
+   `schedule_upload` refuses an unsettled key (`KeyNotConfirmed`) and opens the description with `🎸 Song key: X`;
+   unsettled songs stay out of the pending lists (`key_needs_attention`). `scripts/settle_keys.py` (dry run;
+   `--apply`) asks only songs with no decision or one in review (else 'already-settled', no Claude call); a corrected
+   song's video becomes `*.previous.mp4` and its `easychords/` moves to `easychords_prior_<time>/` unless that EASY
+   video is on YouTube (a failed move is reported; the post-render EASY check sets it aside later).
+   `scripts/add_key_note.py` puts `📌 Song key: X (not Y as shown in the video)` on live descriptions.
+6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
+   line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
+   renders; a sliver adopts its neighbour's caption; `[Instrumental]` only for a chordless song), cached by content
+   hash. Instrumental pictures are filed under the chord NAME; `layout.enharmonic_instrumental_captions`/
+   `fill_missing_instrumental_images` copy an existing one to a respelled or capo name (run_pipeline's
+   `_carry_respelled_chord_pictures`, before images and before render: no spend). Pictures already in `images/` or
+   `images_backup_*/` (decodable, not placeholders) are counted first; none missing -> no Claude client and no
+   `REPLICATE_API_TOKEN` needed (else a missing token is a clear RuntimeError). A cached placeholder or undecodable
+   file is a cache miss; cache writes are temp file + `os.replace`. Replicate polling rides out network errors,
+   cancels on timeout, honours Retry-After; a retry reuses Claude's prompt unless the prediction failed.
+   `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image
+   falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
+   solid colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
+   **Shared image library** (spec 9-25; `Settings.use_image_library` OFF until the owner reviews
+   `scripts/preview_library_matches.py`'s contact sheet in `reports/`; `image_library_min_score` provisional 0.34):
+   before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`: SQLite + deduped PNGs; env
+   `PLAYALONG_IMAGE_LIBRARY`) by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py`
+   [`--dry-run`/`--limit N`] may download the ~605 MB weights). `library_session.LibrarySession` COPIES a hit into
+   `images/` (one picture per line per song), files every purchase with its prompt, disables itself on error. Redo's
+   "Generate new images" (`fresh_images=True`) skips it; pictures it moved aside are never offered to that song again
+   (`image_library_rejected.json`, recorded at once). `python -m lyricvideo.image_library stats`.
+7. **render** (`assemble.py`/`layout.py`/`render.py`) -- lyrics (karaoke word sweep, Ken Burns), NOW/NEXT/timeline chord
+   bar, Key/BPM badge, chord legend over the audio into `work_dir/<slug>.mp4`. Font: `--font`, else
+   `Settings.font_path`, via `pipeline.resolve_font` (a missing file -> `default_font()` with a warning; candidates
+   DejaVu/Liberation/Arial Bold/Segoe UI Bold). All text via `render.load_font()` (per-thread cache: never share
+   FreeType faces across threads).
+   - **Atomic output**: renders to `<name>.mp4.rendering` (temp audio `.rendering-audio.m4a` beside it, never the
+     CWD), reads the picture length back (`_check_rendered_video`, ffmpeg stream copy), then `os.replace`s. A failed
+     or killed render keeps the previous video and never leaves a cut-short mp4 (issue #7); `.rendering*` leftovers
+     are never listed and are replaced next render. `rendered_stream_seconds(path)` -> (picture s, audio s). libx265
+     gets `-pix_fmt yuv420p -tag:v hvc1`. `AudioFileClip` is closed in a `finally`.
+   - Backgrounds: `_BackgroundCache` (LRU of 4 keyed by the real file, pre-scaled). A missing key shows the nearest
+     existing picture in timeline order (previous first), else any of the song's; an undecodable one warns once and
+     does the same, else the fallback colour. Swaps crossfade over `Settings.image_transition_seconds` (0.25 s, <=40%
+     of either segment), the outgoing image frozen at its own Ken Burns progress.
+   - Overlays (legend, CAPO badge, Key/BPM, support overlay, countdown) are lru_cached patches composited over their
+     own box (`render.overlay_patch`/`composite_patch`), cleared when a render ends.
+   - Legend: one diagram per unique chord (`pipeline.ordered_unique_chords()`), upper-left, current one highlighted.
+     `chord_shapes.py` covers 12 roots x 5 qualities (sharp and flat names) from `tombatossals/chords-db` (MIT), except
+     hand-picked Em7 022030. `chord_diagram._legend_layout()` sizes from the chord count: <=2 rows, <=0.35h including
+     its top margin, never past `Settings.chord_legend_size`; panel opacity `chord_diagram_panel_alpha` (235); "Nfr"
+     sits left of the low-E string. `Settings.show_chord_legend` toggles it.
+   - Count-in: `Settings.countdown_beats` (4; 0 off) beats of `60/bpm` (120 if undetected) on a guaranteed-real
+     background (`_first_available_image_key()`, never `fallback_color`) under `render.draw_countdown()`.
+     `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`); the audio is delayed to match.
+   - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
+     (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()` (one misaligned word cannot claim
+     minutes, 9-09): past a line's plausible end "current" advances to the next line as an unsung preview (9-15),
+     blank after the last; previews show only `Settings.lyric_preview_lead_seconds` (3.0) ahead. `scroll_progress`
+     uses `_plausible_line_end()`; word highlight keys on each word's start.
+   - `layout.build_image_timeline()`: one segment per sung line; in gaps one per instrumental chord, short ones merged
+     forward to `Settings.image_min_hold_seconds` (2.0), boundaries always real chord onsets; a too-short gap holds
+     the prior image; Ken Burns paces to the block's span.
+   - Lane labels shrink to 18 pt (`_lane_label_font`) else are omitted (`_lane_label_visible`). No title/artist text
+     in the frame (owner 9-09).
+   - `render.draw_support_overlay()`: `Settings.support_overlay_text` (blank = off) in the last
+     `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
+     `support_description_text` is a description TEMPLATE (above / `{description}` / below; `render_description` in
+     `schedule_upload()`) -- a frame is never clickable. `scripts/update_support_description.py` (backs up first;
+     `--only`/`--status`/`--old-text`/`--dry-run`) re-renders uploaded descriptions, keeping the key note first;
+     `backfill_support_overlay_description.py` is retired (refuses).
+
+## EASY CHORD versions
+
+`build_capo_variant(work_dir, audio_path_override=None, settings=None, font_path=None)` renders `<slug>/easychords`
+with the owner's Settings (`Settings.load()` if none). Every call remakes it from the song as it is now: lyrics and
+timing; chords moved to capo shapes (`capo_and_shape_key()`), spelled in the SHAPE key (Dm shapes use Bb) and proved
+by `capo_track_matches` (pitch classes); owner verification carried over (`carried_from`); a fresh mirror of
+`images/` with each instrumental picture copied to its capo name (`fill_missing_instrumental_images` +
+`instrumental_caption_sources`, `replace_from_sources=True`). Changed content -> old mp4 set aside (`.previous.mp4`),
+folder held (`HELD_MARKER`) until the render finishes. `draw_capo_badge()` shows CAPO N under the legend, the Key badge
+the original key (`key_label`); `easy_chord_capo.json` backs the title/description. `easy_chord_build_problem()` says
+why nothing would build (key unsettled or already easy, no song_info title, audio gone). run_pipeline refuses a start
+at detect_chords or earlier in an `easychords` folder, takes capo from the marker, and never applies an owner key or
+hold, uses the library, or builds a variant of it. `is_easy_key`: open C/D/E/G/A/Am/Dm/Em (F/B excluded).
+Staleness is judged in one place, `pipeline.easy_variant_problem` (read-only, cached): `easy_chord_upload_problem`'s
+key/capo checks, chords shifted by the capo, identical lyric timing; no marker = stale. After every song render
+`_update_easy_version_after_render` builds the variant when `Settings.generate_easy_chord_versions` (or Redo's Easy
+Chords box) is on and the key is hard; otherwise a stale one's mp4 is set aside and held (Flagged: `EASY_STALE_PREFIX`
+'EASY CHORD version out of date: ... Use Rebuild EASY version.'), or only set aside if the key is now easy. A stale
+variant stays out of Pending even when verified, shows in Flagged while not uploaded, and `schedule_upload` refuses it
+(`EasyChordVersionStale`) before the Claude call. "Generate EASY CHORD Versions" (`easy_chord_backfill_listing`/
+`list_easy_chord_backfill_candidates`) lists passing songs the build WILL make with no current EASY video ('has no
+video'/'out of date'), notes hard-key songs waiting for a key, renders with a Settings snapshot, reports a None build
+as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's EASY rebuild passes its settings.
 
 ## Redo an Existing Song
 
-`models.py`'s `load_song()` tolerates `lyrics_timed.json` files saved by the
-pre-MP3-only-merge pipeline (a `"chord"` key on word dicts, `"instrumental_chords"`
-instead of `"chord_track"`) — it reads only `Word`'s own current fields rather than
-splatting the whole legacy dict, and a missing `"chord_track"` key degrades to an
-empty `ChordTrack` rather than raising. Legacy chord/word data is silently dropped
-(Redo regenerates it). Re-runs a completed song through current code, picking up
-fixes since the original run without re-running Demucs. A redo resumes at
-`"fetch_lyrics"` (lyrics/chords re-fetch/re-detect fresh every redo -- cheap
-relative to Demucs/images), reusing the existing Demucs stems and
-`work_dir/song_info.json`
-(read via the `else` branch of `run_pipeline`'s `identify` stage, since a
-`start_stage` past `"identify"` never re-runs it), via `list_redoable_songs()`/
-`load_redo_inputs()` (reads `audio_path`/`title` off `lyrics_timed.json`,
-preferring a local copy `run_pipeline()` writes into `work_dir`). In
-`gui.py`, "Redo an Existing Song" lists every `work/` folder with a
-completed run; a "Generate new images" checkbox (default off = reuse, this
-app's cost-conscious default) forces fresh images via
-`prepare_images_for_fresh_regeneration()` — it moves the old `images/` dir aside to
-`images_prior_<timestamp>/`, deliberately NOT `images_backup_*` (that name is
-auto-searched for reuse by the images stage, which would silently defeat "generate
-new"). `backup_song_outputs()` always copies the current video + `lyrics_timed.json`
-into `work_dir/redo_backup_<timestamp>/` before a redo touches anything. It also logs the redo (`redo_log.py`: redone songs already on YouTube still need replacing).
+Re-runs a finished song through current code from `"fetch_lyrics"` (lyrics/chords fresh), reusing its stems and
+`song_info.json` (`list_redoable_songs()`/`load_redo_inputs()`, preferring the local audio copy). `load_song()`
+tolerates pre-merge files (reads only current `Word` fields; no `"chord_track"` -> empty). "Generate new images"
+(default off) runs `prepare_images_for_fresh_regeneration()`: `images/` moves to `images_prior_<time>/`, deliberately
+NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the video + `lyrics_timed.json` into
+`redo_backup_<time>/`; `redo_log.py` records the redo (redone songs on YouTube still need replacing).
+
+## GUI lists, panels and Settings
+
+- **Song lists** (Redo / Upload / Pending / EASY CHORD / Flagged): each is ONE `ttk.Treeview` (`gui._SongListView`,
+  dark via `_song_list_font`; Windows uses 'clam', whose colors 'vista' ignores) in a section starting CLOSED
+  (`_make_collapsible_section`, `SONG_LIST_HEIGHT`; never nest a `CTkScrollableFrame`). One Watch / ✕ Remove pair per
+  list acts on the highlighted row (double-click Watches); Remove hides it (`_drop_list_row`, no rescan), files
+  untouched. Filled on first expand by one non-daemon scanner thread (`_refresh_song_list` -> `_start_list_load`;
+  `_poll_list_results` applies on Tk; a generation counter drops stale results); `invalidate()` on an open section
+  rescans in the background, old rows kept meanwhile; `_refresh_retry_upload_options` invalidates all six lists;
+  Batch's `"batch_item_done"` refreshes them live. Pending and EASY CHORD are checklists (☑ column: click or Space;
+  all start ticked; ticks survive refreshes; `_TickFlag`s in `_pending_upload_vars`/`_easy_chord_backfill_vars`).
+- **Scans** (`pipeline.list_*`) parse each `lyrics_timed.json` once per file version (keyed by folder + (inode,
+  mtime_ns, size) of it and `owner_verified.json`); the sync verdict is cached in `timing_gate.check_saved_song`
+  (bar applied after). Lock-guarded, safe off the Tk thread, never write. An unreadable song is skipped with one
+  warning and counts as held (fail closed).
+- **Flagged for Lyrics Review**: a list with a short reason column plus ONE detail pane (`_show_flagged_details`;
+  reason = `pipeline.review_concern`, else `held_before_video.json`'s own) whose buttons enable per song: Watch (else
+  Play MP3), Whisper Text, Edit Lyrics (`lyrics_owner.txt`, reused by Redo), Redo, Render Anyway, Mark Verified, Upload
+  Anyway, Remove, Set Key (plain text, no emoji). A `<song>/easychords` row gets only Watch/Remove and Rebuild EASY
+  version (`_on_rebuild_easy_flagged`); the other handlers refuse it (`_refuse_easy_variant`).
+- **YouTube Comments** / **Pending Engagement Comments**: collapsible and lazy, each one list + one editor
+  (`_DraftQueueView`); edits are kept per draft id across refreshes, Approve posts the edited text, the header shows
+  "N waiting".
+- **Settings popup** (`_open_settings_window`): built once, then hidden/shown (`_show_settings_dialog`/
+  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set every 50 ms up to 20x -- X11 refuses a grab until
+  the window is mapped); transient/grab_set/lift/focus_force/brief-topmost like the Update dialog; its confirms are
+  parented to it (`_ask_over`, `SettingsPanel._confirm`). Closing with unsaved changes asks like Discard and reverts
+  `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`: synthetic frame via `render_kwargs()`
+  and `resolve_font`) is debounced 150 ms. A moved timing pass mark refreshes the lists once, on close
+  (`_apply_pass_mark_change`). Building a `SettingsPanel` is wrapped in `_suppress_settings_save` (`load_from()` fires
+  `on_change` early; 9-11).
+- **SettingsPanel** (`settings_panel.py`; `~/.playalongvideoproduction/settings.json`): writes disk ONLY via Save
+  Settings (HISTORY 9-10). A field differing from `self._baseline` gets a ● and a bold+orange label
+  (`_refresh_dirty_indicators`/`_dirty_fields`; only flipped labels are redrawn); Save shows an itemized `old → new`
+  confirm, and a failed write (OSError) shows an error and stays unsaved; Discard reloads the baseline. gui's
+  `self.settings` updates live, so this session's runs use the latest values. Each field shows its default
+  (`_default_text`); each slider has a box (`_parse_clamped_float`: "%"/"s" suffix, ".5", "0,5"; unedited text is
+  ignored; opacity boxes are percent) driven off a trace on its Tk variable, not `CTkSlider`'s `command`;
+  `on_value_change` fires only on a real change. Labels must stay short (one long label broke the panel; `_add()`).
+  Font row: file name + 'Auto' (clears it). The Category dropdown shows labels ("Howto & Style"/"Education"/"Music");
+  `youtube_category_id` stores the id. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
+  and raises OSError; `load()`/`from_dict()` default a non-object file and any wrong-typed value (with a warning).
 
 ## Notable pinned dependency
 
-`requirements.txt` pins `moviepy>=1.0.3,<2.0` and `decorator<5.0,>=4.0.2`:
-moviepy 1.0.3's decorators silently break under `decorator>=5.0` (fps
-resolution returns `None`). Don't bump either without re-verifying rendered
-output, not just that imports succeed.
-
-`.venv`'s Python 3.11 must be a real system install (`python3.11-tk` via
-`deadsnakes`), never `uv`'s standalone build -- its bundled Tk lacks Xft
-and silently breaks the GUI's font (HISTORY, 2026-09-14).
+`requirements.txt` pins `moviepy>=1.0.3,<2.0` and `decorator<5.0,>=4.0.2` (moviepy 1.0.3's decorators silently
+break under decorator 5: fps resolves to `None`) -- never bump either without re-verifying rendered output.
+`.venv`'s Python 3.11 must be a real system install (`python3.11-tk`, deadsnakes), never `uv`'s standalone build:
+its Tk lacks Xft and breaks the GUI font (HISTORY 9-14).
 
 ## Update Available Feature
 
-See `docs/superpowers/specs/2026-09-08-update-available-design.md`.
-`VERSION` at the repo root tracks the last version actually applied to
-this checkout (never hand-edited, never bumped per-commit).
-`lyricvideo/update/` provides version parsing/comparison
-(`version.py`), a GitHub Releases API client (`release_client.py`,
-httpx-based) against the public, unlisted `flyguy91355/LyricVideoGen-releases`
-repo — still the pre-rename name as of the 2026-09-09 project rename to
-PlayAlongVideoProduction, deliberately not moved yet (see CLAUDE_HISTORY) —
-and allow-listed archive extraction/copy
-(`apply.py` — allows `lyricvideo/`, `tests/`, `docs/`, `requirements.txt`,
-`CLAUDE.md`, a bare top-level `*.py`/`*.sh`; denies `.env`, `songs/`,
-`work/`, `.venv/`). `self.top_frame` (the update banner's `before=` anchor) must be
-`.pack()`-managed (HISTORY 9-09). `gui.py` checks once on launch (background thread) and shows a clickable banner if a newer release exists; it opens a modal dialog (centered, `transient`+`grab_set`+`lift`+`focus_force` plus a brief `-topmost` toggle -- not every Linux WM honors `lift`/`focus_force` alone) with the notes, an Apply Update button (confirms, downloads, reinstalls deps if changed, copies, writes VERSION) then Relaunch Now. No severity tiering, periodic re-check or manual "Check Now" -- see the spec.
-The Apply Update confirmation (`_on_apply_update_clicked`'s `askyesno`) is a SEPARATE dialog and needs the same
-`parent=self._update_dialog_window`/topmost treatment (HISTORY 9-10).
-Cut a release with `scripts/cut_release.sh <version-tag> <notes-file>` (syncs both launchers; releases repo is public).
-The sync exports from committed `HEAD` (`git show HEAD:<path>`, never a working-tree `cp`), so uncommitted changes
-never leak into a public release (HISTORY 2026-09-08), and re-applies `chmod +x` to paths `git ls-tree HEAD`
-tracks as `100755` (HISTORY 9-10). The owner runs the app directly from this same
-git checkout, so code changes reach them
-immediately on every commit; releases exist so the Update Available banner
-and changelog stay meaningful, not because Apply Update is the only way
-changes reach this install. `cut_release.sh`/`apply.py` guard
-against a stale release reverting newer commits (HISTORY, 9-13).
+Spec `docs/superpowers/specs/2026-09-08-update-available-design.md`. `VERSION` is the last release applied to this
+checkout (never hand-edited or bumped per commit). `lyricvideo/update/`: `version.py`, `release_client.py` (httpx)
+against the public, unlisted `flyguy91355/LyricVideoGen-releases` (pre-rename name, deliberately kept), and `apply.py`
+-- allows `lyricvideo/`, `deep_review/`, `scripts/`, `tests/`, `docs/`, `requirements.txt`, `CLAUDE.md`, a bare
+top-level `*.py`/`*.sh`/`*.bat`; denies (always wins) `.env`, `songs/`, `work/`, `.venv/`. `cut_release.sh` ships that
+same set (`tests/test_update_manifest.py` keeps them in step) plus `RELEASE_MANIFEST`; `copy_updatable_files` then
+removes allow-listed regular files the previous applied release shipped and this one does not (install-root
+`.release_manifest`, gitignored). `gui.py` checks once on launch (background thread); a banner opens a modal dialog
+(centered, `transient`+`grab_set`+`lift`+`focus_force`+brief `-topmost`) with the notes, Apply Update (its confirm is
+parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused while a video is made or an
+upload runs, and runs one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply (the
+result or the banner brings it back); `_poll_update_queue` handles each message alone and always reschedules.
+`self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
+`scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, never the working tree),
+re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits
+(HISTORY 9-13). The owner runs this git checkout directly, so commits reach them at once; releases keep the banner and
+changelog meaningful.
 
-`Settings.render_kwargs()` centralizes resolution/color unpacking for
-`assemble_video()` (an unknown resolution label falls back to 1080p with a
-warning, never a KeyError); `run_pipeline()` builds on it. `settings_preview.py` (9-09) renders a synthetic sample frame (fake line + chord track, no real song/AI image) at the chosen resolution via that same mapping, downscaled for the Settings preview (fixed pane over the scrollable `SettingsPanel`, whose confirmed "Reset to Defaults" repopulates every control in one on_change firing); main window 1600x1000 (review rows: two button rows). **`SettingsPanel` never writes to disk
-except via its own "Save Settings" button** (HISTORY 9-10) -- `self._baseline` (the settings
-on disk) is compared field-by-field against the live widgets on every
-change; any field that differs gets a small "●" marker directly on its own label
-(`_refresh_dirty_indicators`), and Save Settings/Discard changes only enable when
-something is dirty. Save shows an itemized `old → new` confirm dialog
-for every changed field before writing anything (catches an accidental change
-riding along with a later deliberate one); Discard reloads
-`self._baseline`, touching disk not at all.
-Closing the app (or a crash) with unsaved changes loses them, by design.
-`gui.py`'s in-memory `self.settings` still updates live on every change (so the
-current session's own Generate/Redo/Batch always uses your latest tweak) -- only
-the on-disk file itself is gated behind the explicit Save click. `pipeline.py`'s `default_font()` (public; the
-preview uses it too). Its candidates cover Linux DejaVu/Liberation and Windows
-Arial Bold / Segoe UI Bold.
+## YouTube upload + channel management
 
-`lyricvideo/chord_shapes.py` holds guitar fingering data for every chord
-`detect_chords()` can produce, extracted from tombatossals/chords-db (MIT).
-`lyricvideo/chord_diagram.py` draws a full chord-fingering legend from that
-data, wired into `assemble_video()` (new `chord_legend_labels`/
-`show_chord_legend` parameters, drawn every frame with the live current chord)
-and threaded all the way through `run_pipeline()` via
-`pipeline.ordered_unique_chords()`. `Settings.show_chord_legend` toggle (in `render_kwargs()` too) has a
-`SettingsPanel` checkbox and shows up in the live preview pane too.
+Design `docs/superpowers/specs/2026-09-10-youtube-upload-design.md` (why `publishAt`, not a local queue).
+`youtube_state.py`: each song's `youtube_state.json` (`video_id`, `uploaded_at`, `title`, `engagement_comment_posted`)
+beside its `lyrics_timed.json`; `uploaded_song_dirs(work_root)` / `mark_engagement_comment_posted(work_root, id)`
+include nested `<song>/easychords`. One that exists but cannot be read counts as uploaded everywhere (fail closed).
+`youtube.py` wraps the Data API v3 (`upload_video`, `list_new_comments`, `post_reply`, playlists,
+`post_top_level_comment` = `commentThreads().insert`), each taking an injected client (faked in tests; no test touches
+the network); `Comment.author_channel_id`. `upload_video` retries a dropped connection or 5xx up to 8x on the SAME
+resumable request (`bytes */N` recovers what YouTube stored); 4xx (quota, uploadLimitExceeded, invalidTitle) raise at
+once; `is_quota_exceeded_error` also knows HTTP 403 `quotaExceeded`.
+`youtube_metadata.py`: every Claude call has thinking off and is retried; `generate_video_metadata` (description/tags)
+and `draft_comment_reply`/`draft_engagement_comment` RAISE rather than return blank (never a bare video, 9-26);
+`classify_genre` returns '' rather than a fragment; replies use labeled lines robust to reordering. The TITLE is never
+Claude's: `build_play_along_title()` `"{title} - {artist} - (Play Along Lyrics & Chords)"` (artist omitted when
+unknown) / `build_easy_chord_title`, fitted to 100 chars with no '<'/'>' (the suffix stays; artist dropped first, then
+an ellipsis).
+`youtube_schedule.schedule_upload()` is the single upload path (auto and manual). It refuses a missing, unreadable,
+audio-less or cut-short video with `IncompleteVideo` (`.cut_short`, `.video_path`; cut short = picture >1 s shorter
+than audio per `assemble.rendered_stream_seconds`) -- like the key, stale-EASY and bad-title checks, before the Claude
+call and any YouTube call; the GUI logs it as 'the video must be made again' and never renames the file. It uploads one
+at a time (`_UPLOAD_LOCK`, `upload_in_progress()`); `only_if_not_uploaded=True` raises `AlreadyUploaded` when a
+`youtube_state.json` EXISTS (even empty/cut off); a state write failing after the upload raises naming the video_id.
+Public target -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the channel's live
+schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe;
+`tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
+`uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
+`scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`; exits 1
+for a missing work folder or an `--only` matching nothing) lists cut-short mp4s in every song and easychords folder,
+marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo, with
+Easy Chords ticked for an EASY one, remakes them); key_rollout and `_set_aside_videos` skip that name.
+`youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
+0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
+raises). Testing-mode tokens expire every 7 days, so reconnecting is expected. Status label + Connect refresh on a
+background thread (never call YouTube from the Tk thread; also every 20-minute tick). Worker threads format an error's
+text BEFORE a deferred `root.after` lambda (`except ... as e` unbinds `e`; 9-14).
+**GUI uploads**: "Upload to YouTube" = a `list_rendered_songs()` list + Upload (the only path that re-sends a song,
+after "create a duplicate?"), and the "Pending YouTube Uploads" checklist (`list_pending_uploads()`: never-uploaded,
+cleared) + Upload Selected; both ignore `youtube_auto_upload`. One upload run at a time (`_UPLOAD_RUN_LOCK`): Upload /
+Upload Selected / Upload Anyway during a run or the tick's auto-retry say 'Upload already running' and are disabled
+(a Batch song or tick finishing never re-enables them mid-run); the tick just skips. Every pending or auto upload goes
+through `_upload_within_todays_cap` (under `_UPLOAD_SLOT_LOCK`: re-check youtube_state.json, today's cap,
+`schedule_upload(only_if_not_uploaded=True)`, `record_upload`); `AlreadyUploaded` is a skip (shown in the results).
+`_maybe_upload_to_youtube(work_dir, settings)` gates auto-upload (enabled, connected, never uploaded -- verified live
+by `video_exists()`, failing CLOSED, so a video deleted on YouTube re-uploads; flagged songs skipped) from `_run_worker` and each Batch item; failures only warn.
+A song the auto-retry failed waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
+**Comments** (`youtube_comment_state.py`, flat JSON; locked, atomic, idempotent adds): `_scan_youtube_comments` (Check
+Now or the 20-minute tick, never overlapping: `_COMMENT_CHECK_LOCK`) walks `uploaded_song_dirs` (EASY included); one
+`videos.list(part=status,statistics)` per 50 videos; a public video's comments are read only when its commentCount
+changed since its last complete check (`youtube_comment_counts.json`) plus a full read every 24 h; 0 or comments off
+skipped; the channel's own comments skipped; quota break and cooldown kept. Each comment is marked seen
+(`mark_comment_seen`) right after its draft is queued; a failed draft retries next check (`record_draft_failure`),
+then after `MAX_DRAFT_FAILURES` (3) is queued blank. Nothing posts without Approve; a draft being or already posted is
+claimed (`_claim_posting`; its buttons off via `_DraftQueueView.set_busy`), released on failure; not connected says so
+and refreshes the label; Approve checks `is_video_public()`. An approved engagement comment's thread is marked seen;
+Dismissing one marks `engagement_comment_posted`.
+**Channel organization** (spec 9-17): after every `schedule_upload()` gui calls `youtube_playlists.organize_video()`
+(fails soft; idempotent): All, EASY/3/4 and artist playlists first, then genre (`classify_genre`). EASY/3/4 membership
+is reconciled both ways from the real key (owner key > confirmed decision > saved key; an easychords version uses its
+shape key). Artists: song_info `artists` (`_artists_for`) else `_split_artists` ('A, B & C', comma-named acts kept
+whole). A cache miss re-finds the channel's playlist by exact title before creating one; `add_video_to_playlist_with_
+retry()` rides a fresh 404. State files (comment, playlist, youtube_state, token) use locked read-modify-write and
+atomic writes (`youtube_state.atomic_write_text`); an unreadable one is moved to `*.corrupt-<time>`. Key notes: only
+paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` keeps exactly one, first.
+`scripts/backfill_channel_organization.py` (loads `.env`; stops on quota; `--dry-run`, `--only`, `--key-notes`
+[default `scripts/key_notes_2026-09-26.json`]/`--no-key-notes`, `--fix-playlist-descriptions` backing up to
+`reports/`) applies this to older uploads; `fix_playlist_data_20260923.py` (`--dry-run`) drops non-`is_easy_key` songs.
+Live OAuth, comment and engagement posting have run against the real channel (9-18).
 
-**YouTube upload + channel management** (shipped 2026-09-10, per
-`docs/superpowers/plans/2026-09-10-youtube-upload-channel-management.md`):
-`lyricvideo/youtube_state.py` tracks each song's own upload (`video_id`,
-`uploaded_at`, `title`) in a `youtube_state.json` alongside that song's
-`lyrics_timed.json`, so the app knows which of its own uploads exist (used
-to skip auto-re-uploading a song on Redo, and to scope comment monitoring
-to only videos this app posted). See
-`docs/superpowers/specs/2026-09-10-youtube-upload-design.md` for the full
-design, including why publishing is scheduled via YouTube's own
-`publishAt` rather than a local queue. `lyricvideo/youtube.py` wraps the
-raw YouTube Data API v3 calls (`upload_video`, `list_new_comments`,
-`post_reply`), each taking an already-built API client as its first
-argument -- same "inject the client, fake it in tests" pattern as
-`imagery.py`'s `anthropic_client`/`http_client`, so nothing here ever
-makes a real network call in tests. New dependencies:
-`google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`.
-`lyricvideo/youtube_metadata.py` spends one small Claude call per upload
-(`generate_video_metadata`, same cost profile as the image prompts) to
-write the description/tags (thinking off; retried 3x, then RAISES -- never a blank description/tags, so
-`schedule_upload` never uploads a bare video; HISTORY 9-26), and one more per new comment
-(`draft_comment_reply`) to draft a reply and flag whether it looks like an
-error report -- both parse a labeled-line reply format
-(`DESCRIPTION:`/`TAGS:` or `IS_ERROR_REPORT:`/`REPLY:`) that's robust to
-Claude reordering the lines. The video TITLE is never Claude-authored (HISTORY, 2026-09-14) -- always
-the deterministic `build_play_along_title()`: `"{title} - {artist} -
-(Play Along Lyrics & Chords)"` (artist omitted when unknown). The GUI's
-"Song title" field shows a live, non-editable preview of this string
-underneath it without feeding it into the field's own value, which is
-also `run_pipeline`'s `--title` override (lyrics search + filename).
-`lyricvideo/youtube_schedule.py`'s
-`schedule_upload()` is the single upload code path (auto AND manual): for
-a Public target it uploads immediately as YouTube-Private with a computed
-future `publishAt` (`compute_next_publish_slot()` gap-fills against the
-channel's own live schedule, `reserved_publish_datetimes()`, not a file --
-9-13; multiple-times-a-day scheduling via `Settings.youtube_upload_times`,
-quota/`uploadLimitExceeded` cooldown via `Settings.youtube_quota_retry_hours`,
-HISTORY 9-17/9-19). Unlisted/Private upload immediately, no scheduling. `lyricvideo/youtube_auth.py` owns the OAuth
-connection lifecycle: `connect()` opens the owner's browser once for
-consent (using a `client_secret_*.json` downloaded from Google Cloud
-Console) and saves a refresh token to
-`~/.playalongvideoproduction/youtube_token.json`; `load_credentials()`
-returns `None` for "not connected" (never raises) and auto-refreshes an
-expired token; `get_channel_title()` confirms the connected channel. `Settings` holds the
-YouTube config fields (auto-upload toggle, client secrets path, privacy,
-`youtube_category_id` default `"27"` ("Education" -- HISTORY 9-10),
-made-for-kids, publish times/uploads-per-day, the separate enforced
-`youtube_max_uploads_per_day` cap, and quota-retry hours -- see
-`settings.py`'s YouTube block for the full field list and current defaults).
-`SettingsPanel` gained a
-"YouTube" section (secrets picker, auto-upload checkbox, privacy/category
-dropdowns, made-for-kids box, publish-times box, "Maximum publish/uploads
-per day" sliders) --
-the Category dropdown shows friendly labels ("Howto & Style"/"Education"/
-"Music") while `Settings.youtube_category_id` stores the real numeric
-YouTube category id; `values_to_settings()`/`load_from()` translate
-between the two at the Settings boundary. `gui.py`'s module-level
-`_maybe_upload_to_youtube(work_dir, settings)` gates every auto-upload trigger
--- only if enabled, connected, AND this song was never uploaded before --
-and is called from `_run_worker` (shared by both Generate and Redo) and
-per-item inside `_run_batch_worker`. "Never uploaded before" is verified
-live via `youtube.video_exists(client, video_id)`
-(`videos().list(part="id", id=...)`), not just "a `youtube_state.json`
-exists" (HISTORY 9-10). A verification call that itself fails (network hiccup) fails CLOSED here
-(skip, never risk a duplicate upload). Any upload failure is caught and
-logged as a warning, never raised. GUI worker threads format an error's
-text BEFORE the deferred `root.after` lambda: `except ... as e` unbinds `e`
-when the block ends, so a lambda reading it raised NameError and the
-connect/upload/Approve error dialogs never showed (9-14). Generate
-and Redo refuse up front, naming the path, when the audio file is gone.
-A "YouTube: not connected"/"YouTube:
-connected as <channel>" status label + "Connect to YouTube" button sit
-above the Settings panel (refreshed on a background thread -- YouTube is
-never called from the GUI thread). "Upload to YouTube" (below Redo) is the
-sole manual-upload UI: a `list_rendered_songs()` single-select list (any
-song, uploaded or not) + Upload -- confirms first if that song has a
-`youtube_state.json` -- plus a "Pending YouTube Uploads" checklist below,
-live from `list_pending_uploads()` (never-uploaded, cleared;
-`list_flagged_songs()` backs a review list too, HISTORY 9-18), with
-"Select All" and an "Upload Selected" button; both share
-`_start_retry_upload()`/`_retry_pending_uploads()`, ignoring
-`youtube_auto_upload` (deliberate). A "Flagged for
-Lyrics Review" panel (same lazy pattern) shows each flagged song's concern
-text with Watch (else Play MP3), Whisper Text (per lyric line, close tested, HISTORY 9-22), Edit Lyrics (saved to `lyrics_owner.txt`, reused by Redo), Redo and Upload Anyway buttons; `_maybe_upload_to_youtube()` skips any flagged song
-outright. `_run_batch_worker` emits a `"batch_item_done"` queue message
-after each song so these three lists update live during a long Batch
-not just at the end (real gap, HISTORY 9-18).
-Redo's list, this
-one, and the Pending checklist are each `CTkRadioButton`/`CTkCheckBox`
-rows in a `CTkScrollableFrame` fixed to
-`SONG_LIST_HEIGHT` (~15 rows, scrolls for rest), in a section starting
-CLOSED (`_make_collapsible_section`), opened on click -- never nest a
-`CTkScrollableFrame` in another. Rows build lazily on first expand, never
-at launch or a later refresh while closed (`invalidate()` marks stale;
-9-15). Each row: a Watch button and ✕ that hides it, files untouched.
-`lyricvideo/youtube_comment_state.py`
-persists which comment ids have already been seen
-(`load_seen_comment_ids`/`mark_comments_seen`) and which drafted replies
-are still awaiting the owner's review (`PendingReply` +
-`load_pending_replies`/`add_pending_reply`/`remove_pending_reply`) --
-both flat local JSON files, so pending drafts survive an app restart. A
-"YouTube Comments" panel (bottom of the right-hand column, below Settings)
-lists pending drafts with an editable reply box, an "⚠ possible error
-report" badge, and Approve (posts via `post_reply`)/Dismiss buttons --
-nothing ever posts without that explicit click. A "Check Now" button plus
-a 20-minute `root.after` timer (only while the app is open) scan every
-song with a `youtube_state.json` for new comments, scoped to only videos
-this app uploaded; one Claude call per new comment drafts a reply and
-flags likely error reports. `_check_youtube_comments_worker` isolates each
-video's own `list_new_comments()` call in its own try/except (plus a
-top-level one around the whole method as a last resort), so one video's
-failure (e.g. comments disabled) never blocks checking the rest
-(HISTORY 9-10). `is_video_public()` skips a
-still-scheduled video before the call (9-13). That same 20-minute tick
-(`_youtube_periodic_tick`, on a background thread -- both
-`load_credentials()`'s token refresh and `get_channel_title()` can make a
-real network call, never safe on the GUI thread) also refreshes the
-connect-status label, so a token that expires mid-session shows "not
-connected" within 20 minutes instead of only at next launch. This matters
-because a personal single-user OAuth app always stays in Google's
-"Testing" publishing status (real verification is 2-6 weeks, pointless
-for personal use) -- Testing-mode tokens hard-expire after exactly 7 days,
-so reconnecting periodically via "Connect to YouTube" is expected, not a bug.
-A video redone after being deleted directly on YouTube now re-uploads
-automatically on the next Redo/auto-upload check (via the `video_exists()`
-self-heal above); short of that case, there is no automated
-"corrected video" relinking -- a correction is the owner's own manual
-call via the upload button.
+## deep_review
 
-**Channel organization** (playlists + per-video engagement comment,
-2026-09-17, spec `2026-09-17-youtube-channel-organization-design.md`):
-`YoutubeState` gained `engagement_comment_posted` (default `False`, so
-pre-existing `youtube_state.json` files still load) tracking whether a
-video's engagement comment has posted. `youtube_comment_state.py`'s new
-`PendingComment` mirrors `PendingReply`. `youtube.py` gained playlist
-calls and `post_top_level_comment` (`commentThreads().insert`, unlike
-`post_reply`'s `comments().insert`). `youtube_metadata.py` gained
-`classify_genre` and `draft_engagement_comment`. New
-`youtube_playlist_state.py` persists cached playlist ids and the growing
-genre list. `youtube_playlists.py`'s `organize_video()` adds a video to an
-All playlist, one per listed artist (exact string; a curated exception
-list keeps a comma-in-its-name band, e.g. Crosby Stills Nash & Young,
-from splitting into 3 (9-23), and
-a Genre playlist via `get_or_create_playlist()`/the now-public
-`add_video_to_playlist_with_retry()` (self-heal/retry a fresh 404 lag);
-idempotent. `gui.py` calls it
-after every `schedule_upload()`
--- failing soft. A "Pending Engagement Comments" panel (Redo/Upload's
-lazy-build pattern) has Approve (posts, marks
-`engagement_comment_posted`) and Dismiss.
-`scripts/backfill_channel_organization.py` applies this to older uploads,
-loads `.env` itself, and stops cleanly on a quota error instead of
-failing every remaining song (9-17). EASY/3-/4-CHORD use `is_easy_key`
-(open C/D/E/G/A/Am/Dm/Em, F/B excluded). `pipeline.build_capo_variant()`
-(9-23 spec) renders `<slug>/easychords` (nested): same audio/lyrics/images, chords
-re-spelled via `capo_and_shape_key()`, `draw_capo_badge()` shows CAPO N under
-the legend, Key badge the original key (`key_label`); Settings/Redo/backfill/upload triggers exist -- `easy_chord_capo.json` backs the title/description.
+`python -m deep_review` retries top-level songs flagged for lyrics or timing (`runner.list_songs_to_review`), cost-
+tracked (3 searches/attempt, 5-cent/song cap, skips 85%+ untouched; $0.01 per web search counted; 9-22). It never
+redoes an EASY variant (a fixed original re-renders its existing one), skips key-only songs (`waiting_for_key`, never a
+pass) and songs on verify_lyrics' unchecked hold (UNKNOWN). A lyric-text concern is never cleared by a timing pass
+(`diagnosis.is_lyric_text_concern`); all checks use `Settings.timing_pass_percent`. `--dry-run` writes nothing. A
+failed review restores `lyrics_owner.txt` byte for byte (also copied into the first `redo_backup_*`). Needs-human
+markers are flat files (`<song>__easychords.txt`).
 
-Complete and tested; the OAuth `connect()` flow and live comment/engagement-comment posting have run against the real channel (9-18). `load_credentials()` is `None` for a token expired with no refresh token; Approve checks `is_video_public()` first.
+## Persistence invariants
+
+`models.save_song`/`atomic_write_text` (unique temp, fsync, `os.replace`); cleared_log and redo_log serialize their
+read-modify-write under a lock, and a corrupt `cleared_songs.json`/`redone_songs.json` is renamed `.corrupt-<time>`,
+never silently replaced.
 
 ## Tests
 
@@ -500,7 +390,9 @@ Complete and tested; the OAuth `connect()` flow and live comment/engagement-comm
 cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scripts/python.exe
 ```
 
-Two tests self-skip on Windows (trailing-space folder; symlinked destination).
-`tests/conftest.py`'s font fixture lists Windows fonts too (73 render tests skipped there
-before 2026-09-14). The align tests need FFmpeg's shared
-DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
+`tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
+(per-user path constants and default arguments redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
+never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
+create their root with `_new_ctk_root(ctk)` (retries CTk(): under pytest fd capture on Windows ~1 in 40 fails once
+with "Can't find a usable init.tcl"). Some tests self-skip on Windows (trailing-space folder, symlinks, POSIX
+permissions). The align tests need FFmpeg's shared DLLs on PATH (torchcodec).

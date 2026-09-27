@@ -7,8 +7,9 @@ it can tell a phonetically similar mishearing, a loop of nonsense, or a missing 
 RECOGNIZER failed) from a stretch where the transcript clearly holds different coherent lyrics (the
 FILE is wrong). It writes no lyrics; it only returns a verdict per unmatched range.
 
-`confirmed` is True only when EVERY unmatched range is judged a recognizer error and no sung section
-is reported missing; anything else (wrong, unsure, forgotten, unparseable) leaves the song held.
+`confirmed` is True only when EVERY unmatched range is judged a recognizer error, no sung section
+is reported missing, and -- with those ranges excused -- the lyrics still reach the audio check's
+coverage bar; anything else (wrong, unsure, forgotten, unparseable) leaves the song held.
 """
 
 from __future__ import annotations
@@ -16,7 +17,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .lyric_audio_match import MAX_UNEXPLAINED_SUNG_WORDS, AudioMatch, audio_match_passes
+from .lyric_audio_match import (
+    MAX_UNEXPLAINED_SUNG_WORDS,
+    MIN_COVERAGE,
+    AudioMatch,
+    audio_match_passes,
+    coverage_excusing,
+)
 
 _VERDICTS = ("recognizer_error", "lyrics_wrong", "unsure")
 
@@ -35,13 +42,21 @@ class Arbitration:
     verdicts: list[RangeVerdict] = field(default_factory=list)
     missing_section: bool = False
     missing_note: str = ""
+    # Set when every stretch was judged a recognizer error but, even with them excused, too few of the lyric words are
+    # heard: the coverage that would remain (below MIN_COVERAGE), so the held note can say why.
+    short_coverage: float | None = None
 
 
 def _span(a: int, b: int) -> str:
     return f"line {a}" if a == b else f"lines {a}-{b}"
 
 
-def parse_arbitration(reply: str, ranges: list[tuple[int, int]], gap_flagged: bool = False) -> Arbitration | None:
+def parse_arbitration(
+    reply: str, ranges: list[tuple[int, int]], gap_flagged: bool = False, match: AudioMatch | None = None,
+) -> Arbitration | None:
+    """The judge's verdicts. With `match`, a confirmation also needs the coverage left once the judged ranges are
+    excused (lyric_audio_match.coverage_excusing) to reach MIN_COVERAGE -- the judge only saw those ranges, so it
+    cannot excuse a shortfall from half-heard lines elsewhere (issue #7 review)."""
     first, last = reply.find("{"), reply.rfind("}")
     if first < 0 or last <= first:
         return None
@@ -71,7 +86,12 @@ def parse_arbitration(reply: str, ranges: list[tuple[int, int]], gap_flagged: bo
 
     all_fine = all(judged(r) == "recognizer_error" for r in ranges)
     gap_ok = not gap_flagged or "missing_section" in data   # a flagged gap must be explicitly answered
-    return Arbitration(all_fine and not missing and gap_ok, verdicts, missing, note)
+    short: float | None = None
+    if all_fine and not missing and gap_ok and match is not None:
+        remaining = coverage_excusing(match, ranges)
+        if remaining < MIN_COVERAGE:
+            short = remaining
+    return Arbitration(all_fine and not missing and gap_ok and short is None, verdicts, missing, note, short)
 
 
 def describe_arbitration(result: Arbitration) -> str:
@@ -84,6 +104,11 @@ def describe_arbitration(result: Arbitration) -> str:
     unsure = [v for v in result.verdicts if v.verdict == "unsure"]
     if unsure and not text:
         text = "AI review could not tell whether " + ", ".join(_span(v.start, v.end) for v in unsure) + " are right"
+    if result.short_coverage is not None and not text:
+        text = (
+            "AI review judged the unmatched lines to be speech-recognition errors, but even then only "
+            f"{result.short_coverage:.0%} of the lyrics match what is sung ({MIN_COVERAGE:.0%} is needed)"
+        )
     return (text + ".") if text else ""
 
 
@@ -141,4 +166,4 @@ def arbitrate(
         messages=[{"role": "user", "content": build_arbiter_prompt(lines, match, segments)}],
     )
     reply = "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
-    return parse_arbitration(reply, match.unsupported_ranges, gap_flagged)
+    return parse_arbitration(reply, match.unsupported_ranges, gap_flagged, match=match)

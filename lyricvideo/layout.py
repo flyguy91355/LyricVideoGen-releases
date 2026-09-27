@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import os
+import shutil
+import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from .chord_theory import parse_chord_label, spell
 from .models import ChordTrack, LyricLine, current_chord_at, line_hash
 
 
@@ -222,6 +228,126 @@ def instrumental_image_captions(
             if caption not in captions:
                 captions.append(caption)
     return captions
+
+
+# Issue #7 review: an instrumental picture is filed under its chord's NAME (instrumental_caption), so a chord whose name
+# changes while the chord itself does not -- respelled to the settled key's convention ("A#" -> "Bb", apply_saved_owner_key
+# / settle_song_key / key_rollout), or shifted by a capo in an EASY CHORD version ("Eb" -> "D", build_capo_variant) --
+# looked up a file nobody ever made, and every such stretch showed one arbitrary picture (or the images stage bought the
+# same chord's picture again). The helpers below carry the picture a chord already has over to its new name.
+_CHORD_CAPTION_PREFIX = instrumental_caption("\0").split("\0")[0]
+
+
+def enharmonic_instrumental_captions(caption: str) -> list[str]:
+    """The same chord's instrumental caption in its other spelling ("[Instrumental — chord: A#]" ->
+    ["[Instrumental — chord: Bb]"]). [] for a lyric line, the generic "[Instrumental]" caption, "N" and a natural-root
+    chord (nothing else to call it)."""
+    if not (caption.startswith(_CHORD_CAPTION_PREFIX) and caption.endswith("]")):
+        return []
+    parsed = parse_chord_label(caption[len(_CHORD_CAPTION_PREFIX):-1])
+    if parsed is None:
+        return []
+    root, quality = parsed
+    others: list[str] = []
+    for use_flats in (False, True):
+        other = instrumental_caption(spell(root, quality, use_flats))
+        if other != caption and other not in others:
+            others.append(other)
+    return others
+
+
+def instrumental_caption_sources(original: ChordTrack | None, derived: ChordTrack | None) -> dict[str, list[str]]:
+    """For a chord track made event by event from another (the EASY CHORD version's capo-shifted track, or a respelled
+    one): each caption of `derived` -> the caption(s) of the chord(s) it was made from, whose pictures show that same
+    moment of the song. {} when the tracks do not line up event for event."""
+    if original is None or derived is None or len(original.events) != len(derived.events):
+        return {}
+    sources: dict[str, list[str]] = {}
+    for made_from, made in zip(original.events, derived.events):
+        target, source = instrumental_caption(made.label), instrumental_caption(made_from.label)
+        if target != source:
+            known = sources.setdefault(target, [])
+            if source not in known:
+                known.append(source)
+    return sources
+
+
+def _copy_file_atomically(source: Path, target: Path) -> None:
+    """A private temp file renamed into place: a render (or a list scan) never sees a half-copied picture."""
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def fill_missing_instrumental_images(
+    image_dir: Path,
+    lines: list[LyricLine],
+    chord_track: ChordTrack | None,
+    end_time: float,
+    *,
+    source_dirs: Iterable[Path] = (),
+    source_captions: dict[str, list[str]] | None = None,
+    replace_from_sources: bool = False,
+) -> list[str]:
+    """Gives every instrumental caption the render will look up (instrumental_image_captions) a picture file in
+    `image_dir` when the same chord already has one under another name: first the caption(s) `source_captions` says it
+    was made from (see instrumental_caption_sources), then the caption itself, each also in its other spelling
+    (enharmonic_instrumental_captions), looked for in each of `source_dirs` and then `image_dir`. A local copy -- no AI
+    or image spend; a caption with no picture anywhere is left for the images stage (or the render's fallback).
+    For the song's own images folder before the images stage and the render (a respelled chord keeps its picture: nothing
+    is bought again, and a render-only resume shows the right one), and for the EASY CHORD version (build_capo_variant).
+
+    `replace_from_sources` (the EASY CHORD version, whose folder mirrors its song's pictures): a caption with a source
+    gets the source's picture even when a file already has its name -- that file is the song's picture of a DIFFERENT
+    chord that happens to share the shifted name (an Eb-major song's own D chord, where the EASY version's "D" is the
+    song's Eb). Returns the captions it filled."""
+    image_dir = Path(image_dir)
+    # The source folders are searched FIRST: they hold the song's own pictures untouched, while `image_dir` may already
+    # hold a picture this very call just copied under a shifted name (an Eb-major song's D chord becomes the EASY
+    # version's C#, and its Eb becomes D: "D" must still be found as the song's own D picture, not the Eb one).
+    search_dirs: list[Path] = []
+    for folder in (*source_dirs, image_dir):
+        folder = Path(folder)
+        if folder not in search_dirs:
+            search_dirs.append(folder)
+
+    def first_picture(names: list[str]) -> Path | None:
+        spelled_names: list[str] = []
+        for name in names:
+            for spelled in (name, *enharmonic_instrumental_captions(name)):
+                if spelled not in spelled_names:
+                    spelled_names.append(spelled)
+        for name in spelled_names:
+            for folder in search_dirs:
+                candidate = folder / f"{line_hash(name)}.png"
+                if candidate.is_file():
+                    return candidate
+        return None
+
+    filled: list[str] = []
+    for caption in instrumental_image_captions(lines, chord_track, end_time):
+        target = image_dir / f"{line_hash(caption)}.png"
+        sources = (source_captions or {}).get(caption, [])
+        found = None
+        if replace_from_sources and sources:
+            found = first_picture(sources)
+        if found is None:
+            if target.exists():
+                continue
+            found = first_picture([*sources, caption])
+        if found is None or found == target:
+            continue
+        image_dir.mkdir(parents=True, exist_ok=True)
+        _copy_file_atomically(found, target)
+        filled.append(caption)
+    return filled
 
 
 def _merge_into_hold_blocks(

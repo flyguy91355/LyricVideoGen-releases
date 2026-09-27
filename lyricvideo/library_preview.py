@@ -20,7 +20,7 @@ from .image_library import ImageLibrary, LibraryMatch, content_id
 from .layout import instrumental_image_captions
 from .models import Song, line_hash, load_song
 
-THRESHOLDS = [round(0.20 + 0.02 * i, 2) for i in range(9)]      # 0.20 ... 0.36
+THRESHOLDS = [round(0.16 + 0.02 * i, 2) for i in range(15)]     # 0.16 ... 0.44: the Settings slider's whole range
 _THUMB_SIZE = (384, 216)
 
 
@@ -31,6 +31,23 @@ class PreviewRow:
     own_image: Path | None          # the picture actually bought for this line/caption, if it is still on disk
     query: np.ndarray               # the prompt's CLIP text embedding
     match: LibraryMatch | None      # the library's closest picture (this song's own pictures excluded), any score
+    hidden_ids: frozenset[str] = frozenset()    # this song's own pictures, hidden from the library for the run
+
+
+def production_offers(
+    rows: Sequence[PreviewRow], library: ImageLibrary, own_ids: set[str], threshold: float,
+) -> list[LibraryMatch | None]:
+    """What the images stage would really hand each row at `threshold`: the same once-per-song rule production
+    applies (LibrarySession.used_ids -- a picture serves the FIRST line that wants it; later lines get the runner-up
+    or buy), so the contact sheet never shows an offer production would not make (issue #7 review)."""
+    used = set(own_ids)
+    offers: list[LibraryMatch | None] = []
+    for row in rows:
+        match = library.best_match(row.query, used, threshold)
+        if match is not None:
+            used.add(match.image_id)
+        offers.append(match)
+    return offers
 
 
 def cached_prompt_maker(cache_path: Path, make_prompt: Callable[[str], str]) -> Callable[[str], str]:
@@ -74,11 +91,12 @@ def build_rows(
     prompts = [prompt_for(key) for key in keys]
     queries = embedder.embed_text(prompts) if prompts else []
     rows = []
+    hidden = frozenset(own_ids)
     for key, prompt, query in zip(keys, prompts, queries):
         own = images_dir / f"{line_hash(key)}.png"
         rows.append(PreviewRow(
             text=key, prompt=prompt, own_image=own if own.exists() else None, query=query,
-            match=library.best_match(query, own_ids, -1.0),
+            match=library.best_match(query, own_ids, -1.0), hidden_ids=hidden,
         ))
     return rows, own_ids
 
@@ -88,17 +106,10 @@ def reuse_counts(
 ) -> list[tuple[float, int]]:
     """How many lines the images stage would reuse a library picture for at each threshold, with the same
     once-per-song rule production applies (a picture serves one line only)."""
-    counts = []
-    for threshold in thresholds:
-        used = set(own_ids)
-        reused = 0
-        for row in rows:
-            match = library.best_match(row.query, used, threshold)
-            if match is not None:
-                used.add(match.image_id)
-                reused += 1
-        counts.append((threshold, reused))
-    return counts
+    return [
+        (threshold, sum(offer is not None for offer in production_offers(rows, library, own_ids, threshold)))
+        for threshold in thresholds
+    ]
 
 
 def _thumb(source: Path, dest: Path) -> None:
@@ -118,18 +129,29 @@ def write_report(
     table = "".join(
         f"<tr><td>{threshold:.2f}</td><td>{reused} of {len(rows)}</td></tr>" for threshold, reused in counts
     )
+    # The verdicts follow production exactly (once per song), so they always agree with the table above.
+    hidden = set().union(*(row.hidden_ids for row in rows)) if rows else set()
+    offers = production_offers(rows, library, hidden, current_threshold)
     body = []
-    for n, row in enumerate(rows):
+    for n, (row, offer) in enumerate(zip(rows, offers)):
         own_cell = "<em>(file not on disk)</em>"
         if row.own_image is not None:
             _thumb(row.own_image, thumbs / f"own{n}.jpg")
             own_cell = f'<img src="thumbs/own{n}.jpg">'
         offer_cell = "<em>(library empty)</em>"
         verdict = ""
-        if row.match is not None:
-            _thumb(library.image_path(row.match.image_id), thumbs / f"lib{n}.jpg")
-            offer_cell = f'<img src="thumbs/lib{n}.jpg"><br>score {row.match.score:.2f}'
-            verdict = "reused" if row.match.score >= current_threshold else "would buy"
+        shown = offer if offer is not None else row.match
+        if shown is not None:
+            _thumb(library.image_path(shown.image_id), thumbs / f"lib{n}.jpg")
+            offer_cell = f'<img src="thumbs/lib{n}.jpg"><br>score {shown.score:.2f}'
+            verdict = "reused" if offer is not None else "would buy"
+            if row.match is not None and offer is not None and offer.image_id != row.match.image_id:
+                offer_cell += (
+                    f"<div class='note'>its closest picture (score {row.match.score:.2f}) already went to an "
+                    "earlier line, so this runner-up is used</div>"
+                )
+            elif offer is None and row.match.score >= current_threshold:
+                offer_cell += "<div class='note'>already used by an earlier line (a picture serves one line)</div>"
         body.append(
             f"<tr class='{verdict.replace(' ', '-')}'><td>{esc(row.text)}<div class='prompt'>{esc(row.prompt)}</div></td>"
             f"<td>{own_cell}</td><td>{offer_cell}</td><td>{esc(verdict)}</td></tr>"
@@ -139,12 +161,14 @@ def write_report(
 body {{ font: 14px system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }}
 table {{ border-collapse: collapse; }} td, th {{ border: 1px solid #333; padding: 6px 10px; vertical-align: top; }}
 img {{ display: block; }} .prompt {{ color: #9aa; font-size: 12px; max-width: 420px; margin-top: 4px; }}
+.note {{ color: #9aa; font-size: 12px; max-width: 384px; margin-top: 4px; }}
 tr.reused td:last-child {{ color: #7ddc7d; }} tr.would-buy td:last-child {{ color: #f0a339; }}
 </style>
 <h1>{esc(title)}</h1>
-<p>Left: the picture actually bought for that line. Right: the closest picture from the library (this song's own
-pictures hidden). Current match score: <b>{current_threshold:.2f}</b> -- a line is "reused" when the score is at
-least that.</p>
+<p>Left: the picture actually bought for that line. Right: the picture the library would really hand that line
+(this song's own pictures hidden). Current match score: <b>{current_threshold:.2f}</b> -- a line is "reused" when a
+picture scores at least that AND no earlier line already took it (one library picture serves one line per song,
+exactly as when a video is made); otherwise the closest picture is shown and the line "would buy".</p>
 <h2>How many lines would reuse a library picture at each match score</h2>
 <table><tr><th>match score</th><th>lines reused</th></tr>{table}</table>
 <h2>Line by line</h2>

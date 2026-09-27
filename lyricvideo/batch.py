@@ -16,6 +16,7 @@ from pathlib import Path
 from .identify import extract_metadata
 from .dismissed_songs import load_dismissed
 from .pipeline import held_before_video, slugify
+from .text_clean import artist_key
 
 log = logging.getLogger("playalongvideoproduction")
 
@@ -86,6 +87,94 @@ class BatchItem:
     resume_stage: str = "identify"
 
 
+# --- one work folder per recording (issue #7 review, F027/F034) -------------------------------------------------------
+# A work folder used to be keyed on the title slug alone, so a second recording with the same title (a cover: two
+# "Hurt"s, or "Hurt (Live)" once identify strips the "(Live)") ran in the first one's folder: it overwrote that song's
+# video and timing, inherited its youtube_state.json (so it never uploaded) and its key_owner.json / lyrics_owner.txt
+# (the wrong key and lyrics, both "always win"). A folder that already holds a DIFFERENT recording is now left alone.
+
+def stored_song_identity(folder: Path) -> tuple[str, str, str] | None:
+    """(title, artist, audio file name) of the song a work folder already holds -- from song_info.json and the audio
+    path lyrics_timed.json records -- or None when the folder holds no song yet (missing, or nothing saved in it)."""
+    folder = Path(folder)
+    info_path, timed_path = folder / "song_info.json", folder / "lyrics_timed.json"
+    if not info_path.exists() and not timed_path.exists():
+        return None
+    title = artist = audio_name = ""
+    try:
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+        if isinstance(info, dict):
+            title, artist = str(info.get("title") or ""), str(info.get("artist") or "")
+    except (OSError, ValueError):
+        pass
+    try:
+        timed = json.loads(timed_path.read_text(encoding="utf-8"))
+        if isinstance(timed, dict):
+            audio_name = Path(str(timed.get("audio_path") or "")).name
+            title = title or str(timed.get("title") or "")
+    except (OSError, ValueError):
+        pass
+    return title, artist, audio_name
+
+
+def _same_artist(a: str, b: str) -> bool | None:
+    """True/False when both names are known; None when either is unknown. 'The Beatles' is 'Beatles', and a credit
+    that only adds names ('Johnny Cash' / 'Johnny Cash & June Carter') still counts as the same act."""
+    ka, kb = artist_key(a or ""), artist_key(b or "")
+    if not ka or not kb:
+        return None
+    wa, wb = set(ka.split()), set(kb.split())
+    return ka == kb or wa <= wb or wb <= wa
+
+
+def _holds_this_audio_file(folder: Path, audio_path: Path | None) -> bool:
+    """True when `folder` holds run_pipeline's copy of this very file (same name, same size) -- proof it is this song,
+    whatever a title/artist lookup answers this time (lrclib/MusicBrainz can name a tagless file's artist differently
+    from one run to the next, and a Batch rerun must never move a finished song to a new folder and upload it twice)."""
+    if audio_path is None:
+        return False
+    try:
+        audio_path = Path(audio_path)
+        copy = Path(folder) / audio_path.name
+        return copy.is_file() and audio_path.is_file() and copy.stat().st_size == audio_path.stat().st_size
+    except OSError:
+        return False
+
+
+def holds_other_recording(folder: Path, artist: str, audio_path: Path | None = None) -> bool:
+    """True when `folder` already holds a song that is NOT this recording: its artist and `artist` are both known and
+    differ. The same artist, or an artist unknown on either side, counts as this song -- so every existing folder keeps
+    mapping to itself, and Redo / a Batch rerun of the same song still find their folder. A folder holding this very
+    audio file (`audio_path`: its copy, same name and size) is always this song. (A different file name proves nothing:
+    a rip of the same song is often renamed.)"""
+    stored = stored_song_identity(folder)
+    if stored is None:
+        return False
+    if _holds_this_audio_file(folder, audio_path):
+        return False
+    _title, stored_artist, _audio_name = stored
+    return _same_artist(stored_artist, artist) is False
+
+
+def work_dir_for(
+    work_root: Path, title: str, artist: str, audio_path: Path, taken: set[str] | None = None,
+) -> Path:
+    """The work folder for this recording: work_root/<title slug> when it is free or already this song's; otherwise
+    <title-artist> (<title-file name> when the artist is unknown), then -2, -3... `taken` holds folder names already
+    handed to other files in the same batch -- two files are never given one folder."""
+    taken = taken if taken is not None else set()
+    audio_path = Path(audio_path)
+    base = slugify(title)
+    fallback = slugify(f"{title} {artist}") if (artist or "").strip() else slugify(f"{title} {audio_path.stem}")
+    candidates = [base, fallback] + [f"{fallback}-{n}" for n in range(2, 100)]
+    for name in dict.fromkeys(candidates):
+        if name in taken:
+            continue
+        if not holds_other_recording(work_root / name, artist, audio_path):
+            return work_root / name
+    return work_root / f"{fallback}-{len(taken) + 100}"
+
+
 def resolve_batch_items(files: list[Path], work_root: Path) -> list[BatchItem]:
     """Resolves each file's title (free: tags/filename/lrclib/MusicBrainz, no
     Claude/Replicate spend -- same cost profile as the single-song title
@@ -102,14 +191,26 @@ def resolve_batch_items(files: list[Path], work_root: Path) -> list[BatchItem]:
     redo the slowest stage in the whole pipeline from scratch on the next
     Start Batch, exactly like a completed song's own reprocessing already
     resumes past it (real owner complaint, 2026-09-18: closing mid-batch
-    left "no way to resume" the interrupted song)."""
+    left "no way to resume" the interrupted song).
+
+    Each file gets its own work folder (work_dir_for): a folder that already holds a different recording with the same
+    title, or one handed to an earlier file of this batch by another (or an unknown) artist, is never reused -- so
+    already_done means "THIS recording
+    already has a video" (issue #7 review, F027/F034)."""
     items: list[BatchItem] = []
+    assigned: dict[str, str] = {}     # folder name -> the artist of the file this batch gave it to
     for audio_path in files:
         try:
-            title = extract_metadata(audio_path).title
+            info = extract_metadata(audio_path)
         except Exception:
-            title = audio_path.stem
-        work_dir = work_root / slugify(title)
+            title, artist = audio_path.stem, ""
+        else:
+            title, artist = info.title, str(getattr(info, "artist", "") or "")
+        # A folder already handed to the SAME known artist's file is shared, as it always was: two rips of one song
+        # ("Song.mp3", "Song (1).mp3") in their own folders would each be made and uploaded -- a duplicate video.
+        taken = {name for name, other in assigned.items() if _same_artist(other, artist) is not True}
+        work_dir = work_dir_for(work_root, title, artist, audio_path, taken)
+        assigned.setdefault(work_dir.name, artist)
         final_video = work_dir / f"{slugify(title)}.mp4"
         demucs_dir = work_dir / "htdemucs" / audio_path.stem
         has_stems = (demucs_dir / "vocals.wav").exists() and (demucs_dir / "no_vocals.wav").exists()

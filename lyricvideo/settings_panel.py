@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import tkinter as tk
+from pathlib import Path
 from collections.abc import Callable
 from dataclasses import asdict
 from tkinter import colorchooser, filedialog, messagebox
@@ -17,7 +18,9 @@ import customtkinter as ctk
 from .settings import ENCODERS, FPS_OPTIONS, RESOLUTIONS, Settings, hex_to_rgb
 from .youtube_schedule import evenly_spaced_upload_times, format_upload_times
 
-_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+# A leading dot (".5") and a decimal comma ("0,5") both count: the old pattern needed a digit before the point, so ".3"
+# read as 3 and clamped to the slider's maximum (issue #7 review).
+_NUMBER_RE = re.compile(r"-?(?:\d+(?:[.,]\d*)?|[.,]\d+)")
 
 
 def _parse_clamped_float(text: str, lo: float, hi: float) -> float:
@@ -28,7 +31,12 @@ def _parse_clamped_float(text: str, lo: float, hi: float) -> float:
     match = _NUMBER_RE.search(text)
     if not match:
         return lo
-    return min(max(float(match.group()), lo), hi)
+    return min(max(float(match.group().replace(",", ".")), lo), hi)
+
+
+def _parse_percent_of_255(text: str) -> float:
+    """The two 0-255 opacity sliders SHOW a percent ("58%"), so a typed number is a percent too: 80 -> 204."""
+    return float(round(_parse_clamped_float(text, 0, 100) * 255 / 100))
 
 _INT_FIELDS = {
     "fps", "crf", "countdown_beats", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
@@ -87,6 +95,14 @@ class ColorButton(ctk.CTkButton):
             self.var.set(result[1])
 
 
+def _font_button_text(font_path: str) -> str:
+    """The Font button's text: the chosen file's name (shortened), or the browse prompt while the font is automatic."""
+    name = Path(font_path).name if font_path and font_path.strip() else ""
+    if not name:
+        return "Browse font..."
+    return name if len(name) <= 28 else name[:25] + "..."
+
+
 class SettingsPanel(ctk.CTkScrollableFrame):
     """Sectioned, scrollable settings controls bound to a Settings object."""
 
@@ -108,6 +124,11 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._field_default_color: dict[str, object] = {}
         self._field_default_font: dict[str, object] = {}
         self._field_formatters: dict[str, Callable] = {}
+        self._slider_entries: dict[str, ctk.CTkEntry] = {}   # each slider's typed-value box ...
+        self._slider_commits: dict[str, Callable] = {}       # ... and what its <Return>/<FocusOut> runs
+        self._shown_dirty: set[str] | None = None  # the dirty marks currently drawn (None: none drawn yet)
+        self._bold_font = None
+        self._buttons_state = None
         self.grid_columnconfigure(1, weight=1)
         self._build()
         self.load_from(settings)
@@ -173,7 +194,11 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._row += 1
         self._register_field_label(name, label, check)
 
-    def _slider(self, name: str, label: str, lo: float, hi: float, steps: int, fmt, on_value_change=None) -> None:
+    def _slider(
+        self, name: str, label: str, lo: float, hi: float, steps: int, fmt, on_value_change=None, parse=None,
+    ) -> None:
+        """`parse` turns typed box text back into the slider's value -- needed when `fmt` shows something else than the
+        raw value (the opacity sliders show a percent of 0-255); default: the number typed, clamped to [lo, hi]."""
         # Registered before _add() below so _default_text() can already use
         # this field's real formatter (e.g. "2.0s") instead of a plain str().
         self._field_formatters[name] = fmt
@@ -199,15 +224,40 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         # entry, load_from(), Reset to Defaults) -- guarded the same way
         # _changed() is, so it only actually acts on a real owner edit, never
         # while a saved/default value is being programmatically loaded in.
+        # Only on a real CHANGE of value, though (issue #7 review): a no-op write -- e.g. leaving the typed box without
+        # editing it -- used to re-run on_value_change too, and for "Maximum publish per day" that reset the owner's
+        # hand-edited publish times.
         if on_value_change is not None:
-            var.trace_add("write", lambda *_: None if self._suppress_change else on_value_change(var.get()))
+            last = {"value": None}
+
+            def _value_written(*_args) -> None:
+                value = var.get()
+                if self._suppress_change:
+                    last["value"] = value
+                    return
+                if value != last["value"]:
+                    last["value"] = value
+                    on_value_change(value)
+
+            var.trace_add("write", _value_written)
 
         def _on_entry_commit(_event=None) -> None:
             # Typing an exact value (owner request) -- tolerates a stray unit
             # suffix like '%'/'s' and clamps into this slider's own range,
             # then re-formats the box so a sloppy typed value (e.g. "500")
             # visibly snaps to what actually took effect (e.g. "100%").
-            var.set(_parse_clamped_float(entry_var.get(), lo, hi))
+            # Bound to <FocusOut> as well as <Return>, so it runs on almost any click after the box was used: text the
+            # owner did not edit is left alone (issue #7 review -- re-parsing the ROUNDED display, e.g. an opacity's "58%"
+            # read back as 58 of 255, shrank the value on every focus-out).
+            text = entry_var.get().strip()
+            current = float(var.get())
+            if text == fmt(current):
+                return
+            value = parse(text) if parse is not None else _parse_clamped_float(text, lo, hi)
+            if value != current:
+                var.set(value)
+            else:
+                _refresh_entry_text()
 
         # The fixed-width entry must be packed FIRST, pinned to the right --
         # packing the expand=True slider first claims the whole frame before
@@ -217,6 +267,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         entry = ctk.CTkEntry(frame, textvariable=entry_var, width=64, justify="right")
         entry.bind("<Return>", _on_entry_commit)
         entry.bind("<FocusOut>", _on_entry_commit)
+        self._slider_entries[name] = entry
+        self._slider_commits[name] = _on_entry_commit
         entry.pack(side="right")
         slider = ctk.CTkSlider(frame, from_=lo, to=hi, number_of_steps=steps, variable=var)
         slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -287,8 +339,36 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         if f:
             self.vars["youtube_client_secrets_path"].set(f)
 
+    def _error(self, title: str, message: str) -> None:
+        """showerror parented to this panel's own window, for the same reason as _confirm."""
+        try:
+            parent = self.winfo_toplevel()
+        except (tk.TclError, AttributeError):
+            parent = None
+        messagebox.showerror(title, message, **({"parent": parent} if parent is not None else {}))
+
+    def _confirm(self, title: str, message: str) -> bool:
+        """askyesno parented to this panel's own window and raised above it: a parentless one asked from the Settings
+        popup (transient + grab_set) can open BEHIND it on some Linux window managers, leaving the popup looking hung --
+        the bug HISTORY 9-10 fixed for the Apply Update dialog (issue #7 review)."""
+        top = self.winfo_toplevel()
+        raised = False
+        try:
+            top.attributes("-topmost", True)
+            raised = True
+        except (tk.TclError, AttributeError):
+            pass
+        try:
+            return messagebox.askyesno(title, message, parent=top)
+        finally:
+            if raised:
+                try:
+                    top.attributes("-topmost", False)
+                except tk.TclError:
+                    pass
+
     def _on_reset_clicked(self) -> None:
-        if messagebox.askyesno(
+        if self._confirm(
             "Reset settings",
             "Reset all settings to their defaults? This cannot be undone.",
         ):
@@ -326,22 +406,29 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         it -- the first of two chances to notice, the second being the
         itemized confirmation Save Settings shows before writing anything to
         disk."""
-        dirty = self._dirty_fields()
+        dirty = set(self._dirty_fields())
+        shown = self._shown_dirty
         for name, widget in self._field_widgets.items():
+            # Only a label whose state FLIPPED is touched (issue #7 review): reconfiguring all ~44 labels -- each a
+            # re-layout -- on every slider step or keystroke cost ~75 ms per event here.
+            if shown is not None and (name in dirty) == (name in shown):
+                continue
             base_text = self._field_labels[name]
             if name in dirty:
-                widget.configure(
-                    text=f"● {base_text}", text_color="#f0a339",
-                    font=ctk.CTkFont(weight="bold"),
-                )
+                if self._bold_font is None:
+                    self._bold_font = ctk.CTkFont(weight="bold")
+                widget.configure(text=f"● {base_text}", text_color="#f0a339", font=self._bold_font)
             else:
                 widget.configure(
                     text=base_text, text_color=self._field_default_color[name],
                     font=self._field_default_font[name],
                 )
+        self._shown_dirty = dirty
         state = "normal" if dirty else "disabled"
-        self.save_button.configure(state=state)
-        self.discard_button.configure(state=state)
+        if state != self._buttons_state:
+            self.save_button.configure(state=state)
+            self.discard_button.configure(state=state)
+            self._buttons_state = state
 
     def _on_save_clicked(self) -> None:
         dirty = self._dirty_fields()
@@ -352,17 +439,23 @@ class SettingsPanel(ctk.CTkScrollableFrame):
             f"{self._format_value(name, old)} → {self._format_value(name, new)}"
             for name, (old, new) in dirty.items()
         ]
-        if not messagebox.askyesno("Save settings", "Save these changes?\n\n" + "\n".join(lines)):
+        if not self._confirm("Save settings", "Save these changes?\n\n" + "\n".join(lines)):
             return
         settings = self.collect()
-        settings.save()
+        try:
+            settings.save()
+        except OSError as exc:
+            # A failed write (disk full, no permission) must never look like a save: the dirty markers and Save/Discard
+            # stay on, so the owner can try again (Settings.save() raises instead of failing silently; wave-1 misc-a).
+            self._error("Save settings", f"Could not save settings -- nothing was changed on disk.\n\n{exc}")
+            return
         self._baseline = settings
         self._refresh_dirty_indicators()
 
     def _on_discard_clicked(self) -> None:
         if not self._dirty_fields():
             return
-        if messagebox.askyesno("Discard changes", "Discard all unsaved changes and reload the last saved settings?"):
+        if self._confirm("Discard changes", "Discard all unsaved changes and reload the last saved settings?"):
             self.load_from(self._baseline)
 
     def _build(self) -> None:
@@ -393,8 +486,16 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._section("Typography & colors")
         self.vars["font_path"] = tk.StringVar()
         self.vars["font_path"].trace_add("write", lambda *_: self._changed())
-        self._add("font_path", "Font (blank = auto)",
-                   ctk.CTkButton(self, text="Browse font...", command=self._browse_font))
+        # The chosen font's file name shows on the button (a path chosen long ago was invisible); "Auto" clears it back to
+        # the default font (issue #7 review, F065).
+        font_row = ctk.CTkFrame(self, fg_color="transparent")
+        font_button = ctk.CTkButton(font_row, text="Browse font...", command=self._browse_font)
+        font_button.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(font_row, text="Auto", width=52, command=lambda: self.vars["font_path"].set("")).pack(
+            side="left", padx=(6, 0))
+        self.vars["font_path"].trace_add(
+            "write", lambda *_: font_button.configure(text=_font_button_text(self.vars["font_path"].get())))
+        self._add("font_path", "Font (blank = auto)", font_row)
         self._slider("lyric_size", "Lyric size", 30, 100, 70, lambda v: f"{int(v)}")
         self._slider("chord_now_size", "Chord (NOW) size", 40, 120, 80, lambda v: f"{int(v)}")
         self._slider("chord_next_size", "Chord (NEXT) size", 20, 60, 40, lambda v: f"{int(v)}")
@@ -402,7 +503,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._color("text_color", "Lyric text")
         self._color("dim_text_color", "Dim labels")
         self._color("panel_color", "Panel background")
-        self._slider("panel_alpha", "Panel opacity", 0, 255, 51, lambda v: f"{int(v / 255 * 100)}%")
+        self._slider("panel_alpha", "Panel opacity", 0, 255, 51, lambda v: f"{int(v / 255 * 100)}%",
+                     parse=_parse_percent_of_255)
 
         self._section("Chord bar")
         self._check("show_chord_timeline", "Show scrolling chord timeline")
@@ -411,7 +513,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._check("show_chord_legend", "Show chord fingering chart (upper-left)")
         self._slider("chord_legend_size", "Chord chart size", 40, 150, 22, lambda v: f"{int(v)}%")
         self._slider("chord_diagram_panel_alpha", "Chord chart background opacity", 0, 255, 51,
-                     lambda v: f"{int(v / 255 * 100)}%")
+                     lambda v: f"{int(v / 255 * 100)}%", parse=_parse_percent_of_255)
 
         self._section("EASY CHORD (capo) videos")
         self._check("generate_easy_chord_versions",

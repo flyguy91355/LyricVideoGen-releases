@@ -37,6 +37,16 @@ def test_only_uploaded_songs_with_a_real_concern_are_listed(tmp_path):
     assert songs[0].video_id == "id-uploaded-bad" and "40%" in songs[0].concern
 
 
+def test_an_uploaded_easy_chord_version_with_the_same_concern_is_listed_too(tmp_path):
+    """Issue #7 review, F087: the EASY CHORD version is its own upload carrying the song's copied lyrics and concern."""
+    song_dir = make_song(tmp_path, "some-song", concern="Only 40% of these lyrics match what is sung.", video_id="MAIN")
+    make_song(song_dir, "easychords", concern="Only 40% of these lyrics match what is sung.", video_id="EASY")
+
+    songs = uploaded_songs_needing_review(tmp_path)
+
+    assert [(s.slug, s.video_id) for s in songs] == [("some-song", "MAIN"), ("some-song/easychords", "EASY")]
+
+
 class _FakeVideos:
     def __init__(self, items):
         self.items, self.calls = items, []

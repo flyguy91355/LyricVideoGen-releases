@@ -98,3 +98,27 @@ def test_a_missing_or_corrupt_log_reads_as_empty_and_never_raises(tmp_path):
     note_redo_started(song_dir(tmp_path, "s"), tmp_path / "b", path=log)      # starts a fresh, valid log
     assert len(redone_songs(path=log)) == 1
     json.loads(log.read_text(encoding="utf-8"))
+
+
+def test_redo_records_written_from_several_threads_are_all_kept(tmp_path):
+    import threading
+
+    log = tmp_path / "log.json"
+    dirs = [song_dir(tmp_path, f"s{n}") for n in range(4)]
+    errors = []
+
+    def start_many(d):
+        try:
+            for i in range(25):
+                note_redo_started(d, d / f"redo_backup_{i}", path=log)
+        except Exception as e:                                  # pragma: no cover -- reported below
+            errors.append(e)
+
+    threads = [threading.Thread(target=start_many, args=(d,)) for d in dirs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [] and len(redone_songs(path=log)) == 100
+    assert list(tmp_path.glob("*.tmp")) == []

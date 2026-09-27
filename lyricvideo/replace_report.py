@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .models import load_song
 from .verify_lyrics import UNCHECKED_HOLD
-from .youtube_state import load_youtube_state
+from .youtube_state import uploaded_song_dirs
 
 _WATCH_URL = "https://www.youtube.com/watch?v="
 
@@ -40,18 +40,19 @@ class VideoFacts:
 
 
 def uploaded_songs_needing_review(work_root: Path) -> list[UploadedSong]:
+    """Every uploaded video with an unconfirmed-lyrics concern -- EASY CHORD versions (`<song>/easychords`, their own
+    uploads carrying the song's copied lyrics and concern) included (issue #7 review, F087)."""
     songs: list[UploadedSong] = []
-    for entry in sorted(Path(work_root).iterdir(), key=lambda e: e.name):
+    for slug, entry, state in uploaded_song_dirs(work_root):
         timed = entry / "lyrics_timed.json"
-        state = load_youtube_state(entry) if entry.is_dir() else None
-        if state is None or not timed.exists():
+        if not timed.exists():
             continue
         try:
             song = load_song(timed)
         except Exception:
             continue
         if song.lyrics_accuracy_concern and song.lyrics_accuracy_concern != UNCHECKED_HOLD:
-            songs.append(UploadedSong(entry.name, song.title, state.video_id, song.lyrics_accuracy_concern))
+            songs.append(UploadedSong(slug, song.title, state.video_id, song.lyrics_accuracy_concern))
     return songs
 
 

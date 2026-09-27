@@ -60,7 +60,11 @@ def ask_published_key(
         answer = match.group(1).strip().rstrip(".")
         if answer.upper().startswith("NONE"):
             return None
-        parsed = parse_key(answer)
+        try:
+            parsed = parse_key(answer)     # never raises now ("Cb major" is B major); guarded anyway: this must not crash
+        except Exception as e:  # a pipeline run (settle_song_key has no handler of its own)
+            log.warning("Published-key answer %r for %r could not be read: %s: %s", answer, title, type(e).__name__, e)
+            continue
         if parsed in allowed:
             return key_name(parsed[0], parsed[1], True)
     return None

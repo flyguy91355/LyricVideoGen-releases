@@ -16,7 +16,7 @@ from .key_estimate import (
     KeyEstimate, candidate_keys, chord_summary, estimate_key_from_chords, parse_key, respell_chord_track,
 )
 from .key_opinion import ask_published_key
-from .models import ChordTrack, Song
+from .models import ChordTrack, Song, atomic_write_text, original_song_dir
 from .chord_theory import key_name
 
 KEY_DECISION_FILE = "key_decision.json"
@@ -79,15 +79,15 @@ def save_owner_key(work_dir: Path, key: str) -> str:
     if parsed is None:
         raise ValueError(f"not a key: {key!r} (write it like 'D major' or 'F# minor')")
     canonical = key_name(parsed[0], parsed[1], True)
-    (Path(work_dir) / KEY_OWNER_FILE).write_text(
+    atomic_write_text(   # the song lists read this from another thread; never a half-written file
+        Path(work_dir) / KEY_OWNER_FILE,
         json.dumps({"key": canonical, "at": datetime.now().astimezone().isoformat(timespec="seconds")}, indent=2),
-        encoding="utf-8",
     )
     return canonical
 
 
 def save_decision(work_dir: Path, decision: KeyDecision) -> None:
-    (Path(work_dir) / KEY_DECISION_FILE).write_text(json.dumps(asdict(decision), indent=2), encoding="utf-8")
+    atomic_write_text(Path(work_dir) / KEY_DECISION_FILE, json.dumps(asdict(decision), indent=2))
 
 
 def load_decision(work_dir: Path) -> KeyDecision | None:
@@ -100,9 +100,12 @@ def load_decision(work_dir: Path) -> KeyDecision | None:
 
 def settle_song_key(
     work_dir: Path, chord_track: ChordTrack, title: str, artist: str, anthropic_client=None, *, save: bool = True,
+    prefer_flats: bool = True,
 ) -> tuple[KeyDecision, ChordTrack]:
-    """(the decision, the chord track to use). A confirmed key respells the chords to its convention; a track still in
-    review comes back respelled to the chords' own best guess -- provisional, never rendered (the caller holds the song)."""
+    """(the decision, the chord track to use). A confirmed key respells the chords for that key (respell_chord_track); a
+    track still in review comes back respelled to the chords' own best guess -- provisional, never rendered (the caller
+    holds the song). `prefer_flats` is Settings.prefer_flats ("Use flats in flat keys"; off: sharps throughout); the
+    saved decision always names the key in the app's own canonical spelling."""
     work_dir = Path(work_dir)
     owner = load_owner_key(work_dir)
     estimate = estimate_key_from_chords(chord_track)
@@ -114,22 +117,46 @@ def settle_song_key(
     if save:
         save_decision(work_dir, decision)
     if decision.confirmed:
-        return decision, respell_chord_track(chord_track, decision.key)
+        return decision, respell_chord_track(chord_track, decision.key, prefer_flats)
     if estimate is not None:
-        return decision, respell_chord_track(chord_track, estimate.name)
+        return decision, respell_chord_track(chord_track, estimate.name, prefer_flats)
     return decision, chord_track
 
 
-def apply_saved_owner_key(work_dir: Path, song: Song) -> bool:
-    """For a song resumed from its saved file (Render Anyway after the owner chose a key): puts the owner's key on the
-    saved chords. True when it changed something."""
+def confirm_owner_key(work_dir: Path, chord_track: ChordTrack) -> KeyDecision | None:
+    """Makes the owner's Set Key answer (key_owner.json) the song's CONFIRMED key decision; a confirmed decision already
+    on file for that same key is kept as it is. None, and nothing written, when the owner has set no key. `chord_track`
+    (the song's saved chords) only fills in the record of what the chords say. Issue #7 review, F013/F019: a Set Key
+    that agreed with the key the chords already carried -- the most common answer -- left the decision at "review", so
+    the song stayed in Flagged and could never upload."""
+    work_dir = Path(work_dir)
     owner = load_owner_key(work_dir)
-    if owner is None or song.chord_track.key == owner:
+    if owner is None:
+        return None
+    saved = load_decision(work_dir)
+    if saved is not None and saved.confirmed and parse_key(saved.key) == parse_key(owner):
+        return saved
+    decision = decide_key(
+        estimate_key_from_chords(chord_track), saved.published_key if saved else None, owner, candidate_keys(chord_track),
+    )
+    save_decision(work_dir, decision)
+    return decision
+
+
+def apply_saved_owner_key(work_dir: Path, song: Song, *, prefer_flats: bool = True) -> bool:
+    """For a song resumed from its saved file (Render Anyway after the owner chose a key): puts the owner's key on the
+    saved chords (respelled for it) and records it as the song's confirmed key decision -- also when the chords already
+    carried that key (confirm_owner_key). True when the chords changed, so the caller saves the song."""
+    work_dir = Path(work_dir)
+    owner = load_owner_key(work_dir)
+    if owner is None:
         return False
-    song.chord_track = respell_chord_track(song.chord_track, owner)
-    estimate = estimate_key_from_chords(song.chord_track)
-    save_decision(work_dir, decide_key(estimate, None, owner, candidate_keys(song.chord_track)))
-    return True
+    respelled = respell_chord_track(song.chord_track, owner, prefer_flats)
+    changed = respelled != song.chord_track
+    if changed:
+        song.chord_track = respelled
+    confirm_owner_key(work_dir, song.chord_track)
+    return changed
 
 
 class KeyNotConfirmed(RuntimeError):
@@ -137,8 +164,7 @@ class KeyNotConfirmed(RuntimeError):
 
 
 def _key_dir(work_dir: Path) -> Path:
-    work_dir = Path(work_dir)
-    return work_dir.parent if work_dir.name == "easychords" else work_dir      # an EASY CHORD folder follows its song's key
+    return original_song_dir(work_dir)      # an EASY CHORD folder follows its song's key (the same rule as its timing)
 
 
 def key_state(work_dir: Path) -> str:

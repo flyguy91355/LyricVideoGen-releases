@@ -6,9 +6,19 @@ call in tests. See docs/superpowers/specs/2026-09-10-youtube-upload-design.md.""
 
 from __future__ import annotations
 
+import http.client
+import random
+import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+# upload_video's own retry of a dropped/5xx resumable upload (issue #7 review, F082). Server errors worth another try;
+# anything 4xx (quota, uploadLimitExceeded, invalidTitle...) is final and propagates at once.
+_RETRYABLE_UPLOAD_STATUSES = frozenset({500, 502, 503, 504})
+_UPLOAD_MAX_RETRIES = 8
+_UPLOAD_MAX_BACKOFF_SECONDS = 64
 
 
 @dataclass(frozen=True)
@@ -18,6 +28,7 @@ class Comment:
     author: str
     text: str
     published_at: str
+    author_channel_id: str = ""     # the commenter's channel ("" when YouTube omits it); the scan skips the channel's own
 
 
 def _publish_at_string(when: datetime) -> str:
@@ -27,6 +38,26 @@ def _publish_at_string(when: datetime) -> str:
     of the machine's configured timezone."""
     aware = when if when.tzinfo is not None else when.astimezone()
     return aware.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0Z")
+
+
+def _is_retryable_upload_error(exc: BaseException) -> bool:
+    """A failure a resumable upload can recover from by asking again on the SAME request: a 5xx, or the connection
+    dropping/timing out (httplib2's 60 s socket timeout, Wi-Fi blip, TLS reset). Never a 4xx -- a quota stop, an
+    uploadLimitExceeded or a bad title must propagate at once so the callers' quota handling still sees it -- and never
+    a local file problem (the mp4 missing or unreadable)."""
+    from googleapiclient.errors import HttpError
+
+    if isinstance(exc, HttpError):
+        return exc.status_code in _RETRYABLE_UPLOAD_STATUSES
+    try:
+        import httplib2
+    except ImportError:  # pragma: no cover -- always installed with google-api-python-client
+        httplib2 = None
+    if httplib2 is not None and isinstance(exc, httplib2.HttpLib2Error):
+        return True
+    if isinstance(exc, (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError)):
+        return False
+    return isinstance(exc, (OSError, http.client.HTTPException))
 
 
 def upload_video(
@@ -39,7 +70,16 @@ def upload_video(
     publish_at: datetime | None,
     category_id: str,
     made_for_kids: bool,
+    *,
+    max_retries: int = _UPLOAD_MAX_RETRIES,
+    sleep=time.sleep,
 ) -> str:
+    """Uploads the video and returns its new id. A dropped connection or a 5xx is retried on the SAME resumable
+    request (issue #7 review, F082): googleapiclient then asks YouTube how much it already has (`bytes */N`) and
+    either resumes from there or, when YouTube had already stored the whole file and only the reply was lost, returns
+    the finished video -- instead of giving up, leaving an orphaned private-scheduled copy on the channel, and letting
+    the next retry upload a duplicate. Gives up (re-raises the last error) after `max_retries` failed attempts, with
+    exponential backoff between them; `sleep` is injectable so tests never really wait."""
     from googleapiclient.http import MediaFileUpload
 
     status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": made_for_kids}
@@ -52,8 +92,21 @@ def upload_video(
     media = MediaFileUpload(str(video_path), chunksize=-1, resumable=True, mimetype="video/mp4")
     request = youtube_client.videos().insert(part="snippet,status", body=body, media_body=media)
     response = None
+    failures = 0
     while response is None:
-        _status, response = request.next_chunk()
+        try:
+            _status, response = request.next_chunk()
+        except Exception as exc:
+            if not _is_retryable_upload_error(exc) or failures >= max_retries:
+                raise
+            failures += 1
+            delay = min(2 ** failures, _UPLOAD_MAX_BACKOFF_SECONDS) + random.random()
+            print(
+                f"WARNING: YouTube upload of {Path(video_path).name} interrupted ({type(exc).__name__}: {exc}); "
+                f"asking YouTube where it got to in {delay:.0f}s (retry {failures} of {max_retries}).",
+                file=sys.stderr,
+            )
+            sleep(delay)
     return response["id"]
 
 
@@ -61,6 +114,39 @@ def create_playlist(youtube_client, title: str, description: str) -> str:
     body = {"snippet": {"title": title, "description": description}, "status": {"privacyStatus": "public"}}
     response = youtube_client.playlists().insert(part="snippet,status", body=body).execute()
     return response["id"]
+
+
+def find_own_playlist_by_title(youtube_client, title: str) -> str | None:
+    """The id of one of the connected channel's OWN playlists whose title is exactly `title`, or None -- lets
+    youtube_playlists.get_or_create_playlist() re-find a playlist that already exists when the local id cache is
+    missing or was lost, instead of creating a second public copy of it (issue #7 review, F143/F144). Pages through
+    playlists().list(mine=True) 50 at a time (1 quota unit per page, versus 50 for creating one)."""
+    page_token = None
+    while True:
+        response = youtube_client.playlists().list(
+            part="snippet", mine=True, maxResults=50, pageToken=page_token,
+        ).execute()
+        for item in response.get("items", []):
+            if item.get("snippet", {}).get("title") == title:
+                return item["id"]
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            return None
+
+
+def get_playlist_description(youtube_client, playlist_id: str) -> str | None:
+    """The playlist's current public description, or None when the playlist no longer exists."""
+    response = youtube_client.playlists().list(part="snippet", id=playlist_id).execute()
+    items = response.get("items", [])
+    return items[0].get("snippet", {}).get("description", "") if items else None
+
+
+def update_playlist_description(youtube_client, playlist_id: str, title: str, description: str) -> None:
+    """Replaces a playlist's public description. playlists.update(part='snippet') replaces the whole snippet and
+    requires snippet.title, so the title is sent too (unchanged). Changes public channel content -- only ever run on
+    the owner's explicit request (scripts/backfill_channel_organization.py --fix-playlist-descriptions)."""
+    body = {"id": playlist_id, "snippet": {"title": title, "description": description}}
+    youtube_client.playlists().update(part="snippet", body=body).execute()
 
 
 def find_playlist_by_id(youtube_client, playlist_id: str) -> bool:
@@ -130,7 +216,7 @@ def _all_uploaded_video_ids(youtube_client) -> list[str]:
     return video_ids
 
 
-def reserved_publish_datetimes(youtube_client) -> set[datetime]:
+def reserved_publish_datetimes(youtube_client) -> list[datetime]:
     """Every LOCAL publish moment already claimed anywhere on this channel,
     down to the minute -- a still-scheduled private video's own publishAt,
     or an already-public video's real publishedAt, converted from
@@ -150,9 +236,12 @@ def reserved_publish_datetimes(youtube_client) -> set[datetime]:
     fill back in with a new upload rather than just pushing further into
     the future. Minute-level (not just date-level, since 2026-09-17's
     multiple-times-a-day scheduling) so two configured times on the same
-    day are tracked as distinct slots. Returns an empty set for a channel
-    with zero uploads."""
-    claimed: set[datetime] = set()
+    day are tracked as distinct slots. One entry PER VIDEO, sorted (issue #7
+    review, F023): a set collapsed several videos sharing one publish moment
+    into a single claim, so a day holding a pile-up never looked full and
+    kept attracting more. Returns an empty list for a channel with zero
+    uploads."""
+    claimed: list[datetime] = []
     video_ids = _all_uploaded_video_ids(youtube_client)
     for i in range(0, len(video_ids), 50):
         batch = video_ids[i:i + 50]
@@ -162,8 +251,8 @@ def reserved_publish_datetimes(youtube_client) -> set[datetime]:
             if not when:
                 continue
             parsed = datetime.fromisoformat(when.replace("Z", "+00:00"))
-            claimed.add(parsed.astimezone())
-    return claimed
+            claimed.append(parsed.astimezone())
+    return sorted(claimed)
 
 
 def get_video_snippet(youtube_client, video_id: str) -> dict | None:
@@ -238,6 +327,11 @@ def is_video_public(youtube_client, video_id: str) -> bool:
     return bool(items) and items[0]["status"].get("privacyStatus") == "public"
 
 
+def _author_channel_id(snippet: dict) -> str:
+    channel = snippet.get("authorChannelId")
+    return str(channel.get("value") or "") if isinstance(channel, dict) else ""
+
+
 def list_new_comments(youtube_client, video_id: str, seen_comment_ids: set[str]) -> list[Comment]:
     response = youtube_client.commentThreads().list(
         part="snippet", videoId=video_id, textFormat="plainText", maxResults=100,
@@ -255,6 +349,7 @@ def list_new_comments(youtube_client, video_id: str, seen_comment_ids: set[str])
             author=snippet.get("authorDisplayName", ""),
             text=snippet.get("textDisplay", ""),
             published_at=snippet.get("publishedAt", ""),
+            author_channel_id=_author_channel_id(snippet),
         ))
     return comments
 

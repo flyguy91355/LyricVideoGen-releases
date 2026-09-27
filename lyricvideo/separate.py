@@ -192,6 +192,7 @@ def separate_vocals(
             f"Demucs produced truncated stems ({'unreadable' if got is None else f'{got:.0f} s'} of "
             f"{expected_seconds:.0f} s). Delete {vocals_path.parent} and run this song again; if it comes out the "
             "same length again, the audio file itself is probably damaged (an incomplete copy or download) -- "
-            "replace it with a good copy."
+            "put a good copy in its place (same file name) and Generate it again: a replaced file is picked up and "
+            "separated afresh."
         )
     return vocals_path

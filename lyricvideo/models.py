@@ -3,6 +3,10 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
+import os
+import threading
+import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -95,6 +99,43 @@ def display_slug(work_dir: Path) -> str:
     return work_dir.name
 
 
+def original_song_dir(work_dir: Path) -> Path:
+    """The folder of the song work_dir was made from: an EASY CHORD (capo) variant's `<song>/easychords` folder is the same
+    song, audio and lyric timing with only the chords respelled, so whatever belongs to the SONG rather than to the video
+    (its Whisper transcript, its key) lives in the parent folder. Any other folder is its own original."""
+    work_dir = Path(work_dir)
+    return work_dir.parent if work_dir.name == "easychords" else work_dir
+
+
+def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Writes `text` to `path` so no reader -- another thread building a song list, the 20-minute tick -- and no crash or
+    earlyoom kill mid-write ever sees a half-written file: a uniquely named temp file in the same folder is written and
+    flushed to disk, then os.replace()d over the target (atomic on Linux and Windows). Line endings are translated exactly
+    like Path.write_text. Windows refuses the replace while another handle has the target open, so that is retried
+    briefly; on any failure the temp file is removed and the original is left untouched."""
+    path = Path(path)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with open(temporary, "x", encoding=encoding) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(20):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 19:
+                    raise
+                time.sleep(0.05)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def line_hash(text: str) -> str:
     return hashlib.sha256(text.strip().lower().encode("utf-8")).hexdigest()[:16]
 
@@ -139,7 +180,18 @@ def _song_from_dict(data: dict) -> Song:
 
 
 def save_song(song: Song, path: Path) -> None:
-    path.write_text(json.dumps(_song_to_dict(song), indent=2), encoding="utf-8")
+    """Atomic (atomic_write_text): a kill mid-save, or a song list reading the file at that moment, never sees a truncated
+    lyrics_timed.json. Before the file is replaced, an owner verification recorded in the older whole-file format is carried
+    over to the lyric-timing fingerprint (owner_verified.py), so a rewrite that leaves the words and their timing alone --
+    a key correction, a concern update -- does not silently undo the owner's approval."""
+    path = Path(path)
+    if path.name == "lyrics_timed.json" and (path.parent / "owner_verified.json").exists():
+        try:
+            from .owner_verified import carry_over_legacy_record   # local: owner_verified imports this module
+            carry_over_legacy_record(path.parent)
+        except Exception:
+            pass                                    # never let the verification bookkeeping block a save
+    atomic_write_text(path, json.dumps(_song_to_dict(song), indent=2))
 
 
 def load_song(path: Path) -> Song:

@@ -52,3 +52,39 @@ def test_a_missing_or_damaged_file_is_an_empty_record(tmp_path):
 
     log.write_text("not json", encoding="utf-8")
     assert cleared_songs(log) == []
+
+
+def test_appends_from_several_threads_at_once_are_all_kept(tmp_path):
+    """Issue #7 review: the Generate/Batch worker, Mark Verified and the timing check can append at the same moment; an
+    unguarded read-append-replace through one shared ".tmp" name lost entries and raised on the second replace."""
+    import threading
+
+    log = tmp_path / "cleared.json"
+    errors = []
+
+    def append_many(n):
+        try:
+            for i in range(50):
+                record_removed(f"song-{n}-{i}", "why", path=log, now=WHEN)
+        except Exception as e:                                  # pragma: no cover -- reported below
+            errors.append(e)
+
+    threads = [threading.Thread(target=append_many, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [] and len(history(log)) == 200
+    assert list(tmp_path.glob("*.tmp")) == []                   # no temp file left behind
+
+
+def test_a_damaged_record_is_set_aside_and_never_silently_replaced(tmp_path):
+    log = tmp_path / "cleared.json"
+    log.write_text("not json", encoding="utf-8")
+
+    record_cleared("new-song", "ok", path=log, now=WHEN)
+
+    assert [e["slug"] for e in history(log)] == ["new-song"]
+    (kept,) = tmp_path.glob("cleared.json.corrupt-*")
+    assert kept.read_text(encoding="utf-8") == "not json"

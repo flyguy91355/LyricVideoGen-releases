@@ -91,7 +91,7 @@ def test_maybe_upload_to_youtube_re_uploads_when_saved_video_was_deleted_on_yout
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
     settings = Settings(youtube_auto_upload=True)
 
@@ -128,7 +128,7 @@ def test_maybe_upload_to_youtube_calls_schedule_upload_when_eligible(tmp_path, m
     monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(
             (youtube_client, anthropic_client, work_dir, settings)
         ),
     )
@@ -167,7 +167,7 @@ def test_maybe_upload_to_youtube_uploads_a_song_with_no_concern(tmp_path, monkey
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
     settings = Settings(youtube_auto_upload=True)
 
@@ -216,7 +216,7 @@ def test_maybe_upload_to_youtube_proceeds_once_quota_cooldown_has_expired(tmp_pa
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
     settings = Settings(youtube_auto_upload=True)
 
@@ -269,7 +269,7 @@ def test_maybe_upload_to_youtube_stops_retrying_after_a_real_upload_limit_exceed
     )
     attempts = []
 
-    def failing_upload(youtube_client, anthropic_client, work_dir, settings):
+    def failing_upload(youtube_client, anthropic_client, work_dir, settings, **kw):
         attempts.append(work_dir)
         raise error
 
@@ -303,7 +303,7 @@ def test_maybe_upload_to_youtube_proceeds_when_todays_upload_cap_still_has_room(
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
     settings = Settings(youtube_auto_upload=True, youtube_max_uploads_per_day=3)
 
@@ -392,7 +392,7 @@ def test_retry_pending_uploads_uploads_every_pending_song(tmp_path, monkeypatch)
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
     settings = Settings()
 
@@ -408,7 +408,7 @@ def test_retry_pending_uploads_continues_after_a_single_song_fails(tmp_path, mon
     monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
     monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
 
-    def upload(youtube_client, anthropic_client, work_dir, settings):
+    def upload(youtube_client, anthropic_client, work_dir, settings, **kw):
         if work_dir.name == "song-a":
             raise RuntimeError("uploadLimitExceeded")
 
@@ -472,7 +472,7 @@ def test_retry_pending_uploads_force_bypasses_the_quota_cooldown_check(tmp_path,
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
 
     results = _retry_pending_uploads(tmp_path, Settings(), force=True)
@@ -493,7 +493,7 @@ def test_retry_pending_uploads_stops_and_saves_a_cooldown_on_quota_exceeded(tmp_
     saved = []
     monkeypatch.setattr("lyricvideo.gui.save_quota_blocked_until", lambda dt: saved.append(dt))
 
-    def upload(youtube_client, anthropic_client, work_dir, settings):
+    def upload(youtube_client, anthropic_client, work_dir, settings, **kw):
         raise RuntimeError("quota exceeded")
 
     monkeypatch.setattr("lyricvideo.gui.schedule_upload", upload)
@@ -525,7 +525,7 @@ def test_retry_pending_uploads_defers_songs_once_todays_upload_cap_is_reached(tm
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
     settings = Settings(youtube_max_uploads_per_day=1)
 
@@ -587,7 +587,7 @@ def test_retry_pending_uploads_only_attempts_the_given_slugs(tmp_path, monkeypat
     calls = []
     monkeypatch.setattr(
         "lyricvideo.gui.schedule_upload",
-        lambda youtube_client, anthropic_client, work_dir, settings: calls.append(work_dir),
+        lambda youtube_client, anthropic_client, work_dir, settings, **kw: calls.append(work_dir),
     )
 
     results = _retry_pending_uploads(tmp_path, Settings(), slugs=["song-a"])
@@ -872,6 +872,8 @@ def test_approve_comment_posts_marks_posted_and_removes_from_queue(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.remove_pending_comment", lambda video_id: removed.append(video_id))
     marked = []
     monkeypatch.setattr("lyricvideo.gui._mark_engagement_comment_posted", lambda video_id: marked.append(video_id))
+    seen = []
+    monkeypatch.setattr("lyricvideo.gui.mark_comment_seen", lambda comment_id: seen.append(comment_id))
     monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda *a, **k: None)
     invalidated = []
 
@@ -883,6 +885,7 @@ def test_approve_comment_posts_marks_posted_and_removes_from_queue(monkeypatch):
     assert posted == [("vid123", "Which instrument are you playing?")]
     assert removed == ["vid123"]
     assert marked == ["vid123"]
+    assert seen == ["new-comment-id"]    # F116: the channel's own comment never comes back as a "new" one to reply to
     assert invalidated == [True]
 
 
@@ -932,6 +935,8 @@ def test_approve_comment_failure_shows_the_error_dialog_and_keeps_the_draft(monk
 def test_dismiss_comment_removes_from_queue_and_invalidates(monkeypatch):
     removed = []
     monkeypatch.setattr("lyricvideo.gui.remove_pending_comment", lambda video_id: removed.append(video_id))
+    marked = []
+    monkeypatch.setattr("lyricvideo.gui._mark_engagement_comment_posted", lambda video_id: marked.append(video_id))
     invalidated = []
 
     comment = PendingComment(video_id="vid123", song_title="My Song", draft_text="Which instrument?")
@@ -939,6 +944,7 @@ def test_dismiss_comment_removes_from_queue_and_invalidates(monkeypatch):
     LyricVideoGUI._on_dismiss_comment(stub, comment)
 
     assert removed == ["vid123"]
+    assert marked == ["vid123"]          # dismissed = done with: a later backfill never drafts (and pays for) another
     assert invalidated == [True]
 
 
@@ -1181,9 +1187,10 @@ def test_check_youtube_comments_worker_stops_and_saves_a_cooldown_on_quota_excee
         work_dir.mkdir(parents=True)
         save_youtube_state(work_dir, YoutubeState(video_id=slug, uploaded_at="2026-01-01T00:00:00", title="t"))
     monkeypatch.setattr(
-        "lyricvideo.gui.is_video_public",
+        "lyricvideo.gui._video_comment_stats",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("quota exceeded")),
     )
+    monkeypatch.setattr("lyricvideo.gui.list_new_comments", _must_not_run)
     monkeypatch.setattr("lyricvideo.gui.is_quota_exceeded_error", lambda e: True)
     saved = []
     monkeypatch.setattr("lyricvideo.gui.save_quota_blocked_until", lambda dt: saved.append(dt))
@@ -1192,6 +1199,32 @@ def test_check_youtube_comments_worker_stops_and_saves_a_cooldown_on_quota_excee
     LyricVideoGUI._check_youtube_comments_worker(stub)
 
     assert len(saved) == 1
+
+
+def test_check_youtube_comments_worker_stops_at_the_first_comment_read_that_hits_quota(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    for slug in ("song-a", "song-b"):
+        work_dir = tmp_path / "work" / slug
+        work_dir.mkdir(parents=True)
+        save_youtube_state(work_dir, YoutubeState(video_id=slug, uploaded_at="2026-01-01T00:00:00", title="t"))
+    monkeypatch.setattr("lyricvideo.gui._video_comment_stats",
+                        lambda client, ids: {vid: (True, 2) for vid in ids})
+    read = []
+
+    def quota_read(client, video_id, seen):
+        read.append(video_id)
+        raise RuntimeError("quota exceeded")
+
+    monkeypatch.setattr("lyricvideo.gui.list_new_comments", quota_read)
+    monkeypatch.setattr("lyricvideo.gui.is_quota_exceeded_error", lambda e: True)
+    saved = []
+    monkeypatch.setattr("lyricvideo.gui.save_quota_blocked_until", lambda dt: saved.append(dt))
+
+    LyricVideoGUI._check_youtube_comments_worker(_gui_stub(settings=Settings(youtube_quota_retry_hours=6)))
+
+    assert read == ["song-a"] and len(saved) == 1              # song-b never read: it would fail the same way
 
 
 def test_youtube_periodic_tick_skips_comment_check_and_retry_while_quota_blocked(monkeypatch):
@@ -1365,11 +1398,11 @@ def test_retry_upload_proceeds_after_confirming_an_already_uploaded_song(monkeyp
     stub = _gui_stub(
         _running=False,
         retry_upload_song_var=SimpleNamespace(get=lambda: "angie"),
-        _start_retry_upload=lambda slugs: started.append(slugs),
+        _start_retry_upload=lambda slugs, **kw: started.append((slugs, kw)),
     )
     LyricVideoGUI._on_retry_upload(stub)
 
-    assert started == [["angie"]]
+    assert started == [(["angie"], {"allow_reupload": True})]   # the owner's confirmed duplicate, never re-checked away
 
 
 def test_retry_upload_skips_confirmation_for_a_never_uploaded_song(monkeypatch):
@@ -1391,7 +1424,7 @@ def test_retry_upload_all_shows_a_summary_and_refreshes_the_lists(monkeypatch, t
     monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
     monkeypatch.setattr(
         "lyricvideo.gui._retry_pending_uploads",
-        lambda work_root, settings, slugs, force=False: {
+        lambda work_root, settings, slugs, force=False, **kw: {
             "succeeded": ["song-a"], "failed": [("song-b", "RuntimeError: boom")],
         },
     )
@@ -1496,7 +1529,7 @@ def test_run_easy_chord_backfill_worker_tolerates_one_songs_failure_and_reports_
     """One bad song must never abort the rest -- same convention as _run_batch_worker."""
     built = []
 
-    def fake_build_capo_variant(work_dir):
+    def fake_build_capo_variant(work_dir, **kwargs):
         built.append(work_dir.name)
         if work_dir.name == "bad-song":
             raise RuntimeError("boom")
@@ -1613,55 +1646,53 @@ def test_remove_song_does_nothing_when_declined(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, msg: False)
     monkeypatch.setattr("lyricvideo.gui.dismiss_song", _must_not_run)
 
-    stub = _gui_stub(_refresh_song_list=_must_not_run)
+    stub = _gui_stub(_drop_list_row=_must_not_run, _refresh_song_list=_must_not_run)
     LyricVideoGUI._on_remove_song(stub, "pending", "angie")
 
 
-def test_remove_song_dismisses_and_refreshes_just_that_list(monkeypatch):
+def test_remove_song_dismisses_and_drops_just_that_row_of_just_that_list(monkeypatch):
+    """Issue #7: Remove used to rebuild the whole list (every row's widgets) to hide one song; now just that one row goes,
+    from just that list -- no rescan."""
     monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, msg: True)
     dismissed = []
     monkeypatch.setattr("lyricvideo.gui.dismiss_song", lambda list_name, slug: dismissed.append((list_name, slug)))
-    refreshed = []
+    dropped = []
 
-    stub = _gui_stub(_refresh_song_list=lambda list_name: refreshed.append(list_name))
+    stub = _gui_stub(_drop_list_row=lambda list_name, slug: dropped.append((list_name, slug)),
+                     _refresh_song_list=_must_not_run)
     LyricVideoGUI._on_remove_song(stub, "pending", "angie")
 
     assert dismissed == [("pending", "angie")]
-    assert refreshed == ["pending"]
+    assert dropped == [("pending", "angie")]
 
 
-def test_refresh_song_list_redo_repopulates_the_redo_list(monkeypatch):
-    monkeypatch.setattr("lyricvideo.gui.list_redoable_songs", lambda work_root: ["angie", "crazy"])
-    calls = []
+def test_the_redo_list_scan_leaves_out_songs_removed_from_it(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_redoable_songs", lambda work_root: ["angie", "crazy", "hidden"])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: {"hidden"} if list_name == "redo" else set())
 
-    stub = _gui_stub(
-        redo_list_frame="redo-frame", redo_song_var="redo-var",
-        _populate_song_radio_list=lambda *a, **kw: calls.append((a, kw)),
-    )
-    LyricVideoGUI._refresh_song_list(stub, "redo")
-
-    assert calls == [(("redo-frame", "redo", ["angie", "crazy"], "redo-var"), {"auto_select_first": True})]
+    assert LyricVideoGUI._scan_redo_list(_gui_stub()) == {"songs": ["angie", "crazy"]}
 
 
-def test_refresh_song_list_upload_repopulates_the_upload_list(monkeypatch):
-    calls = []
+def test_the_upload_list_scan_labels_each_song_and_says_how_many_are_hidden(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.list_uploadable_songs", lambda work_root: ["angie", "hidden"])
+    monkeypatch.setattr("lyricvideo.gui.list_rendered_songs", lambda work_root: ["angie", "crazy", "hidden"])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: {"hidden"} if list_name == "upload" else set())
+    monkeypatch.setattr("lyricvideo.gui.upload_label", lambda work_dir: f"{work_dir.name} (label)")
+    stub = _gui_stub(settings=Settings(timing_pass_percent=95))
+    stub._uploadable_songs = lambda: LyricVideoGUI._uploadable_songs(stub)
+    stub._song_label = lambda list_name, song: LyricVideoGUI._song_label(stub, list_name, song)
 
-    stub = _gui_stub(
-        retry_upload_list_frame="upload-frame", retry_upload_song_var="upload-var",
-        _populate_song_radio_list=lambda *a, **kw: calls.append((a, kw)),
-        _uploadable_songs=lambda: ["angie"],
-    )
-    LyricVideoGUI._refresh_song_list(stub, "upload")
+    data = LyricVideoGUI._scan_upload_list(stub)
 
-    assert calls == [(("upload-frame", "upload", ["angie"], "upload-var"), {"auto_select_first": True})]
+    assert data == {"songs": ["angie"], "labels": {"angie": "angie (label)"}, "note": "1 video hidden: below 95%"}
 
 
-def test_refresh_song_list_pending_refreshes_the_pending_checklist(monkeypatch):
+def test_the_pending_uploads_list_is_refreshed_through_the_background_loader(monkeypatch):
     refreshed = []
-    stub = _gui_stub(_refresh_pending_uploads_list=lambda: refreshed.append(True))
-    LyricVideoGUI._refresh_song_list(stub, "pending")
+    stub = _gui_stub(_refresh_song_list=lambda list_name: refreshed.append(list_name))
+    LyricVideoGUI._refresh_pending_uploads_list(stub)
 
-    assert refreshed == [True]
+    assert refreshed == ["pending"]
 
 
 def test_refresh_retry_upload_options_invalidates_rather_than_rebuilds_directly(monkeypatch):
@@ -1671,7 +1702,9 @@ def test_refresh_retry_upload_options_invalidates_rather_than_rebuilds_directly(
     launch-time slowness fixed the same day, just re-triggered by a
     different event -- freezing the window for a stretch even when nobody
     had those lists open. _invalidate_*_list() defers the actual rebuild
-    unless that section is currently expanded."""
+    unless that section is currently expanded. Issue #7 review: Redo (a
+    finished run adds a song), Pending Engagement Comments (each upload
+    drafts one) and the EASY CHORD candidates go stale the same way."""
     button_states = []
     invalidated = []
     stub = _gui_stub(
@@ -1680,10 +1713,13 @@ def test_refresh_retry_upload_options_invalidates_rather_than_rebuilds_directly(
         _invalidate_upload_list=lambda: invalidated.append("upload"),
         _invalidate_pending_list=lambda: invalidated.append("pending"),
         _invalidate_flagged_list=lambda: invalidated.append("flagged"),
+        _invalidate_redo_list=lambda: invalidated.append("redo"),
+        _invalidate_pending_comments=lambda: invalidated.append("comments"),
+        _invalidate_easy_chord_backfill_list=lambda: invalidated.append("easy"),
     )
     LyricVideoGUI._refresh_retry_upload_options(stub)
 
-    assert invalidated == ["upload", "pending", "flagged"]
+    assert invalidated == ["upload", "pending", "flagged", "redo", "comments", "easy"]
     assert ("upload", {"state": "normal"}) in button_states
     assert ("selected", {"state": "normal"}) in button_states
 
@@ -1880,14 +1916,11 @@ def test_saving_empty_lyrics_from_the_editor_is_refused_with_a_message(tmp_path,
 
 
 def test_the_upload_section_lists_only_passing_videos_and_says_how_many_are_hidden(monkeypatch):
-    texts = []
     monkeypatch.setattr("lyricvideo.gui.list_uploadable_songs", lambda work_root: ["a"])
     monkeypatch.setattr("lyricvideo.gui.list_rendered_songs", lambda work_root: ["a", "b", "c"])
-    stub = _gui_stub(settings=Settings(timing_pass_percent=95),
-                     upload_hidden_label=SimpleNamespace(configure=lambda **kw: texts.append(kw["text"])))
+    stub = _gui_stub(settings=Settings(timing_pass_percent=95))
 
-    assert LyricVideoGUI._uploadable_songs(stub) == ["a"]
-    assert texts == ["2 videos hidden: below 95%"]
+    assert LyricVideoGUI._uploadable_songs(stub) == (["a"], "2 videos hidden: below 95%")
 
 
 def test_the_gate_reads_the_live_pass_mark_so_a_moved_slider_takes_effect_at_once():
@@ -1902,32 +1935,90 @@ def test_the_gate_reads_the_live_pass_mark_so_a_moved_slider_takes_effect_at_onc
         use_pass_share_from(None)
 
 
-def _settings_change_stub(new_percent, invalidated):
-    return _gui_stub(
-        _suppress_settings_save=False, settings=Settings(timing_pass_percent=90),
-        settings_panel=SimpleNamespace(collect=lambda: Settings(timing_pass_percent=new_percent)),
-        settings_preview=SimpleNamespace(update_preview=lambda settings: None),
+class _FakeAfterRoot:
+    """A root whose after() queues callbacks (after_cancel drops one) until the test fires them -- a Tk event loop in
+    miniature, for the debounced Settings preview."""
+
+    def __init__(self):
+        self.pending = {}
+        self._next = 0
+
+    def after(self, _delay, callback, *args):
+        self._next += 1
+        self.pending[f"after#{self._next}"] = (callback, args)
+        return f"after#{self._next}"
+
+    def after_cancel(self, after_id):
+        self.pending.pop(after_id, None)
+
+    def fire_all(self):
+        while self.pending:
+            after_id = next(iter(self.pending))
+            callback, args = self.pending.pop(after_id)
+            callback(*args)
+
+
+def _settings_change_stub(percents, invalidated, previews=None):
+    """A settings popup whose slider hands back each of `percents` in turn (a drag)."""
+    values = iter(percents)
+    previews = [] if previews is None else previews
+    stub = _gui_stub(
+        _suppress_settings_save=False, settings=Settings(timing_pass_percent=90), _preview_after_id=None,
+        _pass_mark_at_open=90, _settings_window_shown=True, _PREVIEW_DELAY_MS=LyricVideoGUI._PREVIEW_DELAY_MS,
+        settings_panel=SimpleNamespace(collect=lambda: Settings(timing_pass_percent=next(values))),
+        settings_preview=SimpleNamespace(update_preview=lambda settings: previews.append(settings.timing_pass_percent)),
         _invalidate_upload_list=lambda: invalidated.append("upload"),
         _invalidate_pending_list=lambda: invalidated.append("pending"),
         _invalidate_flagged_list=lambda: invalidated.append("flagged"),
+        _invalidate_easy_chord_backfill_list=lambda: invalidated.append("easy"),
     )
+    stub.root = _FakeAfterRoot()
+    for name in ("_schedule_settings_preview", "_flush_settings_preview", "_apply_pass_mark_change"):
+        setattr(stub, name, (lambda method: lambda *a: method(stub, *a))(getattr(LyricVideoGUI, name)))
+    return stub
 
 
-def test_moving_the_pass_mark_refreshes_the_upload_pending_and_flagged_lists():
+def _closed_dialog():
+    return SimpleNamespace(grab_release=lambda: None, withdraw=lambda: None)
+
+
+def test_moving_the_pass_mark_refreshes_the_song_lists_once_when_the_settings_popup_closes():
+    """Issue #7 review: every 1% step of a pass-mark drag used to rescan and rebuild each OPEN list on the Tk thread (and
+    write timing holds into song files for values the owner only passed through). The lists now follow the pass mark
+    once, when the popup closes -- the popup is modal, so nobody can look at them in between."""
     invalidated = []
-    stub = _settings_change_stub(95, invalidated)
+    stub = _settings_change_stub(range(89, 79, -1), invalidated)
 
-    LyricVideoGUI._on_settings_changed(stub)
+    for _ in range(10):
+        LyricVideoGUI._on_settings_changed(stub)
+    assert stub.settings.timing_pass_percent == 80 and invalidated == []   # the live value is used at once...
 
-    assert stub.settings.timing_pass_percent == 95 and sorted(invalidated) == ["flagged", "pending", "upload"]
+    LyricVideoGUI._hide_settings_dialog(stub, _closed_dialog())
+
+    assert sorted(invalidated) == ["easy", "flagged", "pending", "upload"]  # ...and the lists refresh once
 
 
 def test_changing_some_other_setting_leaves_the_song_lists_alone():
     invalidated = []
+    stub = _settings_change_stub([90], invalidated)
 
-    LyricVideoGUI._on_settings_changed(_settings_change_stub(90, invalidated))
+    LyricVideoGUI._on_settings_changed(stub)
+    LyricVideoGUI._hide_settings_dialog(stub, _closed_dialog())
 
     assert invalidated == []
+
+
+def test_a_slider_drag_redraws_the_preview_once_when_it_pauses_not_per_step():
+    """Issue #7: each full-resolution preview render took ~55 ms on the Tk thread, per slider event."""
+    previews = []
+    stub = _settings_change_stub(range(60, 80), [], previews)
+
+    for _ in range(20):
+        LyricVideoGUI._on_settings_changed(stub)
+
+    assert previews == [] and len(stub.root.pending) == 1                   # nothing drawn during the drag
+    stub.root.fire_all()
+    assert previews == [79]                                                 # one render, of the final value
 
 
 # --- held before the video: how the GUI callers treat it (2026-09-21) ---------------------------------------------------
@@ -2061,7 +2152,10 @@ def _remove_setup(tmp_path, monkeypatch, answer):
     asked, hidden, refreshed = [], [], []
     monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", lambda title, message, **kw: asked.append(message) or answer)
     monkeypatch.setattr("lyricvideo.gui.dismiss_song", lambda list_name, slug: hidden.append((list_name, slug)))
-    return _gui_stub(_invalidate_flagged_list=lambda: refreshed.append(True)), song_dir, asked, hidden, refreshed
+    stub = _gui_stub(
+        _drop_list_row=lambda list_name, slug: refreshed.append((list_name, slug)), _invalidate_flagged_list=_must_not_run,
+    )
+    return stub, song_dir, asked, hidden, refreshed
 
 
 def test_remove_asks_first_hides_the_song_from_the_review_list_and_deletes_nothing(tmp_path, monkeypatch):
@@ -2069,7 +2163,8 @@ def test_remove_asks_first_hides_the_song_from_the_review_list_and_deletes_nothi
 
     LyricVideoGUI._on_remove_flagged(stub, "hard-song")
 
-    assert "Nothing is deleted" in asked[0] and hidden == [("flagged", "hard-song")] and refreshed == [True]
+    # just that row leaves the list (issue #7: no rescan of the whole review list to hide one song)
+    assert "Nothing is deleted" in asked[0] and hidden == [("flagged", "hard-song")] and refreshed == [("flagged", "hard-song")]
     assert (song_dir / "lyrics_timed.json").exists()
 
 
@@ -2164,7 +2259,7 @@ def test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show(tmp_pat
     import customtkinter as ctk
     from lyricvideo.pipeline import HELD_MARKER
     try:
-        root = ctk.CTk()
+        root = _new_ctk_root(ctk)
     except Exception:
         pytest.skip("no display available for a real window")
     try:
@@ -2180,14 +2275,20 @@ def test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show(tmp_pat
             (song_dir / HELD_MARKER).write_text("{}", encoding="utf-8")
         if on_youtube:
             save_youtube_state(song_dir, YoutubeState(video_id="abc", uploaded_at="2026-09-01T00:00:00+00:00", title="t"))
-        frame = ctk.CTkScrollableFrame(root)
+        frame = ctk.CTkFrame(root)
         frame.pack()
-        stub = SimpleNamespace(flagged_songs_frame=frame)
+        stub = SimpleNamespace(_flagged_rows={}, _song_views={})
 
-        LyricVideoGUI._render_one_flagged_song(stub, "hard-song")
+        LyricVideoGUI._build_flagged_details(stub, frame)
+        stub._flagged_rows["hard-song"] = LyricVideoGUI._flagged_row_data(stub, "hard-song")
+        LyricVideoGUI._show_flagged_details(stub, "hard-song")
         root.update_idletasks()
 
         assert 0 < _widest_button_row(frame) <= 480
+        states = {key: button.cget("state") for key, button in stub._flagged_buttons.items()}
+        assert states["mark_verified"] == states["upload_anyway"] == ("normal" if has_video and not on_youtube else "disabled")
+        assert states["render_anyway"] == ("disabled" if has_video else "normal")
+        assert states["rebuild_easy"] == "disabled"                          # only for an EASY CHORD version
     finally:
         root.destroy()
 
@@ -2210,13 +2311,17 @@ def _assert_dialog_closes_via_its_own_close_button(root, ctk) -> None:
 def test_whisper_text_popup_closes_via_its_own_window_close_button(tmp_path, monkeypatch):
     import customtkinter as ctk
     try:
-        root = ctk.CTk()
+        root = _new_ctk_root(ctk)
     except Exception:
         pytest.skip("no display available for a real window")
     try:
         root.withdraw()
         monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
         monkeypatch.setattr("lyricvideo.gui.whisper_lines_for", lambda work_dir: ["a line"])
+        # Its worker hands the text back with root.after(); from a real thread, with no mainloop running here, that call
+        # waited and then failed on the worker thread -- while the NEXT test was starting its own Tk, which intermittently
+        # broke Tk's startup ("Can't find a usable init.tcl") and skipped that test. Run it on this thread instead.
+        monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
         stub = SimpleNamespace(root=root)
 
         LyricVideoGUI._on_whisper_text_flagged(stub, "some-song")
@@ -2230,7 +2335,7 @@ def test_whisper_text_popup_closes_via_its_own_window_close_button(tmp_path, mon
 def test_edit_lyrics_dialog_closes_via_its_own_window_close_button(tmp_path, monkeypatch):
     import customtkinter as ctk
     try:
-        root = ctk.CTk()
+        root = _new_ctk_root(ctk)
     except Exception:
         pytest.skip("no display available for a real window")
     try:
@@ -2333,12 +2438,15 @@ def test_a_key_hold_tells_the_owner_to_set_the_key(monkeypatch):
 def test_stage_to_resume_depends_on_what_the_held_song_already_has(tmp_path):
     from lyricvideo.gui import _stage_to_resume
     from lyricvideo.key_decision import KeyDecision, save_decision
-    from lyricvideo.models import Song, save_song
+    from lyricvideo.models import ChordEvent, ChordTrack, Song, save_song
     song = tmp_path / "some-song"
     song.mkdir()
     save_song(Song(title="Some Song", audio_path="a.mp3"), song / "lyrics_timed.json")
     assert _stage_to_resume(song) == "detect_chords"                       # held for timing: no chords yet
     save_decision(song, KeyDecision(status="review", chord_key="D major", published_key="G major"))
+    assert _stage_to_resume(song) == "detect_chords"                       # a decision alone proves no chords are saved
+    save_song(Song(title="Some Song", audio_path="a.mp3", chord_track=ChordTrack(events=[ChordEvent(0.0, 2.0, "D")])),
+              song / "lyrics_timed.json")
     assert _stage_to_resume(song) == "images"                              # held for its key: chords are saved
     (song / "some-song.mp4").write_bytes(b"video")
     assert _stage_to_resume(song) == "render"                              # a video exists: only re-render it
@@ -2392,3 +2500,15 @@ def test_set_key_cancelled_changes_nothing(tmp_path, monkeypatch):
     LyricVideoGUI._on_set_key_flagged(stub, "some-song")
 
     assert load_owner_key(tmp_path / "work" / "some-song") is None and made == [] and errors == []
+
+
+def _new_ctk_root(ctk):
+    """A real CTk root. On this Windows box, creating one under pytest's output capture intermittently fails once with
+    "Can't find a usable init.tcl/tk.tcl" (~1 in 40 roots) and succeeds on the very next try -- so retry a couple of times
+    before calling the display unavailable (a skip would hide a real regression)."""
+    for attempt in range(3):
+        try:
+            return ctk.CTk()
+        except Exception:
+            if attempt == 2:
+                raise
