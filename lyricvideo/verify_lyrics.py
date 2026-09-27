@@ -35,7 +35,7 @@ from .lyric_arbiter import describe_arbitration
 from .lyric_audio_match import audio_match_passes, describe_mismatch, score_lyrics_against_transcript
 from .models import load_song, save_song
 from .timing_gate import is_gate_concern
-from .transcribe import load_transcript_segments, transcribe_vocals
+from .transcribe import load_transcript_segments, load_transcript_text, transcribe_vocals
 from .youtube_state import load_youtube_state
 
 # Marks a song that is waiting to upload but has not been checked yet (owner, 2026-09-19: "stop the
@@ -129,7 +129,14 @@ def verify_song(
     if vocals is None or not vocals.exists():
         return SongVerdict(slug, "no-stem")
 
-    match = score_lyrics_against_transcript(lines, transcribe(vocals, work_dir))
+    # Reuse whatever transcript is already cached (hinted or not -- Part 2 of the Whisper-hotwords feature can
+    # leave a hinted one here), the same way whisper_text_for() already does; only transcribe fresh via the
+    # injected `transcribe` when there is no cache at all. Calling `transcribe` (transcribe_vocals by default)
+    # unconditionally used to silently overwrite a hinted transcript with a fresh, unhinted, worse one on every
+    # re-check -- a real bug found in review, 2026-09-27.
+    cached_text = load_transcript_text(work_dir)
+    heard_text = cached_text if cached_text is not None else transcribe(vocals, work_dir)
+    match = score_lyrics_against_transcript(lines, heard_text)
     numbers = dict(coverage=round(match.coverage, 3), worst_run=match.worst_run, worst_heard_gap=match.worst_heard_gap)
     # A hold is "no verdict yet", and (under --recheck-flagged) so is a flag the audio check alone wrote -- clearing
     # one keeps a timing concern that rode along with it.

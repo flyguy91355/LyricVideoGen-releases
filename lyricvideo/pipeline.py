@@ -51,7 +51,9 @@ from .timing_gate import (
     timing_verdict,
 )
 from .owner_whisper import add_corrections, corrected_heard_words
-from .transcribe import load_transcript_segments, load_transcript_text, load_transcript_words, transcribe_vocals
+from .transcribe import (
+    load_transcript_segments, load_transcript_text, load_transcript_words, lyric_hotwords, transcribe_vocals,
+)
 from .youtube_state import STATE_FILENAME
 
 
@@ -707,7 +709,11 @@ def _build_audio_check(vocals_path: Path, work_dir: Path):
     """A function scoring candidate lyric lines against what Whisper hears in the
     vocal stem (lyric_audio_match.py), or None when the transcription can't run --
     then the lyrics fetch quietly falls back to the older text-only check, so a
-    missing package or blocked model download never stops a song from being made."""
+    missing package or blocked model download never stops a song from being made.
+    Deliberately UNHINTED (owner + review, 2026-09-27): this is the independent check deciding whether a fetched
+    candidate matches what is sung, so it must never be hinted with the very candidate it is judging -- doing so
+    would make a wrong/mismatched candidate more likely to falsely pass (see lyric_hotwords() for where a hint
+    IS used, on a separate re-transcription made only after a candidate is accepted)."""
     print("Listening to the vocals to check the lyrics against what is sung (about a minute)...")
     try:
         heard = transcribe_vocals(vocals_path, work_dir)
@@ -1379,7 +1385,7 @@ def run_pipeline(
             # the aligner as anchors (cached), and the aligner and sync check still time them.
             print("Using the lyrics you edited (lyrics_owner.txt); no online lookup or AI check for these.")
             try:
-                transcribe_vocals(vocals_path, work_dir)
+                transcribe_vocals(vocals_path, work_dir, hotwords=lyric_hotwords(owner_lines))
             except Exception as e:
                 print(f"WARNING: could not listen to the vocals ({type(e).__name__}: {e}); timing will use the "
                       "whole-song alignment.", file=sys.stderr)
@@ -1408,6 +1414,18 @@ def run_pipeline(
                 print("Removed lines that are not part of the song's audio (credits): " + "; ".join(dropped_lines))
                 if audio_check is not None and lyrics_concern:
                     lyrics_concern = _concern_after_trim(audio_check, lines_before, lines_text, lyrics_concern)
+        if owner_lines is None and lines_text:
+            # The accepted candidate's own text hints a SECOND, separate transcription for the aligner's anchors
+            # only (owner + review, 2026-09-27) -- audio_check above stayed unhinted throughout, so the
+            # independent lyrics-vs-audio check was never primed with the very text it judged. This is what the
+            # align stage's anchors (load_transcript_words) read; it overwrites the unhinted transcript.json
+            # written above via _build_audio_check, at the cost of one more ~70 s Whisper call for a
+            # fetched-lyrics song (the owner-edited branch above needs only its own one call).
+            try:
+                transcribe_vocals(vocals_path, work_dir, hotwords=lyric_hotwords(lines_text))
+            except Exception as e:
+                print(f"WARNING: could not re-listen with hints ({type(e).__name__}: {e}); the aligner will use "
+                      "the unhinted transcript.", file=sys.stderr)
         if audio_check is not None:
             if lyrics_concern:
                 print(

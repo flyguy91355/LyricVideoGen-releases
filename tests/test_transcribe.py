@@ -246,3 +246,95 @@ def test_missing_word_timings_read_as_empty(tmp_path):
     assert load_transcript_words(tmp_path) == []
     transcribe_vocals(_vocals(tmp_path), tmp_path, model=_FakeModel([" no word timings here"]))
     assert load_transcript_words(tmp_path) == []
+
+
+def test_lyric_hotwords_dedupes_repeated_lines_keeping_first_casing():
+    from lyricvideo.transcribe import lyric_hotwords
+
+    hotwords = lyric_hotwords(["Boris the spider", "Black and hairy", "Boris the spider", "Boris the spider"])
+
+    assert hotwords == "Boris the spider Black and hairy"
+
+
+def test_lyric_hotwords_dedupes_case_insensitively():
+    from lyricvideo.transcribe import lyric_hotwords
+
+    assert lyric_hotwords(["Boris the spider", "boris the spider"]) == "Boris the spider"
+
+
+def test_lyric_hotwords_drops_blank_lines():
+    from lyricvideo.transcribe import lyric_hotwords
+
+    assert lyric_hotwords(["Boris the spider", "", "   ", "Black and hairy"]) == "Boris the spider Black and hairy"
+
+
+def test_lyric_hotwords_of_nothing_is_blank():
+    from lyricvideo.transcribe import lyric_hotwords
+
+    assert lyric_hotwords([]) == ""
+
+
+def test_lyric_hotwords_has_no_shared_state_between_calls():
+    from lyricvideo.transcribe import lyric_hotwords
+
+    first = lyric_hotwords(["Song one's own line"])
+    second = lyric_hotwords(["A completely different song's line"])
+
+    assert first == "Song one's own line"
+    assert second == "A completely different song's line"
+
+
+def test_hotwords_are_passed_to_the_model(tmp_path):
+    class _CapturingModel(_FakeModel):
+        def transcribe(self, path, **kwargs):
+            self.seen_hotwords = kwargs.get("hotwords")
+            return super().transcribe(path, **kwargs)
+
+    model = _CapturingModel([" hello there"])
+    transcribe_vocals(_vocals(tmp_path), tmp_path, model=model, hotwords="Boris the spider")
+
+    assert model.seen_hotwords == "Boris the spider"
+
+
+def test_hotwords_are_saved_in_the_cache(tmp_path):
+    transcribe_vocals(_vocals(tmp_path), tmp_path, model=_FakeModel([" hello there"]), hotwords="Boris the spider")
+
+    cached = json.loads((tmp_path / "transcript.json").read_text(encoding="utf-8"))
+    assert cached["hotwords"] == "Boris the spider"
+
+
+def test_a_cache_made_with_different_hotwords_is_not_reused(tmp_path):
+    vocals = _vocals(tmp_path)
+    transcribe_vocals(vocals, tmp_path, model=_FakeModel([" hello there"]), hotwords="Boris the spider")
+
+    result = transcribe_vocals(vocals, tmp_path, model=_FakeModel([" a fresh transcription"]), hotwords="different words")
+
+    assert result == "a fresh transcription"
+
+
+def test_a_cache_made_with_no_hotwords_is_reused_when_none_are_requested_again(tmp_path):
+    vocals = _vocals(tmp_path)
+    transcribe_vocals(vocals, tmp_path, model=_FakeModel([" hello there"]))
+
+    class _MustNotRun:
+        def transcribe(self, *a, **k):
+            raise AssertionError("cache should have been reused")
+
+    assert transcribe_vocals(vocals, tmp_path, model=_MustNotRun()) == "hello there"
+
+
+def test_a_legacy_cache_with_no_hotwords_key_at_all_is_reused_when_none_are_requested(tmp_path):
+    """A transcript.json written before this feature existed has no "hotwords" key at all -- must be treated as
+    hotwords="", not as a mismatch that forces every existing song to re-transcribe for nothing."""
+    vocals = _vocals(tmp_path)
+    transcribe_vocals(vocals, tmp_path, model=_FakeModel([" hello there"]))
+    cache_path = tmp_path / "transcript.json"
+    data = json.loads(cache_path.read_text(encoding="utf-8"))
+    del data["hotwords"]
+    cache_path.write_text(json.dumps(data), encoding="utf-8")
+
+    class _MustNotRun:
+        def transcribe(self, *a, **k):
+            raise AssertionError("a legacy cache with no hotwords key must still be reused")
+
+    assert transcribe_vocals(vocals, tmp_path, model=_MustNotRun()) == "hello there"

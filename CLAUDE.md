@@ -100,7 +100,14 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    lines in silence), else the song is HELD before chords/images/render (Flagged: Render Anyway; Remove = hide only).
    Lists judge older songs READ-ONLY at the current bar (`timing_verdict`) and never write; only `python -m
    lyricvideo.timing_gate --hold` writes holds; `pipeline.review_concern()` gives the current reason. EASY variants are
-   judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real, correctly-placed line scores it "out of sync" too (owner, 9-27, real case: Boris the Spider) -- Whisper Text (Flagged) is editable per row; Save Corrections (`owner_whisper.py`, `whisper_owner.json`, keyed by row + that row's lyric text so a later lyrics edit can't misapply it) synthesizes heard words spread across the line's own placed span, read by `corrected_heard_words()` (the judge, this popup) and `_align_lyrics`'s own re-score of the winning candidate's real times (`add_corrections()`; a Redo recomputes the concern from scratch, so the correction reaches it too, 9-27) -- never the alignment's placement itself. `owner_verified.py` (Mark Verified, or an
+   judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real,
+   correctly-placed line also scores "out of sync" -- Whisper Text (Flagged) is editable per
+   row; Save Corrections (`owner_whisper.py`, `whisper_owner.json`, keyed by row + line text) synthesizes heard
+   words across its span, read by `corrected_heard_words()`/`_align_lyrics` (`add_corrections()`; a Redo
+   recomputes it) -- never the placement itself. The anchor transcription is hinted (`lyric_hotwords()`,
+   cache-keyed) with the accepted lyrics -- owner's text, or a fetched candidate once verified (the verifying
+   check stays unhinted, 9-27). `revalidate_hotwords.py` checks for regression. `owner_verified.py` (Mark
+   Verified, or an
    Upload Anyway the daily cap skips) overrides every check until the lyric words or their times change
    (`timing_fingerprint`: a Redo usually lapses it, a key fix keeps it). A cleared song's real % is in cleared_log's
    note. When new timing replaces a song that has a video, `<slug>.mp4` becomes `<slug>.previous.mp4` and
@@ -396,6 +403,6 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 `tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
 (per-user path constants and default arguments redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
 never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
-create their root with `_new_ctk_root(ctk)` (retries CTk(): under pytest fd capture on Windows ~1 in 40 fails once
-with "Can't find a usable init.tcl"). Some tests self-skip on Windows (trailing-space folder, symlinks, POSIX
-permissions). The align tests need FFmpeg's shared DLLs on PATH (torchcodec).
+create their root with `_new_ctk_root(ctk)` (retries CTk(): rare Windows fd-capture failure). Some self-skip on
+Windows (trailing-space, symlinks, POSIX perms). Align tests need FFmpeg's shared DLLs on PATH (torchcodec).
+Tests write only to pytest's `tmp_path`, never a fixed path (a leftover file caused a stale-cache bug).

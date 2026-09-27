@@ -15,6 +15,7 @@ docs/superpowers/plans/2026-09-10-batch-folder-processing.md
 docs/superpowers/plans/2026-09-10-youtube-upload-channel-management.md
 docs/superpowers/plans/2026-09-17-youtube-channel-organization.md
 docs/superpowers/plans/2026-09-25-shared-image-library.md
+docs/superpowers/plans/2026-09-27-whisper-hotwords-anchoring.md
 docs/superpowers/specs/2026-09-06-tab-pdf-video-generator-design.md
 docs/superpowers/specs/2026-09-08-update-available-design.md
 docs/superpowers/specs/2026-09-09-chord-detection-merge-design.md
@@ -27,6 +28,7 @@ docs/superpowers/specs/2026-09-18-lyric-accuracy-check-design.md
 docs/superpowers/specs/2026-09-19-verify-lyrics-against-audio-design.md
 docs/superpowers/specs/2026-09-23-capo-easy-chord-videos-design.md
 docs/superpowers/specs/2026-09-25-shared-image-library-design.md
+docs/superpowers/specs/2026-09-27-whisper-hotwords-anchoring-design.md
 lyricvideo/__init__.py
 lyricvideo/align.py
 lyricvideo/anchors.py
@@ -105,6 +107,7 @@ scripts/fix_playlist_data_20260923.py
 scripts/import_image_library.py
 scripts/key_notes_2026-09-26.json
 scripts/preview_library_matches.py
+scripts/revalidate_hotwords.py
 scripts/settle_keys.py
 scripts/update_support_description.py
 tests/__init__.py
@@ -176,6 +179,7 @@ tests/test_render.py
 tests/test_render_atomic_output.py
 tests/test_render_overlays.py
 tests/test_replace_report.py
+tests/test_revalidate_hotwords.py
 tests/test_scan_speed_imports.py
 tests/test_scan_speed_lists.py
 tests/test_scan_speed_review.py

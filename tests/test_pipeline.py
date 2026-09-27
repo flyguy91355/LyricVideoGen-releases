@@ -1048,7 +1048,7 @@ def test_run_pipeline_gives_the_lyrics_fetch_an_audio_check_built_from_the_trans
     from lyricvideo.lyric_audio_match import audio_match_passes
 
     _patch_common(monkeypatch, tmp_path)
-    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda vocals, work_dir: "pale morning harbor lantern")
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda vocals, work_dir, **k: "pale morning harbor lantern")
     seen = {}
 
     def fake_fetch(*args, **kwargs):
@@ -1671,6 +1671,44 @@ def test_the_owners_lyrics_still_get_whisper_word_timings_for_the_aligner(tmp_pa
     run_pipeline(Path("audio.mp3"), work_dir)
 
     assert len(calls) == 1
+
+
+def test_the_owners_own_lyrics_are_used_as_whisper_hotwords(tmp_path, monkeypatch):
+    """Real incident, 2026-09-27 ("Boris the Spider"): Whisper never once heard the word "Boris" anywhere in the
+    song, so the aligner had no real anchor for those lines and produced an 8+ second single-word duration filling
+    the gap. Hinting Whisper with the owner's own confirmed text lets it recognize the word correctly instead."""
+    _patch_common(monkeypatch, tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "lyrics_owner.txt").write_text("Boris the spider\nBoris the spider\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: calls.append(k) or "words")
+
+    run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert calls == [{"hotwords": "Boris the spider"}]
+
+
+def test_the_accepted_fetched_lyrics_hint_a_second_transcription_for_the_aligner_only(tmp_path, monkeypatch):
+    """Decoupled (owner + fresh whole-branch review, 2026-09-27): the audio check that decides whether a fetched
+    candidate matches what is sung must stay UNHINTED -- hinting it with the very candidate it is judging would
+    make a wrong/mismatched candidate more likely to falsely pass (those coverage/timing bars were calibrated on
+    unhinted transcripts). Once a candidate is ACCEPTED, a separate re-transcription hinted with that accepted
+    text feeds the aligner's own anchors, so an unusual word (real case: "Boris") still gets a real anchor,
+    without weakening the lyrics-vs-audio check's independence. Costs one extra Whisper call for a fetched-lyrics
+    song (the owner-edited branch, Task 3, still needs only one, since the owner's own text needs no independent
+    check)."""
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.fetch_lyric_lines_verified",
+        lambda *a, **k: (["Boris the spider", "Boris the spider"], "lrclib", ""),
+    )
+    calls = []
+    monkeypatch.setattr("lyricvideo.pipeline.transcribe_vocals", lambda *a, **k: calls.append(k) or "words")
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "work")
+
+    assert calls == [{}, {"hotwords": "Boris the spider"}]
 
 
 def test_a_failing_transcription_does_not_stop_a_song_with_owner_lyrics(tmp_path, monkeypatch):

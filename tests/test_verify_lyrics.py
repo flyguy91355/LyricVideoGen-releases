@@ -105,6 +105,27 @@ def test_an_uploaded_song_is_only_reported_in_report_mode(tmp_path):
     assert load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern == ""
 
 
+def test_a_hinted_transcript_is_reused_not_overwritten_by_an_unhinted_recheck(tmp_path):
+    """Real bug (review, 2026-09-27): verify_song's default transcribe=transcribe_vocals call passes no hotwords,
+    and transcribe_vocals's cache key now includes hotwords -- so re-checking a song whose transcript was hinted
+    (Part 2 of the Whisper-hotwords feature) silently overwrote it with a fresh, unhinted, worse transcript,
+    discarding what the aligner actually anchored against. verify_song must reuse whatever transcript is already
+    cached (hinted or not), the same way whisper_text_for() already does, instead of forcing a specific
+    hotwords value that invalidates a real cache."""
+    work_dir = make_song_dir(tmp_path, "hinted", SUNG)
+    cached = json.dumps({
+        "model": "medium", "vocals_bytes": 10, "language_requested": "en", "language": "en",
+        "text": " ".join(SUNG), "word_timestamps": True, "hotwords": "some real hint", "words": [],
+        "segments": [],
+    })
+    (work_dir / "transcript.json").write_text(cached, encoding="utf-8")
+
+    verdict = verify_song(work_dir, flag=True)  # default transcribe=transcribe_vocals, no hotwords passed
+
+    assert verdict.status == "verified"
+    assert (work_dir / "transcript.json").read_text(encoding="utf-8") == cached
+
+
 def test_a_song_without_its_vocal_stem_is_skipped_not_crashed(tmp_path):
     work_dir = make_song_dir(tmp_path, "nostem", SUNG, with_stem=False)
 

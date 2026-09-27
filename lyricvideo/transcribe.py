@@ -54,7 +54,7 @@ def _language() -> str | None:
     return None if value in ("", "auto") else value
 
 
-def _read_cache(cache_path: Path, vocals_size: int, language: str | None) -> str | None:
+def _read_cache(cache_path: Path, vocals_size: int, language: str | None, hotwords: str) -> str | None:
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         if (
@@ -62,6 +62,7 @@ def _read_cache(cache_path: Path, vocals_size: int, language: str | None) -> str
             and data["vocals_bytes"] == vocals_size
             and data["language_requested"] == (language or "auto")
             and data.get("word_timestamps") is True   # caches from before word timings existed are redone
+            and data.get("hotwords", "") == hotwords   # a cache from before hotwords existed reads as hotwords=""
         ):
             return str(data["text"])
     except (OSError, ValueError, KeyError, TypeError):
@@ -69,9 +70,38 @@ def _read_cache(cache_path: Path, vocals_size: int, language: str | None) -> str
     return None
 
 
-def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None) -> str:
+def lyric_hotwords(lines: list[str]) -> str:
+    """The given lyric lines turned into a Whisper `hotwords` hint (owner, 2026-09-27): exact-text deduplicated
+    (case-insensitive, first occurrence's own casing kept -- a repeated chorus line contributes once), blank lines
+    dropped, joined with a single space. Lets Whisper correctly recognize a word it would otherwise guess at
+    (confirmed real case: it never once heard "Boris" in "Boris the Spider") wherever it recurs in the song --
+    faster-whisper threads `hotwords` into every internal decoding window, not just the first. It caps the hint at
+    223 tokens (half the model's own max length, minus one -- verified directly against the installed
+    faster-whisper 1.2.1 source, not assumed) and SILENTLY drops anything past that, no warning: measured against
+    the owner's real library, over half his songs' full lyrics exceed it (median ~230 tokens; a dense rap track
+    can run 1000+), so a long song's later verses are not part of the hint at all. No dedup-by-word or
+    truncation-priority is done here (yet) -- this is a known, accepted limitation (review, 2026-09-27), not an
+    oversight: the hint still helps whatever DOES fit (typically the first verse/chorus, where a repeated unusual
+    word like "Boris" is likely to recur anyway)."""
+    seen: set[str] = set()
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        key = stripped.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(stripped)
+    return " ".join(kept)
+
+
+def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None, hotwords: str = "") -> str:
     """The words heard in `vocals_path`, as one lowercase-insensitive string. `model` is
-    injectable (tests pass a fake with the same .transcribe() shape)."""
+    injectable (tests pass a fake with the same .transcribe() shape). `hotwords` (owner, 2026-09-27,
+    see lyric_hotwords()) hints Whisper toward the song's own real vocabulary throughout the whole
+    transcription -- "" (the default) is today's exact behavior."""
     vocals_path = Path(vocals_path)
     if not vocals_path.exists():
         raise FileNotFoundError(f"Vocal stem not found: {vocals_path}")
@@ -79,14 +109,14 @@ def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None) -> str:
     cache_path = Path(work_dir) / _TRANSCRIPT_FILE
 
     language = _language()
-    cached = _read_cache(cache_path, vocals_size, language)
+    cached = _read_cache(cache_path, vocals_size, language, hotwords)
     if cached is not None:
         return cached
 
     model = model or _load_model()
     segments, info = model.transcribe(
         str(vocals_path), language=language, vad_filter=False, temperature=0.0,
-        condition_on_previous_text=False, beam_size=1, word_timestamps=True,
+        condition_on_previous_text=False, beam_size=1, word_timestamps=True, hotwords=hotwords or None,
     )
     segments = [s for s in segments if s.text.strip()]
     text = " ".join(s.text.strip() for s in segments)
@@ -102,6 +132,7 @@ def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None) -> str:
             "language": getattr(info, "language", ""),
             "text": text,
             "word_timestamps": True,
+            "hotwords": hotwords,
             "words": words,
             "segments": [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments],
         }),
