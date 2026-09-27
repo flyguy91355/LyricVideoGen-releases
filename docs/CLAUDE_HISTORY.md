@@ -4969,3 +4969,33 @@ Two tests self-skip on Windows (trailing-space folder; symlinked destination).
 `tests/conftest.py`'s font fixture lists Windows fonts too (73 render tests skipped there
 before 2026-09-14). The align tests need FFmpeg's shared
 DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
+
+## 2026-09-27: issue #8 -- the new cut-short-video guard refused a whole, correct video on this machine's ffmpeg
+
+- MasstarVT's full code review (v2.0.65, commit 3e7e014, "closes #7") added `_check_rendered_video`/`rendered_stream_seconds`
+  in `assemble.py`: read the rendered mp4's real picture length back via `ffmpeg -c copy -f null -` (never trust the
+  container's own Duration, which a cut-short render still reports as the full audio length) and refuse to upload or keep a
+  video that's short. Pulled the commit, re-ran the whole suite: 6 tests failed (all in `test_render_atomic_output.py`,
+  `test_upload_guard_find_truncated.py`, `test_upload_guard_truncated.py`), one root cause. Filed as
+  github.com/flyguy91355/PlayAlongVideoProduction/issues/8 for the collaborator to review.
+- Confirmed live minutes later: the owner's own real render of "Boris the Spider" crashed with the identical error --
+  `_frame_count_from_report()` looks for a `frame=` field in that ffmpeg run's stderr, and this machine's ffmpeg
+  (6.1.1-3ubuntu5) never prints one for a stream-copy-to-null pass, only `size=`/`time=`/`bitrate=`/`speed=`. The video had
+  in fact rendered completely and correctly (a real, full 2:32 1080p24 file, confirmed by hand with the identical ffmpeg
+  command against the temp file's own bytes) -- the new safety check crashed instead of passing, and `assemble_video`'s
+  `finally` block deletes the `.rendering` temp file regardless of why the check failed, so the successful render was lost.
+  Left uncorrected this breaks every render on this machine, not just uploads: `_check_rendered_video` runs on every
+  `assemble_video` call, not only before an upload.
+- Owner: "you fix it .. but send an issue to github explaining ther error." Fixed at the root: `_frame_count_from_report()`
+  now falls back to the reported `time=` times the video's own `fps` (both already printed in the same ffmpeg report text --
+  no new dependency, no ffprobe, no signature changes needed at any caller) whenever `frame=` is truly absent; it still
+  prefers the exact `frame=` count when a build does print one. Regression tests added in `tests/test_assemble.py`
+  reproduce the exact ffmpeg 6.1.1 report text from the real crash.
+- One of the review's own tests (`test_a_successful_render_leaves_only_the_finished_video`) still failed after the fix with
+  an exact-frame-count assertion: this ffmpeg build's own progress-line reporting for a very short (4 s), fast stream-copy
+  consistently stops 2 frames before the true end (deterministic across repeated real renders, not a race -- tested with
+  `-stats_period` forced finer, no change), an inherent limitation of reading periodic progress text rather than a bug in
+  the fallback. Loosened that one assertion to a small tolerance (documented inline) rather than adding ffprobe as a new
+  binary dependency for exactness a real multi-minute song's 1-second safety tolerance doesn't need. Verified against the
+  real crash file end-to-end: Boris the Spider re-rendered clean, 3,664 frames at 24fps = 152.67 s, matching its audio
+  exactly. Full suite: 2081 passed. Shipped as v2.0.66 (commit history has both the collaborator's v2.0.65 and this fix).

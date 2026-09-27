@@ -1070,3 +1070,63 @@ def test_render_temp_files_sit_next_to_the_output_under_names_that_are_not_video
     assert not temp_audio.name.endswith(".mp4")
     assert partial.name.startswith(out_path.name) and temp_audio.name.startswith(out_path.name)
     assert params == ["-f", "mp4"]
+
+
+# --- _frame_count_from_report: ffmpeg builds that don't print frame= on a stream-copy run (real incident, 2026-09-27) ------
+
+# The exact stderr shape a stream-copy ("-c copy -f null -") run produces on ffmpeg 6.1.1-3ubuntu5: no "frame=" field at
+# all, only size=/time=/bitrate=/speed= -- confirmed live on a real, complete render ("Boris the Spider", 2:32 of 1080p24
+# video) that the old frame=-only parser rejected as unreadable.
+_FFMPEG_6_1_1_COPY_OUTPUT = (
+    "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'boris-the-spider.mp4':\n"
+    "  Metadata:\n"
+    "    major_brand     : isom\n"
+    "  Duration: 00:02:32.58, start: 0.000000, bitrate: 1541 kb/s\n"
+    "  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 1920x1080, q=2-31, "
+    "1535 kb/s, 24 fps, 24 tbr, 12288 tbn (default)\n"
+    "    Metadata:\n"
+    "      handler_name    : VideoHandler\n"
+    "      vendor_id       : [0][0][0][0]\n"
+    "      encoder         : Lavc61.3.100 libx264\n"
+    "Output #0, null, to 'pipe:':\n"
+    "[out#0/null @ 0xc71c9c0] video:28621KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB "
+    "muxing overhead: unknown\n"
+    "size=N/A time=00:02:32.58 bitrate=N/A speed=3.96e+03x    \n"
+)
+
+
+def test_frame_count_from_report_falls_back_to_time_and_fps_when_ffmpeg_prints_no_frame_field():
+    """Confirmed live, 2026-09-27: ffmpeg 6.1.1's stream-copy-to-null progress line never prints frame=, only
+    time= -- the frame=-only parser rejected a real, complete 2:32 24fps render as unreadable, so the new
+    cut-short-video check refused even a whole video. The frame count must be recoverable from time= and the
+    video's own reported frame rate, both already present in the same report text ("24 fps", "time=...")."""
+    from lyricvideo.assemble import _frame_count_from_report
+
+    frames = _frame_count_from_report(Path("boris-the-spider.mp4"), 0, _FFMPEG_6_1_1_COPY_OUTPUT)
+
+    # 2:32.58 at 24fps -- within one frame of the real count (152.58 s * 24 = 3661.9)
+    assert 3661 <= frames <= 3663
+
+
+def test_frame_count_from_report_still_prefers_a_real_frame_count_when_ffmpeg_prints_one():
+    """An ffmpeg build that DOES print frame= (the common case) keeps using the exact count, not the time-derived
+    approximation -- the fallback is for when frame= is truly absent, never a silent downgrade in precision."""
+    from lyricvideo.assemble import _frame_count_from_report
+
+    output = "frame= 3661 fps=0.0 q=-1.0 Lsize=N/A time=00:02:32.54 bitrate=N/A speed=3.9e+03x\n"
+
+    assert _frame_count_from_report(Path("song.mp4"), 0, output) == 3661
+
+
+def test_frame_count_from_report_still_raises_when_neither_field_is_present():
+    """A truly unreadable file (bad exit code, or output with neither frame= nor a usable time=+fps pair) must
+    still raise -- the fallback recovers a real ffmpeg quirk, it does not make every failure look like success."""
+    from lyricvideo.assemble import _frame_count_from_report
+
+    with pytest.raises(RuntimeError, match="Could not read back"):
+        _frame_count_from_report(Path("song.mp4"), 0, "nothing usable here\n")
+    with pytest.raises(RuntimeError, match="Could not read back"):
+        _frame_count_from_report(Path("song.mp4"), 1, _FFMPEG_6_1_1_COPY_OUTPUT)  # non-zero exit: never trusted
+    with pytest.raises(RuntimeError, match="Could not read back"):
+        # time= with no fps anywhere in the report -- nothing to multiply it by
+        _frame_count_from_report(Path("song.mp4"), 0, "size=N/A time=00:02:32.58 bitrate=N/A speed=3.96e+03x\n")

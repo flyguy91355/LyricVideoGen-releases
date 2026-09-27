@@ -122,12 +122,24 @@ def _rendered_video_frame_count(path: Path) -> int:
 
 def _frame_count_from_report(path: Path, returncode: int, output: str) -> int:
     counts = re.findall(r"frame=\s*(\d+)", output)
-    if returncode != 0 or not counts:
-        raise RuntimeError(
-            f"Could not read back the rendered video {Path(path).name} to check its length "
-            f"(ffmpeg exit code {returncode}): {output.strip()[-400:]}"
-        )
-    return int(counts[-1])
+    if returncode == 0 and counts:
+        return int(counts[-1])
+    # Some ffmpeg builds (confirmed live, 2026-09-27, on 6.1.1-3ubuntu5: a stream-copy run to the null muxer)
+    # never print frame= at all, only size=/time=/bitrate=/speed= -- the exact-count path above then finds
+    # nothing and used to treat a real, complete render (a whole 2:32 1080p24 video) as unreadable. Recover the
+    # count from the reported duration times the video's own frame rate, both already printed in the same
+    # report text -- never a silent loss of precision when frame= IS present, since that path returns above.
+    if returncode == 0:
+        fps_match = re.search(r"Video:.*?(\d+(?:\.\d+)?) fps", output)
+        times = re.findall(r"time=\s*(\d+):(\d+):(\d+(?:\.\d+)?)", output)
+        if fps_match and float(fps_match.group(1)) > 0 and times:
+            hours, minutes, seconds = times[-1]
+            seconds_total = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+            return round(seconds_total * float(fps_match.group(1)))
+    raise RuntimeError(
+        f"Could not read back the rendered video {Path(path).name} to check its length "
+        f"(ffmpeg exit code {returncode}): {output.strip()[-400:]}"
+    )
 
 
 def rendered_stream_seconds(path: Path) -> tuple[float, float | None]:

@@ -163,8 +163,11 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    - **Atomic output**: renders to `<name>.mp4.rendering` (temp audio `.rendering-audio.m4a` beside it, never the
      CWD), reads the picture length back (`_check_rendered_video`, ffmpeg stream copy), then `os.replace`s. A failed
      or killed render keeps the previous video and never leaves a cut-short mp4 (issue #7); `.rendering*` leftovers
-     are never listed and are replaced next render. `rendered_stream_seconds(path)` -> (picture s, audio s). libx265
-     gets `-pix_fmt yuv420p -tag:v hvc1`. `AudioFileClip` is closed in a `finally`.
+     are never listed and are replaced next render. `rendered_stream_seconds(path)` -> (picture s, audio s), backed
+     by `_frame_count_from_report()`: prefers ffmpeg's own `frame=` count, falling back to `time=` x the report's own
+     `fps` when a build (confirmed on 6.1.1-3ubuntu5) prints no `frame=` for a stream-copy-to-null pass -- else that
+     build refuses every video, cut short or not (issue #8, HISTORY 9-27). libx265 gets `-pix_fmt yuv420p -tag:v
+     hvc1`. `AudioFileClip` is closed in a `finally`.
    - Backgrounds: `_BackgroundCache` (LRU of 4 keyed by the real file, pre-scaled). A missing key shows the nearest
      existing picture in timeline order (previous first), else any of the song's; an undecodable one warns once and
      does the same, else the fallback colour. Swaps crossfade over `Settings.image_transition_seconds` (0.25 s, <=40%
