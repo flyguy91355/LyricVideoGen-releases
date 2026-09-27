@@ -28,7 +28,7 @@ from .cleared_log import record_cleared, record_removed
 from .lyric_audio_match import _content, _tokens, _words_match
 from .models import Song, display_slug, load_song, original_song_dir, save_song
 from .owner_verified import verification
-from .transcribe import load_transcript_words
+from .owner_whisper import OWNER_WHISPER_FILE, corrected_heard_words
 
 TOLERANCE_SECONDS = 0.5        # a line this close to the singing is in sync (the owner notices at about half a second)
 SEARCH_SECONDS = 2.5           # how far around a word's placed time a sung match is looked for; NOT a tolerance
@@ -271,7 +271,7 @@ def _judge_saved(song_dir: Path, song: Song | None, source: Path) -> SyncReport 
             song = load_song(song_dir / _TIMED_FILE)
         except Exception:
             return None
-    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(source)]
+    heard = corrected_heard_words(source, song=song)  # song is already loaded above -- never parsed a second time
     if not heard:
         return None
     line_words = [[w.word for w in line.words] for line in song.lines]
@@ -292,7 +292,11 @@ def check_saved_song(
     needed = pass_share() if needed is None else needed
     source = transcript_dir(song_dir)
     current = file_signature(song_dir / _TIMED_FILE)
-    signature = (current, str(source), file_signature(source / _TRANSCRIPT_FILE))
+    # Also keyed on whisper_owner.json (owner, 2026-09-27): a saved correction must invalidate any cached
+    # report just as surely as a changed transcript does, or the owner's own fix would sit unseen behind the cache.
+    signature = (
+        current, str(source), file_signature(source / _TRANSCRIPT_FILE), file_signature(source / OWNER_WHISPER_FILE),
+    )
     key = os.path.abspath(song_dir)
     if current is not None:
         with _REPORTS_LOCK:

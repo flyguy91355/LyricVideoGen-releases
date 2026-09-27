@@ -54,6 +54,7 @@ from .pipeline import (
     whisper_lines_for,
     easy_version_waits_on_key,
 )
+from .owner_whisper import current_lyric_line_texts, owner_whisper_corrections, save_owner_whisper_line
 from .models import load_song
 from .owner_verified import mark_verified, upload_label
 from .settings import Settings
@@ -3601,12 +3602,16 @@ class LyricVideoGUI:
             messagebox.showerror("Could not open the audio", f"{type(e).__name__}: {e}")
 
     def _on_whisper_text_flagged(self, slug: str) -> None:
-        """A small read-only popup showing what Whisper heard sung, one row per LYRIC line (owner request,
-        2026-09-22: "make the whisper text line by line like the lyrics text ... would make it a lot easier to
-        figure out") so it reads side-by-side against Edit Lyrics's own one-line-per-line box -- lets the owner
-        judge a lyrics-mismatch or timing concern against the actual recognized words, line for line. Every
-        currently flagged song already has a cached transcript, so whisper_lines_for() returns instantly; a rare
-        older song without one is transcribed fresh (~70s) off the GUI thread so the window never freezes."""
+        """A popup showing what Whisper heard sung, one row per LYRIC line (owner request, 2026-09-22: "make the
+        whisper text line by line like the lyrics text ... would make it a lot easier to figure out"), EDITABLE
+        since 2026-09-27 (owner request, confirmed against real evidence -- Boris the Spider: the fetched/edited
+        lyrics were exactly right while Whisper genuinely mis-transcribed or skipped several passages, scoring
+        correctly-timed lines as "out of sync" purely because Whisper's own guess at the words was wrong there).
+        Save Corrections stores only the rows actually changed (owner_whisper.save_owner_whisper_line), read by
+        the sync check and this same popup's own next opening on a later Redo (owner_whisper.corrected_heard_words/
+        owner_whisper_corrections) -- never the whole box, so an untouched row is never treated as a correction.
+        Every currently flagged song already has a cached transcript, so whisper_lines_for() returns instantly; a
+        rare older song without one is transcribed fresh (~70s) off the GUI thread so the window never freezes."""
         work_dir = PROJECT_ROOT / "work" / slug
         dialog = ctk.CTkToplevel(self.root)
         dialog.title(f"Whisper text -- {slug}")
@@ -3623,34 +3628,71 @@ class LyricVideoGUI:
 
         ctk.CTkLabel(
             dialog, anchor="w", wraplength=dialog_w - 40, justify="left", text_color="gray60",
-            text="What Whisper (speech recognition) heard sung, one row per lyric line -- read-only, for reading "
-                 "side-by-side against the lyrics in Edit Lyrics.",
+            text="What Whisper (speech recognition) heard sung, one row per lyric line, for reading side-by-side "
+                 "against the lyrics in Edit Lyrics. Whisper sometimes mishears or misses a line entirely -- if a "
+                 "line here is wrong but you're sure of the real words, correct just that row and Save Corrections; "
+                 "an untouched row is left exactly as Whisper heard it.",
         ).pack(fill="x", padx=14, pady=(12, 6))
         box = ctk.CTkTextbox(dialog, wrap="word", font=ctk.CTkFont(size=14))
         box.pack(fill="both", expand=True, padx=14, pady=(0, 6))
         box.insert("1.0", "Loading... (transcribing fresh audio can take about a minute)")
         box.configure(state="disabled")
-        ctk.CTkButton(
-            dialog, text="Close", width=80, fg_color="gray30", hover_color="gray20", command=dialog.destroy,
-        ).pack(anchor="e", padx=14, pady=(0, 12))
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.pack(fill="x", padx=14, pady=(0, 12))
+        # Populated once the real rows load (worker/show_in_box below); a Save click before then has nothing to
+        # compare against, so it's refused rather than guessing.
+        loaded: dict[str, list[str] | None] = {"shown": None, "lyric_texts": None}
 
-        def show_in_box(text: str) -> None:
+        def save_corrections() -> None:
+            if loaded["shown"] is None:
+                messagebox.showerror("Not ready yet", "Still loading the Whisper text -- try again in a moment.")
+                return
+            shown, lyric_texts = loaded["shown"], loaded["lyric_texts"]
+            edited = box.get("1.0", "end-1c").split("\n")
+            if len(edited) != len(shown):
+                messagebox.showerror(
+                    "Could not save",
+                    "A row seems to have been added or removed while editing, so the rows no longer line up with "
+                    "their own lyric lines. Undo the extra line break (Ctrl+Z) and try again.",
+                )
+                return
+            changed = 0
+            for row, (old_text, new_text) in enumerate(zip(shown, edited)):
+                if new_text.strip() != old_text.strip():
+                    save_owner_whisper_line(work_dir, row, new_text, lyric_texts[row])
+                    changed += 1
+            self._invalidate_flagged_list()
+            messagebox.showinfo(
+                "Saved" if changed else "Nothing to save",
+                f"Saved {changed} correction{'s' if changed != 1 else ''}. The sync check will use it on the next "
+                "Redo or Render Anyway." if changed else "No rows had changed.",
+            )
+
+        ctk.CTkButton(buttons, text="Save Corrections", width=140, command=save_corrections).pack(side="left")
+        ctk.CTkButton(
+            buttons, text="Close", width=80, fg_color="gray30", hover_color="gray20", command=dialog.destroy,
+        ).pack(side="right")
+
+        def show_in_box(text: str, shown: list[str] | None = None, lyric_texts: list[str] | None = None) -> None:
             if not dialog.winfo_exists():
                 return  # the owner closed the popup before a fresh transcription finished
             box.configure(state="normal")
             box.delete("1.0", "end")
             box.insert("1.0", text)
-            box.configure(state="disabled")
+            loaded["shown"], loaded["lyric_texts"] = shown, lyric_texts  # None on an error: Save stays refused
 
         def worker():
             try:
                 lines = whisper_lines_for(work_dir)
+                lyric_texts = current_lyric_line_texts(work_dir)
+                corrections = owner_whisper_corrections(work_dir)
             except Exception as e:
                 # Formatted here, not inside the lambda -- `e` is unbound once this except block ends.
                 message = f"Could not get the Whisper text: {type(e).__name__}: {e}"
                 self.root.after(0, lambda: show_in_box(message))
                 return
-            self.root.after(0, lambda: show_in_box("\n".join(lines)))
+            shown = [corrections.get(i, line) for i, line in enumerate(lines)]
+            self.root.after(0, lambda: show_in_box("\n".join(shown), shown, lyric_texts))
 
         threading.Thread(target=worker, daemon=True).start()
 

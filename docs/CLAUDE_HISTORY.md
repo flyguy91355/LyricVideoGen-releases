@@ -4999,3 +4999,42 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   binary dependency for exactness a real multi-minute song's 1-second safety tolerance doesn't need. Verified against the
   real crash file end-to-end: Boris the Spider re-rendered clean, 3,664 frames at 24fps = 152.67 s, matching its audio
   exactly. Full suite: 2081 passed. Shipped as v2.0.66 (commit history has both the collaborator's v2.0.65 and this fix).
+
+## 2026-09-27: Whisper Text becomes editable -- a correction to a misheard line reaches the sync check
+
+- Owner asked whether editing the Whisper Text review box could help, since "whisper doesn't always hear the song
+  correctly." Investigated for real rather than assuming: pulled "Boris the Spider"'s own transcript.json and
+  lyrics_owner.txt. The owner's lyrics matched the real song exactly; Whisper never once heard "Boris" (transcribed
+  "Where is"/"God is"/"Who is" the spider throughout), skipped a whole couplet, and turned a fast "creepy creepy
+  crawly crawly" passage into a run of nonsense "b-b-b-b..." syllables. The song's own saved concern -- "only 71.4% of
+  the lines start within half a second of where they are sung (90% needed); lines 20, 23, 29, 30, 31, 32 are off" --
+  lined up exactly with those garbled/skipped passages: real, correctly-placed lines scored "out of sync" purely
+  because Whisper's own guess at the words was wrong there, confirmed in `timing_gate._line_verdicts`'s own OUT
+  branch ("other words are sung right here, none of this line's own").
+- Built `lyricvideo/owner_whisper.py`: corrections saved to `whisper_owner.json`, keyed by ROW INDEX alongside the
+  exact lyric line text that row showed at save time (a later lyrics edit makes a stale correction detected and
+  dropped for just that one row, never misapplied to a different line). `corrected_heard_words()` returns the raw
+  Whisper words PLUS synthetic ones for every still-valid correction, spread evenly across THAT LINE's own already-
+  placed word span -- it never claims Whisper heard something nobody has verified singing happens, only that the
+  owner confirms, by ear, what is sung during a span the aligner already placed.
+- Wiring was deliberately narrower than "everywhere `load_transcript_words` was used": `pipeline._align_lyrics` and
+  its credit-trimming helper `trim()` operate on CANDIDATE lines during a fresh alignment, before any line has a
+  final, stable per-word timestamp to anchor a synthetic correction against -- left untouched, on the raw transcript,
+  same as before. Only `pipeline.whisper_lines_for` (the popup's own display) and `timing_gate._judge_saved` (the
+  read-only sync verdict that drives the Flagged/Upload/Pending lists) read the corrected words, since both operate
+  on a song's FINAL, saved lines.
+- Caught before it shipped (issue #7's own perf rewrite was fresh; owner: "don't fuck up the GUI at all, it's been
+  fixed finally"): my first wiring called `corrected_heard_words(source)` inside `_judge_saved` without threading
+  through the `song` object `_judge_saved` had ALREADY loaded, which would have parsed `lyrics_timed.json` a SECOND
+  time per song on every list scan -- exactly the redundant-parse regression the collaborator's review had just
+  eliminated. Fixed by giving `corrected_heard_words()` an optional `song=` parameter (mirroring `_judge_saved`'s own
+  existing optional-`song` convention) and threading it through at both real call sites; confirmed with the
+  collaborator's own `test_scan_speed_lists.py` (whose `_count_parses` instrumentation needed retargeting from the
+  now-removed `timing_gate.load_transcript_words` to `owner_whisper.load_transcript_words`, the module that actually
+  imports and calls it now) -- all still parse each file exactly once per version, across a whole list scan.
+- `check_saved_song`'s own cache signature now also includes `whisper_owner.json`'s file signature, so saving a
+  correction invalidates a cached verdict the same way a changed transcript already did.
+- The GUI popup (`_on_whisper_text_flagged`) is now editable with a "Save Corrections" button that stores only the
+  ROWS actually changed from what was shown (an untouched row, even one already carrying an earlier correction, is
+  left alone) and refuses to save at all if the row count changed (a stray line break would misalign every row after
+  it) rather than silently misapplying corrections to the wrong lines. Full suite after: 2097 passed.

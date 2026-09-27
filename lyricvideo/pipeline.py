@@ -49,6 +49,7 @@ from .owner_verified import FILENAME as OWNER_VERIFIED_FILE, verification
 from .timing_gate import (
     check_saved_song, file_signature, heard_text_near_line, is_gate_concern, percent_display, settle_alignment, timing_verdict,
 )
+from .owner_whisper import corrected_heard_words
 from .transcribe import load_transcript_segments, load_transcript_text, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
@@ -636,8 +637,8 @@ def whisper_lines_for(work_dir: Path, model=None) -> list[str]:
     as the lyrics editor already does. `model` is injectable, same as whisper_text_for()/transcribe_vocals()."""
     work_dir = Path(work_dir)
     whisper_text_for(work_dir, model=model)  # ensures transcript.json (text/segments/words) is cached
-    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
     song = load_song(work_dir / "lyrics_timed.json")
+    heard = corrected_heard_words(work_dir, song=song)  # song is already loaded here -- never parsed a second time
 
     lines = []
     for line in song.lines:

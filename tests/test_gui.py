@@ -2297,6 +2297,17 @@ def test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show(tmp_pat
 # either.. nothing did" -- CLAUDE.md's own 9-10 history already found this exact failure mode once: Tk does
 # nothing when a window's close button is clicked unless the app explicitly binds WM_DELETE_WINDOW) ---
 
+def _find_all(widget, cls) -> list:
+    """Every descendant of widget (any depth) that is an instance of cls -- buttons in this GUI are often nested a
+    frame deep (a row of buttons inside its own CTkFrame), so a plain winfo_children() alone misses them."""
+    found = []
+    for child in widget.winfo_children():
+        if isinstance(child, cls):
+            found.append(child)
+        found.extend(_find_all(child, cls))
+    return found
+
+
 def _assert_dialog_closes_via_its_own_close_button(root, ctk) -> None:
     dialogs = [w for w in root.winfo_children() if isinstance(w, ctk.CTkToplevel)]
     assert len(dialogs) == 1
@@ -2328,6 +2339,99 @@ def test_whisper_text_popup_closes_via_its_own_window_close_button(tmp_path, mon
         root.update_idletasks()
 
         _assert_dialog_closes_via_its_own_close_button(root, ctk)
+    finally:
+        root.destroy()
+
+
+def test_whisper_text_popup_is_editable_and_prefills_any_saved_correction(tmp_path, monkeypatch):
+    """Owner request, 2026-09-27, confirmed against real evidence (Boris the Spider): the box must be editable, not
+    read-only, and start from whatever correction was already saved for a row rather than the raw Whisper guess."""
+    import customtkinter as ctk
+    try:
+        root = _new_ctk_root(ctk)
+    except Exception:
+        pytest.skip("no display available for a real window")
+    try:
+        root.withdraw()
+        monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr("lyricvideo.gui.whisper_lines_for", lambda work_dir: ["raw whisper guess", "second line"])
+        monkeypatch.setattr("lyricvideo.gui.current_lyric_line_texts", lambda work_dir: ["real lyric one", "real lyric two"])
+        monkeypatch.setattr("lyricvideo.gui.owner_whisper_corrections", lambda work_dir: {0: "owner's earlier correction"})
+        monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+        stub = SimpleNamespace(root=root)
+
+        LyricVideoGUI._on_whisper_text_flagged(stub, "some-song")
+        root.update()  # a real Tk after(0, ...) callback (show_in_box) needs a full event-loop pass, not just idle tasks
+
+        dialog = [w for w in root.winfo_children() if isinstance(w, ctk.CTkToplevel)][0]
+        box = _find_all(dialog, ctk.CTkTextbox)[0]
+        assert str(box.cget("state")) == "normal"
+        assert box.get("1.0", "end-1c") == "owner's earlier correction\nsecond line"
+    finally:
+        root.destroy()
+
+
+def test_save_corrections_saves_only_the_rows_the_owner_actually_changed(tmp_path, monkeypatch):
+    import customtkinter as ctk
+    try:
+        root = _new_ctk_root(ctk)
+    except Exception:
+        pytest.skip("no display available for a real window")
+    try:
+        root.withdraw()
+        monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr("lyricvideo.gui.whisper_lines_for", lambda work_dir: ["raw one", "raw two", "raw three"])
+        monkeypatch.setattr("lyricvideo.gui.current_lyric_line_texts", lambda work_dir: ["lyric one", "lyric two", "lyric three"])
+        monkeypatch.setattr("lyricvideo.gui.owner_whisper_corrections", lambda work_dir: {})
+        monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+        saved = []
+        monkeypatch.setattr("lyricvideo.gui.save_owner_whisper_line", lambda work_dir, row, text, line_text: saved.append((row, text, line_text)))
+        monkeypatch.setattr("lyricvideo.gui.messagebox.showinfo", lambda *a, **k: None)
+        stub = SimpleNamespace(root=root, _invalidate_flagged_list=lambda: None)
+
+        LyricVideoGUI._on_whisper_text_flagged(stub, "some-song")
+        root.update()
+        dialog = [w for w in root.winfo_children() if isinstance(w, ctk.CTkToplevel)][0]
+        box = _find_all(dialog, ctk.CTkTextbox)[0]
+        box.delete("1.0", "end")
+        box.insert("1.0", "raw one\ncorrected two\nraw three")   # only row 1 actually changed
+        save_button = [w for w in _find_all(dialog, ctk.CTkButton) if w.cget("text") == "Save Corrections"][0]
+        save_button.invoke()
+
+        assert saved == [(1, "corrected two", "lyric two")]
+    finally:
+        root.destroy()
+
+
+def test_save_corrections_refuses_when_a_row_was_added_or_removed(tmp_path, monkeypatch):
+    import customtkinter as ctk
+    try:
+        root = _new_ctk_root(ctk)
+    except Exception:
+        pytest.skip("no display available for a real window")
+    try:
+        root.withdraw()
+        monkeypatch.setattr("lyricvideo.gui.PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr("lyricvideo.gui.whisper_lines_for", lambda work_dir: ["raw one", "raw two"])
+        monkeypatch.setattr("lyricvideo.gui.current_lyric_line_texts", lambda work_dir: ["lyric one", "lyric two"])
+        monkeypatch.setattr("lyricvideo.gui.owner_whisper_corrections", lambda work_dir: {})
+        monkeypatch.setattr("lyricvideo.gui.threading.Thread", _ImmediateThread)
+        saved = []
+        monkeypatch.setattr("lyricvideo.gui.save_owner_whisper_line", lambda *a, **k: saved.append(a))
+        errors = []
+        monkeypatch.setattr("lyricvideo.gui.messagebox.showerror", lambda title, message, **k: errors.append(message))
+        stub = SimpleNamespace(root=root)
+
+        LyricVideoGUI._on_whisper_text_flagged(stub, "some-song")
+        root.update()
+        dialog = [w for w in root.winfo_children() if isinstance(w, ctk.CTkToplevel)][0]
+        box = _find_all(dialog, ctk.CTkTextbox)[0]
+        box.delete("1.0", "end")
+        box.insert("1.0", "raw one\nan extra row\nraw two")   # a stray newline crept in
+        save_button = [w for w in _find_all(dialog, ctk.CTkButton) if w.cget("text") == "Save Corrections"][0]
+        save_button.invoke()
+
+        assert saved == [] and errors
     finally:
         root.destroy()
 

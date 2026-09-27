@@ -62,6 +62,7 @@ lyricvideo/lyric_reconcile.py
 lyricvideo/models.py
 lyricvideo/owner_lyrics.py
 lyricvideo/owner_verified.py
+lyricvideo/owner_whisper.py
 lyricvideo/pipeline.py
 lyricvideo/precision.py
 lyricvideo/redo_log.py
@@ -162,6 +163,7 @@ tests/test_misc_a_home_isolation.py
 tests/test_misc_b_key_spelling.py
 tests/test_models.py
 tests/test_owner_lyrics.py
+tests/test_owner_whisper.py
 tests/test_pipeline.py
 tests/test_pipeline_stages_audio.py
 tests/test_pipeline_stages_images.py

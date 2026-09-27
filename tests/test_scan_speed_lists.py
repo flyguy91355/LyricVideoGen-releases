@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from lyricvideo import pipeline, timing_gate
+from lyricvideo import owner_whisper, pipeline, timing_gate
 from lyricvideo.anchors import HeardWord
 from lyricvideo.models import ChordTrack, LyricLine, Song, Word, load_song, save_song
 from lyricvideo.pipeline import (
@@ -86,7 +86,12 @@ def _count_parses(monkeypatch):
         counts["load_song"] += 1
         return load_song(path)
 
-    real_words = timing_gate.load_transcript_words
+    # owner_whisper.corrected_heard_words() is timing_gate's real path to the transcript now (it also layers in any
+    # owner correction to a misheard Whisper line, 2026-09-27) -- the actual disk read still happens in
+    # transcribe.load_transcript_words(), bound into owner_whisper's own module namespace by its "from .transcribe
+    # import load_transcript_words", so that is the name to intercept (patching transcribe's own attribute would
+    # miss it: owner_whisper already holds its own reference to the original function object).
+    real_words = owner_whisper.load_transcript_words
 
     def counting_words(work_dir):
         counts["transcript"] += 1
@@ -94,7 +99,7 @@ def _count_parses(monkeypatch):
 
     monkeypatch.setattr(pipeline, "load_song", counting_load)
     monkeypatch.setattr(timing_gate, "load_song", counting_load)
-    monkeypatch.setattr(timing_gate, "load_transcript_words", counting_words)
+    monkeypatch.setattr(owner_whisper, "load_transcript_words", counting_words)
     return counts
 
 

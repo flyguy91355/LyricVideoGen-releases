@@ -157,6 +157,47 @@ def _save(song_dir, times, concern="", heard=HEARD):
         {"word": h.word, "start": h.start, "end": h.end} for h in heard]}), encoding="utf-8")
 
 
+# --- an owner correction to a WHISPER-misheard line feeds into the saved song's own sync verdict (owner, 2026-09-27,
+# confirmed against real evidence -- Boris the Spider: correctly-timed lines scored "out of sync" purely because
+# Whisper's own guess at the words was wrong there, not because the timing was ever off) -----------------------------
+
+def test_a_line_whisper_never_heard_is_out_of_sync_until_the_owner_corrects_it(tmp_path):
+    from lyricvideo.owner_whisper import save_owner_whisper_line
+
+    # Line 3 ("i wait for you like i have waited before") is placed exactly on the true singing (placed() with no
+    # shift) -- but Whisper mis-transcribed every one of its words (the real Boris the Spider failure mode: it
+    # clearly heard SOMETHING sung right there, just not the real words) rather than hearing nothing at all --
+    # replace its own HeardWords with wrong text at the identical times, so the line has enough nearby "noise"
+    # (MIN_HEARD_NEARBY) to be scored OUT rather than excused as unjudged.
+    line3_words = set(WORDS[3])
+    heard_without_line3 = [
+        hw if hw.word not in line3_words else HeardWord("garbled", hw.start, hw.end) for hw in HEARD
+    ]
+    song_dir = tmp_path / "song"
+    _save(song_dir, placed(), heard=heard_without_line3)
+
+    before = check_saved_song(song_dir)
+    assert 4 in before.out_of_sync_lines  # 1-indexed: line 3 (0-indexed) is line 4
+
+    save_owner_whisper_line(song_dir, 3, " ".join(WORDS[3]), " ".join(WORDS[3]))
+
+    after = check_saved_song(song_dir)
+    assert 4 not in after.out_of_sync_lines
+    assert after.share > before.share
+
+
+def test_a_song_already_passing_is_unaffected_by_an_unrelated_correction(tmp_path):
+    from lyricvideo.owner_whisper import save_owner_whisper_line
+
+    song_dir = tmp_path / "song"
+    _save(song_dir, placed())
+    assert check_saved_song(song_dir).passes
+
+    save_owner_whisper_line(song_dir, 3, " ".join(WORDS[3]), " ".join(WORDS[3]))
+
+    assert check_saved_song(song_dir).passes
+
+
 def test_a_saved_song_is_checked_from_its_own_files(tmp_path):
     _save(tmp_path / "good", placed())
     _save(tmp_path / "bad", placed({1: 1.0, 6: -1.0}))

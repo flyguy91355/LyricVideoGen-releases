@@ -100,7 +100,7 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    lines in silence), else the song is HELD before chords/images/render (Flagged: Render Anyway; Remove = hide only).
    Lists judge older songs READ-ONLY at the current bar (`timing_verdict`) and never write; only `python -m
    lyricvideo.timing_gate --hold` writes holds; `pipeline.review_concern()` gives the current reason. EASY variants are
-   judged against their song's transcript (`models.original_song_dir`). `owner_verified.py` (Mark Verified, or an
+   judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real, correctly-placed line scores it "out of sync" too (owner, 9-27, real case: Boris the Spider) -- Whisper Text (Flagged) is editable per row; Save Corrections (`owner_whisper.py`, `whisper_owner.json`, keyed by row + that row's lyric text so a later lyrics edit can't misapply it) synthesizes heard words spread across the line's own placed span, read by `corrected_heard_words()` (both the judge and this same popup) -- never the alignment engine itself. `owner_verified.py` (Mark Verified, or an
    Upload Anyway the daily cap skips) overrides every check until the lyric words or their times change
    (`timing_fingerprint`: a Redo usually lapses it, a key fix keeps it). A cleared song's real % is in cleared_log's
    note. When new timing replaces a song that has a video, `<slug>.mp4` becomes `<slug>.previous.mp4` and

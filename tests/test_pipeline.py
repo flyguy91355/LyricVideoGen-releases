@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lyricvideo.anchors import HeardWord
 from lyricvideo.chord_theory import load_easy_chord_capo_marker
 from lyricvideo.models import ChordEvent, ChordTrack, LyricLine, Song, Word, load_song, save_song
 from lyricvideo.pipeline import (
