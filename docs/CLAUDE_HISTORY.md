@@ -5038,3 +5038,34 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   ROWS actually changed from what was shown (an untouched row, even one already carrying an earlier correction, is
   left alone) and refuses to save at all if the row count changed (a stray line break would misalign every row after
   it) rather than silently misapplying corrections to the wrong lines. Full suite after: 2097 passed.
+
+## 2026-09-27: the Whisper correction didn't actually fix a Redo -- two real bugs found by testing against the owner's own song
+
+- Owner, right after v2.0.67 shipped: he corrected every line of Boris the Spider's Whisper text to the real lyrics
+  and redid it -- "the video came out exactly the same, with exactly the same problems as before." Investigated
+  directly against his real files rather than guessing.
+- **Bug 1 (the real complaint):** `pipeline._align_lyrics` -- which a Redo re-runs from scratch and which COMPUTES
+  and WRITES the song's concern -- built its heard-words list straight from the raw transcript, never consulting a
+  saved correction. Only the read-only re-judge (`timing_gate._judge_saved`, behind the Flagged/Upload/Pending
+  lists) and the display popup did. So a Redo always overwrote whatever the correction had fixed with the identical,
+  uncorrected concern. Reproducing this needed a genuinely real sync check: `tests/test_pipeline.py`'s shared
+  `_patch_common` stubs `settle_alignment` to an always-100%-pass fake for its many simple two-line-song tests
+  (documented there as deliberate), so the first version of the reproduction test showed a pass even with the bug
+  live -- a new `_sync_setup_with_real_gate()` restores the real `timing_gate.settle_alignment` for this one.
+  Fixed by re-scoring the WINNING candidate's own final times with any still-valid correction added
+  (`owner_whisper.add_corrections()`, new: works from (line_words, times) directly, no saved Song needed) inside
+  `_align_lyrics`'s own `settled()` closure -- never influencing which candidate is chosen, only whether an
+  already-placed line is confirmed. A refactor slip on the first pass conflated `Settled.concern` (which can differ
+  from its own report's, e.g. an earlier concern surviving a passing gate) with `report.concern`, breaking 4
+  unrelated existing tests; caught immediately by running the whole file, not just the new tests.
+- **Bug 2 (found by then checking the fix against Boris the Spider's REAL saved data, read-only, not synthetic
+  fixtures):** even with Bug 1 fixed, the real song only rose from 71.4% to 88.9% -- still short of 90% -- with 4
+  lines still flagged that the owner HAD corrected. `add_corrections()` was spreading a correction's words EVENLY
+  across the whole line's span; real singing pace is uneven (some words held longer than others), so on a longer
+  line the evenly-spread guess for an individual word could land more than the sync check's own half-second
+  tolerance away from where the aligner actually placed THAT word, even though the line's overall span was right.
+  Fixed: when the correction has the SAME word count as the real aligned line (the ordinary case -- the owner
+  retyping the true lyric line), each corrected word is placed at THAT SPECIFIC word's own real time, not an
+  interpolated guess; the even-spread is now only a fallback for a correction with a different word count.
+  Re-checked against the real file after: `SyncReport(share=1.0, ... out_of_sync_lines=())`, passes.
+- Full suite after both fixes: 2105 passed.

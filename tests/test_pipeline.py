@@ -1332,6 +1332,71 @@ def _sync_setup(monkeypatch, tmp_path, whole_starts, anchored_starts, heard=True
     return used
 
 
+def _heard_at_with_line_garbled(starts, garbled_line_index):
+    """Like _heard_at, but every word of one line is replaced with a token that matches nothing in the lyrics --
+    Whisper's real failure mode (Boris the Spider): it clearly hears something sung right there, just not the real
+    words, so the line is scored OUT rather than excused as unjudged."""
+    out = []
+    for li, (s, line) in enumerate(zip(starts, _SYNC_LINES)):
+        for i, w in enumerate(line.split()):
+            out.append({"word": "garbled" if li == garbled_line_index else w, "start": s + i * 0.4, "end": s + i * 0.4 + 0.35})
+    return out
+
+
+def _sync_setup_with_real_gate(monkeypatch, tmp_path, whole_starts, anchored_starts):
+    """_sync_setup, but with the REAL timing_gate.settle_alignment restored: _patch_common stubs it to an always-
+    100%-pass fake (documented there as being for the file's many two-line-song tests that "rightly cannot" be sync-
+    checked at all) -- fine for tests that only check WHICH alignment's times got applied, but it silently discards
+    any real concern text, hiding exactly the class of bug this reproduces."""
+    from lyricvideo.timing_gate import settle_alignment as real_settle_alignment
+
+    used = _sync_setup(monkeypatch, tmp_path, whole_starts, anchored_starts)
+    monkeypatch.setattr("lyricvideo.pipeline.settle_alignment", real_settle_alignment)
+    monkeypatch.setattr("lyricvideo.pipeline.vocal_loudness", lambda path: [])
+    return used
+
+
+def test_a_redo_uses_a_saved_whisper_correction_to_confirm_a_misheard_but_correctly_placed_line(tmp_path, monkeypatch):
+    """Real incident, 2026-09-27 ("Boris the Spider"): a Redo re-ran _align_lyrics from scratch and produced the
+    IDENTICAL "out of sync" concern even after the owner saved a Whisper correction, because _align_lyrics built its
+    own concern straight from the raw transcript, never consulting a saved correction. A correctly-placed line whose
+    words Whisper mis-transcribed (not missed entirely) must be excused by a saved correction on the very next Redo,
+    not only in a read-only re-judge of an unrelated list."""
+    from lyricvideo.owner_whisper import save_owner_whisper_line
+    from lyricvideo.pipeline import HeldBeforeVideo
+
+    _sync_setup_with_real_gate(monkeypatch, tmp_path, _TRUE_STARTS, [s + 99 for s in _TRUE_STARTS])
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at_with_line_garbled(_TRUE_STARTS, 3))
+    work_dir = tmp_path / "work"
+
+    with pytest.raises(HeldBeforeVideo) as held:                          # first render: line 4 (1-indexed) is out of sync, 87.5% < 90%
+        run_pipeline(Path("audio.mp3"), work_dir)
+    assert "4" in str(held.value) and "87.5%" in str(held.value)
+
+    save_owner_whisper_line(work_dir, 3, _SYNC_LINES[3], _SYNC_LINES[3])   # the owner confirms line 3 (0-indexed) by ear
+    run_pipeline(Path("audio.mp3"), work_dir)                              # Redo: must NOT be held any more
+
+    after = load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern
+    assert after == ""
+
+
+def test_a_line_with_no_correction_is_unaffected_by_an_unrelated_one(tmp_path, monkeypatch):
+    from lyricvideo.owner_whisper import save_owner_whisper_line
+    from lyricvideo.pipeline import HeldBeforeVideo
+
+    _sync_setup_with_real_gate(monkeypatch, tmp_path, _TRUE_STARTS, [s + 99 for s in _TRUE_STARTS])
+    monkeypatch.setattr("lyricvideo.pipeline.load_transcript_words", lambda work_dir: _heard_at_with_line_garbled(_TRUE_STARTS, 3))
+    work_dir = tmp_path / "work"
+    with pytest.raises(HeldBeforeVideo):
+        run_pipeline(Path("audio.mp3"), work_dir)
+
+    save_owner_whisper_line(work_dir, 5, _SYNC_LINES[5], _SYNC_LINES[5])   # a DIFFERENT, already-fine line
+    with pytest.raises(HeldBeforeVideo) as held:
+        run_pipeline(Path("audio.mp3"), work_dir)
+
+    assert "4" in str(held.value)   # line 3 (0-indexed)/4 (1-indexed) is still genuinely unconfirmed
+
+
 def test_a_whole_song_alignment_that_agrees_with_what_was_heard_is_kept(tmp_path, monkeypatch, capsys):
     used = _sync_setup(monkeypatch, tmp_path, _TRUE_STARTS, [s + 99 for s in _TRUE_STARTS])
     work_dir = tmp_path / "work"

@@ -47,9 +47,10 @@ from .sync import decide_alignment, sync_agreement
 from .settings import Settings
 from .owner_verified import FILENAME as OWNER_VERIFIED_FILE, verification
 from .timing_gate import (
-    check_saved_song, file_signature, heard_text_near_line, is_gate_concern, percent_display, settle_alignment, timing_verdict,
+    check_saved_song, check_sync, file_signature, heard_text_near_line, is_gate_concern, percent_display, settle_alignment,
+    timing_verdict,
 )
-from .owner_whisper import corrected_heard_words
+from .owner_whisper import add_corrections, corrected_heard_words
 from .transcribe import load_transcript_segments, load_transcript_text, load_transcript_words, transcribe_vocals
 from .youtube_state import STATE_FILENAME
 
@@ -766,18 +767,32 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
         """The timing_gate verdict (owner, 2026-09-20: at least 90% of lines within half a second of the singing) has the
         final say on which alignment is used and whether the song is set aside."""
         result = settle_alignment(candidates, line_words, sung, preferred, earlier_concern, needed)
-        if result.report.share is None:
+        # NOT result.report.concern: Settled.concern can differ from its own report's (e.g. an earlier concern that
+        # survives even though the sync gate itself accepts the alignment) -- start from exactly what settle_alignment
+        # decided, and only override it below when a correction genuinely improves the picture.
+        concern, share, judged_lines = result.concern, result.report.share, result.report.judged_lines
+        # A saved Whisper correction (owner_whisper.py, 2026-09-27) re-scores the WINNING candidate's own final
+        # times -- never influences which candidate wins, only whether an already-placed, correctly-timed line is
+        # excused from a mismatch that was really Whisper's own mishearing. Real incident: without this, a Redo
+        # re-ran this same function from scratch and reproduced the identical "out of sync" concern even after the
+        # owner saved a correction, since only a READ-ONLY re-judge of an already-rendered song ever consulted one.
+        corrected_sung = add_corrections(work_dir, sung, line_words, result.times)
+        if len(corrected_sung) != len(sung):  # a still-valid correction actually added something
+            corrected_report = check_sync(line_words, result.times, corrected_sung, needed)
+            if corrected_report.share is not None and (share is None or corrected_report.share >= share):
+                concern, share, judged_lines = corrected_report.concern, corrected_report.share, corrected_report.judged_lines
+        if share is None:
             print("Sync check: too little of the singing was recognized to compare the lines with.")
         else:
             print(
-                f"Sync check: {result.report.share:.0%} of {result.report.judged_lines} lines start within half a second "
+                f"Sync check: {share:.0%} of {judged_lines} lines start within half a second "
                 f"of where they are sung. Using the {result.method} alignment."
             )
-        if result.concern:
-            print(f"WARNING: {result.concern}", file=sys.stderr)
+        if concern:
+            print(f"WARNING: {concern}", file=sys.stderr)
         # share (owner, 2026-09-23: "i want to know how close it is when actually creating a video") -- the
         # real achieved sync percentage, not just pass/fail; None when too little was heard to judge at all.
-        return [(min(a, audio_duration), min(b, audio_duration)) for a, b in result.times], result.concern, result.report.share
+        return [(min(a, audio_duration), min(b, audio_duration)) for a, b in result.times], concern, share
 
     loudness: list[float] = []
     try:  # Whisper hallucinates words in silence; they must not anchor a line (a read failure just keeps them)
