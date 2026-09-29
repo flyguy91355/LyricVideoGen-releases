@@ -127,6 +127,38 @@ def test_blocks_cover_every_line_exactly_once_and_windows_stay_inside_the_song()
     assert all(0.0 <= b.start < b.end <= 100.0 for b in blocks)
 
 
+def test_two_touching_adjacent_anchors_never_get_overlapping_windows():
+    """Real bug (Boris the Spider, found in review 2026-09-27): the song's last two lines are the SAME repeated
+    text ("Boris the spider" twice, sung back-to-back with NO gap between them: line 0's own anchor ends exactly
+    where line 1's begins). Padding each anchor's block by the full 3.0 s on BOTH sides gave heavily overlapping
+    windows (each could see BOTH real sung occurrences of the phrase) -- forced-alignment run independently per
+    window then had no way to tell which occurrence was its own, converged on the SAME one for both blocks, and
+    the second block's own output was then crushed to a near-zero-duration sliver by the cross-block monotonic
+    clamp in align.py. Each anchor's pad toward a neighbour must never reach past the midpoint to it."""
+    anchors = {0: _a(0, 135.56, 139.42), 1: _a(1, 139.42, 144.42)}   # touching, zero gap, exactly like the real case
+
+    blocks = plan_windows(2, anchors, 200.0, pad=3.0)
+
+    assert blocks == [
+        Block(0, 0, 132.56, 139.42),   # right pad capped to 0 -- no gap to the next anchor to pad into
+        Block(1, 1, 139.42, 147.42),   # left pad capped to 0 -- no gap to the previous anchor to pad into
+    ]
+    assert blocks[0].end <= blocks[1].start   # never overlapping
+
+
+def test_two_close_but_not_touching_anchors_split_the_gap_between_them():
+    """A smaller, non-zero gap between two anchors still caps each side's pad at HALF that gap, not the full
+    pad, so their windows can never overlap even when they don't touch exactly."""
+    anchors = {0: _a(0, 10.0, 12.0), 1: _a(1, 13.0, 16.0)}   # a 1.0 s gap between them, well under 2*pad
+
+    blocks = plan_windows(2, anchors, 100.0, pad=3.0)
+
+    assert blocks == [
+        Block(0, 0, 7.0, 12.5),    # right pad capped to half the 1.0 s gap = 0.5
+        Block(1, 1, 12.5, 19.0),   # left pad capped to the same 0.5
+    ]
+
+
 # --- ignoring words Whisper "heard" in silence ('Girls Just Want to Have Fun', 2026-09-19) ---------------
 
 def test_words_heard_where_the_vocal_track_is_silent_are_dropped():

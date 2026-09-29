@@ -91,14 +91,15 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    checked or held (`owner-lyrics`); `--flag` releases old holds a report-only run verified or marked owner-lyrics; a
    failing song whose only concern is the timing gate's gets the lyric reason put first. `replace_report` lists uploads.
 4. **align** -- forced word alignment (`align.py`, 75 s pieces, flat ~4 GB) against the vocal stem (length from its WAV
-   header, `_vocal_stem_seconds`); `combine.py` merges onto the lines (a last word microseconds past the stem end is
-   tolerated, issue #6; no lyrics -> clear RuntimeError). Whisper word times (`anchors.py`; words in silence dropped)
+   header, `_vocal_stem_seconds`); `combine.py` merges onto the lines (a last word past the stem end is tolerated;
+   no lyrics -> clear RuntimeError). Whisper word times (`anchors.py`; words in silence dropped)
    checked against lrclib's line times (`combine_anchors`) bound each line to its own window
-   (`align_words_anchored`; one whole-song CTC pass drifted 20-50 s). `precision.py`/`sync.py` only suggest;
+   (`align_words_anchored`, pad capped at half the neighbour gap so repeated back-to-back lines never overlap,
+   9-29; whole-song CTC pass drifted 20-50 s; blend() weighs duration). `precision.py`/`sync.py` suggest;
    `timing_gate.py` alone decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's
-   singing): best of whole-song/anchored/blended (`pick_by_sync`, ranked over the lines all can judge; ties -> fewer
-   lines in silence), else the song is HELD before chords/images/render (Flagged: Render Anyway; Remove = hide only).
-   Lists judge older songs READ-ONLY at the current bar (`timing_verdict`) and never write; only `python -m
+   singing): best of whole-song/anchored/blended (`pick_by_sync`, ranked over judgeable lines; ties favor fewer
+   silent lines), else the song is HELD before chords/images/render (Flagged: Render Anyway; Remove = hide only).
+   Lists judge older songs READ-ONLY at the current bar (`timing_verdict`); only `python -m
    lyricvideo.timing_gate --hold` writes holds; `pipeline.review_concern()` gives the current reason. EASY variants are
    judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real,
    correctly-placed line also scores "out of sync" -- Whisper Text (Flagged) is editable per
@@ -349,12 +350,13 @@ text BEFORE a deferred `root.after` lambda (`except ... as e` unbinds `e`; 9-14)
 after "create a duplicate?"), and the "Pending YouTube Uploads" checklist (`list_pending_uploads()`: never-uploaded,
 cleared) + Upload Selected; both ignore `youtube_auto_upload`. One upload run at a time (`_UPLOAD_RUN_LOCK`): Upload /
 Upload Selected / Upload Anyway during a run or the tick's auto-retry say 'Upload already running' and are disabled
-(a Batch song or tick finishing never re-enables them mid-run); the tick just skips. Every pending or auto upload goes
-through `_upload_within_todays_cap` (under `_UPLOAD_SLOT_LOCK`: re-check youtube_state.json, today's cap,
-`schedule_upload(only_if_not_uploaded=True)`, `record_upload`); `AlreadyUploaded` is a skip (shown in the results).
-`_maybe_upload_to_youtube(work_dir, settings)` gates auto-upload (enabled, connected, never uploaded -- verified live
-by `video_exists()`, failing CLOSED, so a video deleted on YouTube re-uploads; flagged songs skipped) from `_run_worker` and each Batch item; failures only warn.
-A song the auto-retry failed waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
+(a Batch/tick finish never re-enables them mid-run); the tick just skips. Every pending or auto upload goes
+through `_upload_within_todays_cap` (`_UPLOAD_SLOT_LOCK`: re-check state, cap,
+`schedule_upload(only_if_not_uploaded=True)`, `record_upload`); `AlreadyUploaded` is a skip (in the results).
+`_maybe_upload_to_youtube(work_dir, settings)` gates auto-upload (enabled, connected, never uploaded -- verified
+live by `video_exists()`, failing CLOSED, so a deleted video re-uploads; flagged songs skipped) from `_run_worker`
+and each Batch item; failures only warn.
+A failed auto-retry waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
 **Comments** (`youtube_comment_state.py`, flat JSON; locked, atomic, idempotent adds): `_scan_youtube_comments` (Check
 Now or the 20-minute tick, never overlapping: `_COMMENT_CHECK_LOCK`) walks `uploaded_song_dirs` (EASY included); one
 `videos.list(part=status,statistics)` per 50 videos; a public video's comments are read only when its commentCount

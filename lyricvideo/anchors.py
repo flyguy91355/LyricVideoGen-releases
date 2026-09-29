@@ -81,8 +81,14 @@ def line_anchors(lines: list[str], heard: list[HeardWord]) -> dict[int, LineAnch
 
 def plan_windows(n_lines: int, anchors: dict[int, LineAnchor], audio_seconds: float, pad: float) -> list[Block]:
     """Split the lyric lines into blocks, each with the stretch of audio its words must fit inside: an
-    anchored line gets its anchor +/- pad; the unanchored lines between two anchors share the gap between them
-    (also padded); the lines before the first / after the last anchor are bounded by the song's ends."""
+    anchored line gets its anchor +/- pad, each side capped at half the gap to its nearest neighbouring anchor
+    so two anchors never get overlapping windows (real bug, 2026-09-27 review of "Boris the Spider": its last
+    two lines are the SAME repeated text sung back-to-back with NO gap between them -- padding each by the
+    full amount on both sides let both windows see BOTH real occurrences of the phrase, so forced-alignment run
+    independently per window converged on the SAME occurrence for both, and the second block's own output was
+    then crushed to a near-zero-duration sliver by align.py's cross-block monotonic clamp); the unanchored
+    lines between two anchors share the gap between them (also padded); the lines before the first / after the
+    last anchor are bounded by the song's ends."""
     def clamp(t: float) -> float:
         return min(max(t, 0.0), audio_seconds)
 
@@ -104,7 +110,11 @@ def plan_windows(n_lines: int, anchors: dict[int, LineAnchor], audio_seconds: fl
         blocks.append(block(0, indexes[0] - 1, 0.0, anchors[indexes[0]].start + pad))
     for k, li in enumerate(indexes):
         a = anchors[li]
-        blocks.append(block(li, li, a.start - pad, a.end + pad))
+        previous_a = anchors[indexes[k - 1]] if k > 0 else None
+        next_a = anchors[indexes[k + 1]] if k + 1 < len(indexes) else None
+        left_pad = min(pad, max(0.0, (a.start - previous_a.end) / 2)) if previous_a is not None else pad
+        right_pad = min(pad, max(0.0, (next_a.start - a.end) / 2)) if next_a is not None else pad
+        blocks.append(block(li, li, a.start - left_pad, a.end + right_pad))
         following = indexes[k + 1] if k + 1 < len(indexes) else None
         if following is None:
             if li < n_lines - 1:

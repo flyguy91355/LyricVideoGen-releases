@@ -156,6 +156,14 @@ def measure(
 _CAP_SECONDS = 3.0             # one wildly wrong word must not outweigh a whole line of good ones
 _SWITCH_COST = 0.05            # switching candidates between lines costs a little, so a line with no evidence follows its neighbour
 _ANCHORED_COST = 0.001         # ...and a tie goes to the whole-song pass
+_MAX_PLAUSIBLE_WORD_DURATION = 3.0     # intentionally the same threshold layout.py's _plausible_sung_intervals uses for
+                                        # "implausible" -- generous even for a long held note; not imported from there since
+                                        # this module is pure logic and layout.py is a render-layer one
+_IMPLAUSIBLE_DURATION_PENALTY = 1_000.0    # dwarfs any plausible sum of start-time errors, so a candidate whose own word
+                                            # runs on implausibly long never wins a line purely because its START times
+                                            # happen to tie or edge out the other candidate's (real: Boris the Spider,
+                                            # 2026-09-29 -- both candidates agreed on every start time for the last line, so
+                                            # the tie-break alone picked the one whose last word stretched a further 6.5 s)
 
 
 def blend(
@@ -163,8 +171,9 @@ def blend(
     evidence: dict[int, float], line_count: int,
 ) -> list[tuple[float, float]] | None:
     """Each line from whichever alignment sits closer to what was heard, choosing the combination with the least total
-    error that keeps the lines in order (a dynamic-programming pass over the lines). None only when the whole-song
-    alignment itself is out of order."""
+    error that keeps the lines in order (a dynamic-programming pass over the lines) -- weighted against a candidate
+    whose own word runs on implausibly long, even when start times alone tie (see _IMPLAUSIBLE_DURATION_PENALTY).
+    None only when the whole-song alignment itself is out of order."""
     candidates = (whole, anchored)
     if any(whole[k][0] > whole[k + 1][0] for k in range(len(whole) - 1)):
         return None
@@ -177,7 +186,13 @@ def blend(
 
     def cost(line: int, which: int) -> float:
         errors = [min(abs(candidates[which][k][0] - evidence[k]), _CAP_SECONDS) for k in words_of[line] if k in evidence]
-        return sum(errors) + (_ANCHORED_COST if which else 0.0)
+        # start times alone can tie (or nearly) while one candidate's own word runs on implausibly long -- an unbounded
+        # CTC pass with nothing after it to stop it, real on Boris the Spider's last word (142.77-150.19, a 7.4 s
+        # stretch, vs. the other candidate's correctly-bounded 142.77-143.67) -- so also penalize a grossly-long word.
+        implausible = any(
+            candidates[which][k][1] - candidates[which][k][0] > _MAX_PLAUSIBLE_WORD_DURATION for k in words_of[line]
+        )
+        return sum(errors) + (_ANCHORED_COST if which else 0.0) + (_IMPLAUSIBLE_DURATION_PENALTY if implausible else 0.0)
 
     def in_order(previous: int, which_previous: int, line: int, which: int) -> bool:
         return candidates[which_previous][words_of[previous][-1]][0] <= candidates[which][words_of[line][0]][0]

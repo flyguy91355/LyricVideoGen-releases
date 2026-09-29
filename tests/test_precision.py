@@ -126,6 +126,22 @@ def test_a_mix_that_saves_precision_on_later_lines_survives_an_early_conflict():
     assert all(abs(m[0] - t) < 1e-9 for m, t in zip(mixed, TRUE))
 
 
+def test_a_candidate_whose_word_runs_on_implausibly_long_loses_even_on_a_start_time_tie():
+    """Real (Boris the Spider, 2026-09-29): both candidates agreed exactly on the last line's word start times, so the
+    old cost function (start-time error only) scored them identically and the _ANCHORED_COST tie-break picked
+    'whole-song' despite its own last word being an unbounded 7.4 s CTC stretch (142.77-150.19) vs. the other
+    candidate's correctly-bounded 142.77-143.67."""
+    whole = pairs(TRUE)
+    whole[-1] = (whole[-1][0], whole[-1][0] + 7.4)             # last word stretched implausibly long, same start time
+    anchored = pairs(TRUE)
+    evidence = match_words(WORDS, HEARD)
+
+    mixed = blend(whole, anchored, LINE_OF, evidence, len(LINES))
+
+    assert mixed is not None
+    assert mixed[-1] == anchored[-1]
+
+
 def test_lines_with_no_evidence_follow_the_previous_lines_choice():
     heard = [h for h in HEARD if h.word not in LINES[1].split()]
     whole = pairs(TRUE)
