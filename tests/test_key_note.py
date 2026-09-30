@@ -128,3 +128,31 @@ def test_split_key_note_separates_the_note_from_the_rest():
     assert note == "📌 Song key: C minor (not D minor as shown in the video)"
     assert rest == f"{_TIP}\n\nBody."
     assert split_key_note("Just a song.") == ("", "Just a song.")
+
+
+# --- the OLD unconditional "🎸 Song key: X" line is stripped, not repositioned (owner, 2026-09-29) ---------------------
+
+def test_strip_song_key_line_removes_a_leading_plain_key_line():
+    from lyricvideo.key_note import strip_song_key_line
+
+    assert strip_song_key_line("🎸 Song key: B minor\n\nA great song.") == "A great song."
+
+
+def test_strip_song_key_line_leaves_a_description_with_none_unchanged():
+    from lyricvideo.key_note import strip_song_key_line
+
+    assert strip_song_key_line("A great song.") == "A great song."
+
+
+def test_strip_song_key_line_only_checks_the_leading_paragraph():
+    from lyricvideo.key_note import strip_song_key_line
+
+    text = "A great song.\n\n🎸 Song key: mentioned later in the body."
+    assert strip_song_key_line(text) == text
+
+
+def test_strip_song_key_line_tolerates_a_blank_description():
+    from lyricvideo.key_note import strip_song_key_line
+
+    assert strip_song_key_line("") == ""
+    assert strip_song_key_line(None) == ""

@@ -40,7 +40,7 @@ from pathlib import Path
 from .assemble import rendered_stream_seconds
 from .chord_theory import load_easy_chord_capo_marker
 from .key_decision import KeyNotConfirmed, confirmed_key_for_upload
-from .key_note import song_key_line, split_key_note
+from .key_note import split_key_note, strip_song_key_line
 from .models import load_song
 from .pipeline import slugify
 from .youtube import reserved_publish_datetimes, upload_video
@@ -214,11 +214,11 @@ def _template_parts(template: str) -> tuple[str, str]:
 
 
 def render_description(template: str, description: str) -> str:
-    """Builds the final YouTube description from Settings.support_description_text -- a small template (owner,
-    2026-09-26): what goes ABOVE the song description, the marker {description}, and what goes BELOW, e.g. a
-    one-line tip link plus a "click more" teaser on top and a thank-you underneath. Blank template: the description
-    unchanged. See CLAUDE_HISTORY 2026-09-26 for why the ask sits on top (only ~100-150 characters show before
-    "...more") and why a teaser line points people to the song info below."""
+    """Builds the final YouTube description from Settings.support_description_text -- a small template: what goes
+    ABOVE the song description, the marker {description}, and what goes BELOW, e.g. a tip link and a thank-you.
+    Blank template: the description unchanged. Owner, 2026-09-29 (reversing a 2026-09-26 decision that put the ask
+    on top): the song's own description reads FIRST -- long enough on its own to clear YouTube's "...more" cutoff
+    -- with the tip/thank-you block below it; see CLAUDE_HISTORY for both dates' reasoning."""
     if not template.strip():
         return description
     top, bottom = _template_parts(template)
@@ -238,15 +238,29 @@ def description_body(description: str, old_support_text: str | Sequence[str], te
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def assemble_description(template: str, body: str, note: str = "") -> str:
+    """The final text: the template's top block, the song description, a key-correction note (if any, right after
+    the description -- owner, 2026-09-29), then the template's bottom block. Shared by rerender_description and
+    scripts/update_support_description.py, which may substitute a freshly regenerated `body` for a too-short one
+    before calling this."""
+    top, bottom = _template_parts(template)
+    return "\n\n".join(part for part in (top, body.strip(), note, bottom) if part)
+
+
 def rerender_description(description: str, template: str, old_support_text: str | Sequence[str]) -> str:
     """An already-uploaded video's description in the current support-template layout, with its key note (a "📌 Song
-    key: ..." correction from scripts/add_key_note.py) kept as the very FIRST paragraph, above the template's top block
-    -- the real key must show before "...more" (owner, 2026-09-26). What scripts/update_support_description.py writes.
-    Issue #7 review, F054: re-rendering used to push the note below the tip line, and a later add_key_note run then
-    added a second note on top. A description already in this layout comes back unchanged."""
+    key: ..." correction from scripts/add_key_note.py) placed right after the song's own description and before the
+    template's bottom block (owner, 2026-09-29, reversing a 2026-09-26 decision that kept it as the very first
+    paragraph: the song description reads first now, not the key). Any OLD unconditional "🎸 Song key: X" line
+    (every upload used to open with one) is stripped outright, never repositioned -- it carries no information
+    the video's own badge doesn't already show. What scripts/update_support_description.py writes. A description
+    already in this layout comes back unchanged; a note found anywhere else (e.g. pushed below the tip line by an
+    older re-render) is moved back to this one spot, never duplicated (issue #7 review, F054's guarantee still
+    holds, just at the new position)."""
     note, rest = split_key_note(description)
-    rendered = render_description(template, description_body(rest, old_support_text, template))
-    return f"{note}\n\n{rendered}" if note and rendered else (note or rendered)
+    rest = strip_song_key_line(rest)
+    body = description_body(rest, old_support_text, template)
+    return assemble_description(template, body, note)
 
 
 class EasyChordVersionStale(KeyNotConfirmed):
@@ -450,13 +464,17 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
     title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics)
     if capo_info is not None:
         title = planned_title
-        # The settled key's own spelling (an older marker may say "D# major" for the same key as "Eb major").
+        # The settled key's own spelling (an older marker may say "D# major" for the same key as "Eb major"). Owner,
+        # 2026-09-29: the description reads song-info-first; this capo/shape line -- real info the badge alone
+        # doesn't convey -- comes right after it, never before.
         description = (
-            f"EASY CHORDS version -- Capo {capo_info['capo_fret']}, play it in {capo_info['shape_key']} shapes "
-            f"(original key: {settled_key}).\n\n{description}"
+            f"{description}\n\nEASY CHORDS version -- Capo {capo_info['capo_fret']}, play it in "
+            f"{capo_info['shape_key']} shapes (original key: {settled_key})."
         )
-    else:
-        description = f"{song_key_line(settled_key)}\n\n{description}"
+    # A plain video's own Key/BPM badge is already guaranteed correct (settled before any upload, same key the
+    # render used) -- restating it in text would be redundant on every single video. Owner, 2026-09-29: "the key
+    # if you need one, not all do if there correct." No song_key_line() here; a real correction (the badge was
+    # wrong on an OLDER upload) is a separate, later fix via key_note.apply_key_note/rerender_description.
     support_text = getattr(settings, "support_description_text", "").strip()
     if support_text:
         description = render_description(support_text, description)

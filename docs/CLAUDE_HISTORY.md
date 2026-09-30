@@ -5069,3 +5069,52 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   interpolated guess; the even-spread is now only a fallback for a correction with a different word count.
   Re-checked against the real file after: `SyncReport(share=1.0, ... out_of_sync_lines=())`, passes.
 - Full suite after both fixes: 2105 passed.
+
+## 2026-09-29: YouTube description layout reversed -- song info first, not the tip/key ask
+
+- Owner, while reviewing real uploads: "the description i dont like, you have the key first, some have tips first
+  ... what i want is a detailed description of the song first ... then i want the key if you need one, not all do
+  if there correct, then i want the donation part. and then the thank you for watching part ... wild world is an
+  example of what i want." This reverses the 2026-09-26 layout (tip/key block on top, reasoning that only ~150
+  characters show before YouTube's "...more" cutoff so the ask should sit where it's seen) on the owner's explicit
+  call. Confirmed against the actual live description for "Wild World" (fetched via the app's own YouTube client):
+  a long descriptive paragraph first, NO key line at all (its badge is already correct), then the ☕ tip line, then
+  the thank-you -- no "click more" teaser either, since nothing needs pointing at once the description leads.
+- Root of the "key first" behavior: `_schedule_upload_locked` unconditionally prepended `key_note.song_key_line()`
+  ("🎸 Song key: X") before every plain upload's description, and `rerender_description` deliberately kept any
+  key-correction note ("📌 Song key: X (not Y as shown in the video)") as the description's very first paragraph.
+  Both removed/reordered: a plain upload's badge is guaranteed correct by the time it uploads (settled before any
+  upload, same key the render used), so text restating it is pure redundancy -- `song_key_line()` is no longer
+  called there at all (left defined and tested, just unused in production). A correction note (for an OLDER video
+  whose badge really was wrong) now lands right after the description instead of before everything; the EASY
+  CHORD capo/shape sentence moved from before the description to right after it too, same reasoning.
+- `youtube_schedule.render_description`/`rerender_description` refactored to share one `assemble_description(
+  template, body, note)` helper (top, body, note, bottom -- join whatever parts are non-empty), so the new "note
+  right after the body" ordering lives in exactly one place. Three existing tests encoded the OLD "note first, and
+  stable there" behavior and were rewritten to assert the new position instead (not a regression -- a deliberate,
+  owner-directed reversal); a fresh test covers a misplaced note (e.g. one pushed elsewhere by an older re-render)
+  landing back in the new canonical spot, not the old one.
+- `youtube_metadata.generate_video_metadata`'s prompt asked for only "a 2-4 sentence description" -- why every
+  existing description was short enough to need pushing to the front in the first place. Owner, once told the real
+  target was "slightly more than the youtube cutoff" (not Wild World's full length): prompt now asks for "at least
+  3-4 sentences... at least 220 characters," comfortably past YouTube's ~150-character cutoff with a little margin,
+  not a maximal paragraph. `max_tokens` raised 300->400 for the longer reply (thinking stays off).
+- Extended `scripts/update_support_description.py` (previously just re-wrapped whatever text was already there) to
+  also fix every ALREADY-LIVE video, split by whether its existing song-description body is already long enough:
+  a body at or above `READY_CHARS` (200 chars) is left exactly as written, just reordered into the new layout; a
+  shorter one (almost every video, since the old prompt only asked for 2-4 sentences) gets a genuinely fresh
+  Claude call using that song's own real lyrics from its local work folder (`_song_facts()`; an EASY CHORD folder's
+  own `lyrics_timed.json` has the same lyrics, so it's read directly, but the CLEAN original title is used for the
+  prompt, from its capo marker, same as `schedule_upload` itself does). Owner's explicit call, to hold down real
+  Claude-call and YouTube-quota cost across ~90 live/scheduled videos: "claude call only on the ones that are 2
+  short, dont do them all." A song whose local files are gone is never blocked or faked -- its existing text is
+  just reordered, same as the cheap path. `--dry-run` (existing) and `--no-regenerate` (new: reorder-only, skip
+  every Claude call) both available before anything real is written; same backup-first, quota-aware, idempotent
+  behavior as before. New `tests/test_update_support_description.py` covers the pure decision logic (long body
+  kept verbatim and Claude never called; short body regenerated; no client or no local files means reorder-only;
+  a key note still lands right after a regenerated body, not before it).
+- The owner's saved `Settings.support_description_text` template itself (the ☕ tip line + "click more" teaser +
+  thank-you, with the teaser now dropped per the owner: "no teaser.. the more from youtube is enough") is something
+  the running GUI owns in memory -- handed to the owner to paste into Settings -> Description layout -> Save
+  himself, rather than this session editing `~/.playalongvideoproduction/settings.json` out from under a live,
+  possibly-about-to-save process (the same "restart the app" hazard noted in the 9-26 layout work).

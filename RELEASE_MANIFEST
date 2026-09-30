@@ -196,6 +196,7 @@ tests/test_unsung_leading_lines.py
 tests/test_update_apply.py
 tests/test_update_manifest.py
 tests/test_update_release_client.py
+tests/test_update_support_description.py
 tests/test_update_version.py
 tests/test_upload_guard_find_truncated.py
 tests/test_upload_guard_truncated.py

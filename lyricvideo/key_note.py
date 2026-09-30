@@ -31,6 +31,22 @@ def split_key_note(description: str) -> tuple[str, str]:
     return note, "\n\n".join(rest).strip()
 
 
+PLAIN_KEY_LINE_PREFIX = "🎸 Song key:"   # the OLD unconditional line schedule_upload used to open every plain
+                                         # upload's description with, before 2026-09-29
+
+
+def strip_song_key_line(description: str) -> str:
+    """The description with a LEADING plain "🎸 Song key: ..." paragraph removed. Owner, 2026-09-29: the badge
+    already shows the key on every video, so this line -- unlike a 📌 correction note -- carries no information a
+    viewer doesn't already have on screen; it is simply stripped, never repositioned. Only checks the very first
+    paragraph (a 🎸 line anywhere else in hand-written text is left alone, same caution as _is_key_note's own).
+    Description unchanged when there is no such line."""
+    paragraphs = (description or "").strip().split("\n\n")
+    if paragraphs and paragraphs[0].strip().startswith(PLAIN_KEY_LINE_PREFIX):
+        return "\n\n".join(paragraphs[1:]).strip()
+    return (description or "").strip()
+
+
 def build_key_note(true_key: str, shown_key: str) -> str:
     true_key, shown_key = (true_key or "").strip(), (shown_key or "").strip()
     if not true_key or not shown_key:

@@ -136,7 +136,10 @@ def generate_video_metadata(
         "Write YouTube upload metadata for a 'play along' lyric+chord video of "
         "this song. Reply with EXACTLY two lines, each prefixed with its label "
         "and nothing else before or after:\n"
-        "DESCRIPTION: <a 2-4 sentence description of the song>\n"
+        # Owner, 2026-09-29: the description must read first in the upload (ahead of the tip/thank-you block), so it
+        # has to carry its own weight -- at least a few sentences, comfortably past YouTube's ~150-character
+        # "...more" cutoff on its own, not just barely past it.
+        "DESCRIPTION: <a detailed, at least 3-4 sentence description of the song, at least 220 characters>\n"
         "TAGS: <5-8 relevant search tags, comma-separated>"
     )
     # Real incident, 2026-09-25 ("Blackbird" went up with no description and no tags): Claude sometimes answered
@@ -148,7 +151,7 @@ def generate_video_metadata(
     for _attempt in range(_METADATA_ATTEMPTS):
         response = anthropic_client.messages.create(
             model=model,
-            max_tokens=300,
+            max_tokens=400,               # a longer DESCRIPTION (owner, 2026-09-29) needs a little more room than before
             thinking={"type": "disabled"},
             messages=[{"role": "user", "content": prompt}],
         )

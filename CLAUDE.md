@@ -136,8 +136,8 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    `CHORD_SHAPES` names result (`respell_chord_track`, `transpose_chord_track`). `Settings.prefer_flats` ('Use flats
    in flat keys') off -> chords and the Key label use sharps ('A# major'); `key_decision.json`/`key_owner.json` always
    store the flat spelling; applied in settle_song_key, apply_saved_owner_key, transpose_chord_track, settle_keys.py.
-   `schedule_upload` refuses an unsettled key (`KeyNotConfirmed`) and opens the description with `🎸 Song key: X`;
-   unsettled songs stay out of the pending lists (`key_needs_attention`). `scripts/settle_keys.py` (dry run;
+   `schedule_upload` refuses an unsettled key (`KeyNotConfirmed`); unsettled songs stay out of the pending lists
+   (`key_needs_attention`). `scripts/settle_keys.py` (dry run;
    `--apply`) asks only songs with no decision or one in review (else 'already-settled', no Claude call); a corrected
    song's video becomes `*.previous.mp4` and its `easychords/` moves to `easychords_prior_<time>/` unless that EASY
    video is on YouTube (a failed move is reported; the post-render EASY check sets it aside later).
@@ -202,10 +202,10 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
      in the frame (owner 9-09).
    - `render.draw_support_overlay()`: `Settings.support_overlay_text` (blank = off) in the last
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
-     `support_description_text` is a description TEMPLATE (above / `{description}` / below; `render_description` in
-     `schedule_upload()`) -- a frame is never clickable. `scripts/update_support_description.py` (backs up first;
-     `--only`/`--status`/`--old-text`/`--dry-run`) re-renders uploaded descriptions, keeping the key note first;
-     `backfill_support_overlay_description.py` is retired (refuses).
+     `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
+     -- never clickable. Order HISTORY 9-29: song description first (clears YouTube's "...more" cutoff alone), then
+     a key note if any, then tip/thank-you. `scripts/update_support_description.py` (`--dry-run` first) re-renders
+     into this order, rewriting any body under `READY_CHARS` (200); `backfill_support_overlay_description.py` retired.
 
 ## EASY CHORD versions
 

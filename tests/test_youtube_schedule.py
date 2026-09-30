@@ -386,7 +386,7 @@ def test_schedule_upload_leaves_description_unchanged_when_support_description_t
     schedule_upload(client, _FakeAnthropicClient(), work_dir, settings)
 
     description = client._videos.insert_kwargs["body"]["snippet"]["description"]
-    assert description == "🎸 Song key: D major\n\nA great song."
+    assert description == "A great song."
 
 
 def test_schedule_upload_saves_youtube_state(tmp_path):
@@ -487,10 +487,9 @@ def test_schedule_upload_uses_the_easy_chord_title_and_description_for_a_capo_va
 
     body = client._videos.insert_kwargs["body"]
     assert body["snippet"]["title"] == "Bridge Over Troubled Water - Simon and Garfunkel - (EASY CHORDS Play Along - Capo 1)"
-    assert body["snippet"]["description"].startswith(
-        "EASY CHORDS version -- Capo 1, play it in D shapes (original key: Eb major).\n\n"
-    )
-    assert "A great song." in body["snippet"]["description"]   # the AI-authored part is still there, just prefixed
+    assert body["snippet"]["description"] == (
+        "A great song.\n\nEASY CHORDS version -- Capo 1, play it in D shapes (original key: Eb major)."
+    )   # the AI-authored part reads first now, the capo/shape line right after it (owner, 2026-09-29)
 
 
 def test_schedule_upload_gives_claude_the_clean_original_title_for_a_capo_variant(tmp_path):
@@ -681,7 +680,7 @@ def test_schedule_upload_renders_the_support_template_around_the_description(tmp
     schedule_upload(client, _Client(), work_dir, settings)
 
     assert client._videos.insert_kwargs["body"]["snippet"]["description"] == (
-        f"{_TOP}\n\n🎸 Song key: D major\n\nA great song. It is about hope.\n\n{_BOTTOM}"
+        f"{_TOP}\n\nA great song. It is about hope.\n\n{_BOTTOM}"
     )
 
 
@@ -729,13 +728,16 @@ def test_a_song_whose_key_is_waiting_for_the_owner_is_not_uploaded(tmp_path):
     assert client._videos.insert_kwargs is None
 
 
-def test_the_description_opens_with_the_songs_settled_key(tmp_path):
+def test_a_plain_uploads_description_states_no_key_since_its_badge_is_already_correct(tmp_path):
+    """Owner, 2026-09-29: "the key if you need one, not all do if there correct" -- a freshly uploaded video's own
+    Key/BPM badge was rendered from this same settled key, so restating it in text would be pure redundancy. A real
+    correction is a separate, later fix (key_note.apply_key_note) for an OLDER video whose badge was wrong."""
     work_dir = _make_song_work_dir(tmp_path)
     client = _FakeYoutubeClient(video_id="vid123")
 
     schedule_upload(client, _FakeAnthropicClient(), work_dir, SimpleNamespace(**_PUBLIC_SETTINGS))
 
-    assert client._videos.insert_kwargs["body"]["snippet"]["description"].startswith("🎸 Song key: D major\n\n")
+    assert client._videos.insert_kwargs["body"]["snippet"]["description"] == "A great song."
 
 
 def test_an_easy_chord_description_states_the_songs_original_key(tmp_path):
@@ -1017,26 +1019,31 @@ def test_two_uploads_at_once_run_one_after_the_other(tmp_path):
     assert upload_in_progress() is False
 
 
-# --- a key-correction note stays first through a support-template re-render (issue #7 review, F054) --------------------
+# --- a key-correction note lands right after the description through a support-template re-render (owner, 2026-09-29,
+# reversing the 2026-09-26 "note first" decision tested here before -- issue #7 review, F054's no-duplication
+# guarantee still holds, just at the new position) --------------------------------------------------------------------
 
-def test_rerendering_keeps_the_key_note_first_and_is_stable():
+def test_rerendering_moves_the_key_note_after_the_description_and_is_stable():
     from lyricvideo.key_note import apply_key_note
     from lyricvideo.youtube_schedule import rerender_description
 
-    noted = apply_key_note(render_description(_TEMPLATE, "Body."), "C minor", "D minor")
+    note = "📌 Song key: C minor (not D minor as shown in the video)"
+    front = apply_key_note(render_description(_TEMPLATE, "Body."), "C minor", "D minor")   # apply_key_note just prepends
 
-    assert rerender_description(noted, _TEMPLATE, [_OLD]) == noted
-    assert apply_key_note(rerender_description(noted, _TEMPLATE, [_OLD]), "C minor", "D minor") == noted
-    assert noted.startswith("📌 Song key: C minor") and noted.count("📌") == 1
+    once = rerender_description(front, _TEMPLATE, [_OLD])
+
+    assert once == f"{_TOP}\n\nBody.\n\n{note}\n\n{_BOTTOM}"
+    assert rerender_description(once, _TEMPLATE, [_OLD]) == once           # stable once it's in the new position
+    assert once.count("📌") == 1
 
 
-def test_rerendering_moves_a_note_pushed_below_the_tip_back_to_the_top():
+def test_rerendering_moves_a_misplaced_note_to_right_after_the_description():
     from lyricvideo.youtube_schedule import rerender_description
 
     note = "📌 Song key: C minor (not D minor as shown in the video)"
-    pushed_down = f"{_TOP}\n\n{note}\n\nBody.\n\n{_BOTTOM}"
+    pushed_up_top = f"{note}\n\n{_TOP}\n\nBody.\n\n{_BOTTOM}"
 
-    assert rerender_description(pushed_down, _TEMPLATE, [_OLD]) == f"{note}\n\n{_TOP}\n\nBody.\n\n{_BOTTOM}"
+    assert rerender_description(pushed_up_top, _TEMPLATE, [_OLD]) == f"{_TOP}\n\nBody.\n\n{note}\n\n{_BOTTOM}"
 
 
 def test_rerendering_a_description_without_a_note_is_unchanged_behavior():
@@ -1055,6 +1062,9 @@ def test_a_template_whose_top_starts_with_a_pin_is_not_taken_for_a_key_note():
     rendered = render_description(pinned_template, "Body.")
 
     assert rerender_description(rendered, pinned_template, []) == rendered
+    note = "📌 Song key: C minor (not D minor as shown in the video)"
     noted = apply_key_note(rendered, "C minor", "D minor")
     assert noted.startswith("📌 Song key: C minor") and "📌 Tip jar" in noted
-    assert rerender_description(noted, pinned_template, []) == noted
+    assert rerender_description(noted, pinned_template, []) == (
+        f"📌 Tip jar: https://example.invalid/tip\n\nBody.\n\n{note}\n\nThanks!"
+    )

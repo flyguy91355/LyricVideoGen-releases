@@ -121,34 +121,45 @@ def test_no_script_appends_the_support_template_raw():
         assert 'f"{description}\\n\\n{support_text}"' not in path.read_text(encoding="utf-8"), path.name
 
 
-# --- update_support_description.py keeps the key note first (issue #7 review, F054) ------------------------------------
+# --- update_support_description.py puts a key note right after the description, not before everything (owner,
+# 2026-09-29, reversing the 2026-09-26 "note first" layout tested here before -- issue #7 review, F054's
+# no-duplication guarantee still holds, just at the new position) ------------------------------------------------------
 
 _TEMPLATE = "Tip line: https://ko-fi.com/x\n{description}\nThanks for playing along!"
 
 
-def test_the_support_update_keeps_a_key_note_first_and_is_stable():
+def test_the_support_update_moves_a_key_note_after_the_description_and_is_stable():
     from lyricvideo.key_note import apply_key_note
     from lyricvideo.youtube_schedule import render_description
 
     script = _load_script("update_support_description")
-    noted = apply_key_note(render_description(_TEMPLATE, "Body."), "C minor", "D minor")
+    note = "📌 Song key: C minor (not D minor as shown in the video)"
+    front = apply_key_note(render_description(_TEMPLATE, "Body."), "C minor", "D minor")   # apply_key_note just prepends
 
-    assert script.new_description(noted, _TEMPLATE, [script.DEFAULT_OLD_TEXT]) == noted
+    once, regenerated = script.new_description(front, _TEMPLATE, [script.DEFAULT_OLD_TEXT])
+
+    assert not regenerated
+    assert once == f"Tip line: https://ko-fi.com/x\n\nBody.\n\n{note}\n\nThanks for playing along!"
+    again, _regenerated = script.new_description(once, _TEMPLATE, [script.DEFAULT_OLD_TEXT])
+    assert again == once
 
 
-def test_the_support_update_converts_an_old_description_under_a_key_note():
+def test_the_support_update_converts_an_old_description_with_a_key_note():
     script = _load_script("update_support_description")
     note = "📌 Song key: C minor (not D minor as shown in the video)"
     old = f"{note}\n\nBody.\n\n{script.DEFAULT_OLD_TEXT}"
 
-    assert script.new_description(old, _TEMPLATE, [script.DEFAULT_OLD_TEXT]) == (
-        f"{note}\n\nTip line: https://ko-fi.com/x\n\nBody.\n\nThanks for playing along!"
-    )
+    updated, regenerated = script.new_description(old, _TEMPLATE, [script.DEFAULT_OLD_TEXT])
+
+    assert not regenerated
+    assert updated == f"Tip line: https://ko-fi.com/x\n\nBody.\n\n{note}\n\nThanks for playing along!"
 
 
 def test_the_support_update_finds_nested_easy_chord_uploads(tmp_path):
     script = _load_script("update_support_description")
-    _uploaded_song(tmp_path / "some-song", "MAIN")
-    _uploaded_song(tmp_path / "some-song" / "easychords", "EASY")
+    main_dir = _uploaded_song(tmp_path / "some-song", "MAIN")
+    easy_dir = _uploaded_song(tmp_path / "some-song" / "easychords", "EASY")
 
-    assert script.find_uploaded_videos(tmp_path) == {"MAIN": "some-song", "EASY": "some-song/easychords"}
+    assert script.find_uploaded_videos(tmp_path) == {
+        "MAIN": ("some-song", main_dir), "EASY": ("some-song/easychords", easy_dir),
+    }
