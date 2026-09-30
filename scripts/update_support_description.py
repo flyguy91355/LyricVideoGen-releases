@@ -90,6 +90,14 @@ def new_description(
     return assemble_description(template, body, note), regenerated
 
 
+def looks_clean(description: str) -> bool:
+    """False when `description` still carries duplicated boilerplate -- the sign that an older, unrecognized
+    description format wasn't fully stripped (its own tip/key text left behind alongside the newly added block).
+    The ko-fi link and the words "Song key" are present in every format this project has ever written, old or
+    new, so more than one copy of either is never legitimate."""
+    return description.count("ko-fi.com/playalongvideos") <= 1 and description.count("Song key") <= 1
+
+
 def video_kind(status: dict) -> str:
     if status.get("privacyStatus") == "private" and status.get("publishAt"):
         return "scheduled"
@@ -106,9 +114,13 @@ def main(argv: list[str] | None = None) -> int:
                              f"sign-off sentence when changing its wording. {DEFAULT_OLD_TEXT!r} is always removed.")
     parser.add_argument("--no-regenerate", action="store_true",
                         help="reorder only -- never call Claude for a short description, even if one is found")
+    parser.add_argument("--template-file", type=Path,
+                        help="use this file's text as the template instead of Settings.support_description_text "
+                             "(e.g. when the saved Settings value hasn't been updated to the new layout yet)")
     args = parser.parse_args(argv)
 
-    template = Settings.load().support_description_text.strip()
+    template = args.template_file.read_text(encoding="utf-8").strip() if args.template_file \
+        else Settings.load().support_description_text.strip()
     old_texts = [DEFAULT_OLD_TEXT, *args.old_text]
     if not template:
         raise SystemExit("Settings.support_description_text is blank -- set it first (Settings popup, or the saved settings file).")
@@ -140,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     missing = [videos[v][0] for v in ids if v not in live]
 
     changes: list[tuple[str, str, str, dict, str, bool]] = []     # (video_id, label, kind, snippet, new_description, regenerated)
+    messy: list[tuple[str, str]] = []                              # (video_id, label) skipped -- would have duplicated
     up_to_date = skipped_status = 0
     for video_id in ids:
         item = live.get(video_id)
@@ -155,9 +168,14 @@ def main(argv: list[str] | None = None) -> int:
         updated, regenerated = new_description(current, template, old_texts, anthropic_client=anthropic_client, work_dir=work_dir)
         if updated == current.strip():
             up_to_date += 1
+        elif not looks_clean(updated):
+            messy.append((video_id, label))
         else:
             changes.append((video_id, label, kind, snippet, updated, regenerated))
 
+    if messy:
+        print(f"{len(messy)} SKIPPED (an older description format this script doesn't fully recognize -- would "
+              f"have duplicated the tip/key text, so nothing was changed): {', '.join(l for _v, l in messy)}")
     regen_count = sum(1 for *_ignore, regenerated in changes if regenerated)
     print(f"{len(ids)} uploaded videos: {len(changes)} to change ({regen_count} with a freshly written description), "
           f"{up_to_date} already up to date, {skipped_status} skipped by --status {args.status}, "

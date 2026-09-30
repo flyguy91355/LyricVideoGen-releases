@@ -203,9 +203,10 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    - `render.draw_support_overlay()`: `Settings.support_overlay_text` (blank = off) in the last
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
      `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
-     -- never clickable. Order HISTORY 9-29: song description first (clears YouTube's "...more" cutoff alone), then
-     a key note if any, then tip/thank-you. `scripts/update_support_description.py` (`--dry-run` first) re-renders
-     into this order, rewriting any body under `READY_CHARS` (200); `backfill_support_overlay_description.py` retired.
+     -- never clickable. Order HISTORY 9-29: description, then a key note if any, then tip/thank-you.
+     `scripts/update_support_description.py` (`--dry-run`) re-renders into
+     this order, rewriting any body under `READY_CHARS` (200), skipping what it can't safely convert
+     (`backfill_support_overlay_description.py` retired).
 
 ## EASY CHORD versions
 

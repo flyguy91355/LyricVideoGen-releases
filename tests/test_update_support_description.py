@@ -142,3 +142,29 @@ def test_song_facts_is_none_when_the_song_has_no_local_files(tmp_path):
     from scripts.update_support_description import _song_facts
 
     assert _song_facts(tmp_path / "nowhere") is None
+
+
+# --- an older, unrecognized description format is skipped, not written half-duplicated ------------------------------
+
+def test_looks_clean_rejects_a_duplicated_tip_link():
+    from scripts.update_support_description import looks_clean
+
+    duplicated = (
+        "Body.\n\nTips: https://ko-fi.com/playalongvideos\n\n"
+        "☕ Tips are never expected: https://ko-fi.com/playalongvideos"
+    )
+    assert not looks_clean(duplicated)
+
+
+def test_looks_clean_rejects_a_duplicated_key_mention():
+    from scripts.update_support_description import looks_clean
+
+    duplicated = "🎸 Song key: D major\n\nBody.\n\n📌 Song key: C major (not D major as shown in the video)"
+    assert not looks_clean(duplicated)
+
+
+def test_looks_clean_accepts_an_ordinary_description():
+    from scripts.update_support_description import looks_clean
+
+    assert looks_clean("Body.\n\n☕ Tips: https://ko-fi.com/playalongvideos\n\nThanks!")
+    assert looks_clean("📌 Song key: C major (not D major as shown in the video)\n\nBody.")
