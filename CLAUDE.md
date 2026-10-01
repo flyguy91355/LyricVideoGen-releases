@@ -139,8 +139,8 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    `schedule_upload` refuses an unsettled key (`KeyNotConfirmed`); unsettled songs stay out of the pending lists
    (`key_needs_attention`). `scripts/settle_keys.py` (dry run;
    `--apply`) asks only songs with no decision or one in review (else 'already-settled', no Claude call); a corrected
-   song's video becomes `*.previous.mp4` and its `easychords/` moves to `easychords_prior_<time>/` unless that EASY
-   video is on YouTube (a failed move is reported; the post-render EASY check sets it aside later).
+   song's video becomes `*.previous.mp4`, `easychords/` moves to `easychords_prior_<time>/` unless on YouTube; `--apply`
+   then remakes it from images (10-1; `--no-render` or a failed remake holds for Render Anyway).
    `scripts/add_key_note.py` puts `📌 Song key: X (not Y as shown in the video)` on live descriptions.
 6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
    line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
@@ -155,7 +155,7 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image
    falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
    solid colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
-   **Shared image library** (spec 9-25, decoupled HISTORY 9-30: saving unconditional; `use_image_library` controls
+   **Shared image library** (spec 9-25, decoupled HISTORY 9-30/10-1: saving unconditional; `use_image_library` controls
    only reuse; `image_library_min_score` provisional 0.34, see `scripts/preview_library_matches.py`'s contact
    sheets in `reports/`): before buying, look in
    `~/PlayAlongVideoProductionImages/` (`image_library.py`: SQLite + deduped PNGs; env `PLAYALONG_IMAGE_LIBRARY`)

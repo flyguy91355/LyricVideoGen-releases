@@ -74,3 +74,44 @@ def test_a_correction_follows_the_flats_setting(tmp_path, monkeypatch):
     track = load_song(song / "lyrics_timed.json").chord_track
     assert track.key == "A# major" and [e.label for e in track.events] == ["A#", "D#", "F", "A#"]
     assert load_decision(song).key == "Bb major"
+
+
+def test_a_correction_is_made_again_automatically(tmp_path, monkeypatch, capsys):
+    """owner, 2026-10-01: a corrected song is re-rendered right here, with no Render Anyway needed."""
+    import lyricvideo.pipeline as pipeline
+    song = _song(tmp_path, "redone-song", ["A", "D", "E", "A"], "C major")
+    calls = []
+    monkeypatch.setattr(pipeline, "run_pipeline",
+                        lambda audio_path, work_dir, title, **kw: calls.append((work_dir, kw.get("start_stage"))))
+
+    assert _run(monkeypatch, tmp_path, FakeClient("KEY: A major")) == 0
+
+    assert calls == [(song, "images")]
+    out = capsys.readouterr().out
+    assert "video made again at its corrected key" in out and "1/1 corrected song(s) made again automatically" in out
+
+
+def test_no_render_leaves_a_correction_held_like_before(tmp_path, monkeypatch, capsys):
+    import lyricvideo.pipeline as pipeline
+    song = _song(tmp_path, "held-song", ["A", "D", "E", "A"], "C major")
+    monkeypatch.setattr(pipeline, "run_pipeline", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not render")))
+
+    assert _run(monkeypatch, tmp_path, FakeClient("KEY: A major"), argv=("--apply", "--no-render")) == 0
+
+    from lyricvideo.pipeline import HELD_MARKER
+    assert (song / HELD_MARKER).exists()
+    assert "made again automatically" not in capsys.readouterr().out
+
+
+def test_a_failed_rerender_falls_back_to_held_for_render_anyway(tmp_path, monkeypatch, capsys):
+    import lyricvideo.pipeline as pipeline
+    song = _song(tmp_path, "unlucky-song", ["A", "D", "E", "A"], "C major")
+    monkeypatch.setattr(pipeline, "run_pipeline", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no stems")))
+
+    assert _run(monkeypatch, tmp_path, FakeClient("KEY: A major")) == 0
+
+    from lyricvideo.pipeline import HELD_MARKER
+    assert (song / HELD_MARKER).exists()
+    out = capsys.readouterr().out
+    assert "could not be made again automatically" in out and "RuntimeError: no stems" in out
+    assert "0/1 corrected song(s) made again automatically" in out

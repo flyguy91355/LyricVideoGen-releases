@@ -5158,5 +5158,22 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   match (a session with the setting off is no longer `None`; it still opens, just with `skip_lookup=True`).
 - Both of these -- the unnecessary wait on the description backfill, and the save/reuse conflation on the image
   library -- were real, substantive mistakes this session, not just communication friction; the owner's frustration
-  ("your not as smart as you once were... im tired of the mistakes") was about concrete, fair misses, logged in
-  [[feedback_follow_instructions_no_tangents]] (that memory predates this entry; both belong to the same session).
+  ("your not as smart as you once were... im tired of the mistakes") was about concrete, fair misses.
+
+## 2026-10-01: description backfill finished (100/0/22/0); image library confirmed live after a restart
+
+- Picked up the next morning once the owner's batch run (started with the still-stale pre-fix code/settings) had
+  finished and the app was restarted. Verified via `ps`/file mtimes which fixes a running process actually has
+  loaded -- Settings and code are both read once at process start, so a long-lived GUI process can be hours behind
+  what's on disk; this is a real, recurring gotcha for this project, not a one-off.
+- Re-ran `scripts/update_support_description.py` (now with `strip_boilerplate_paragraphs()`) against the 23 videos
+  the 9-30 run had skipped: `--dry-run` showed 0 skipped this time (down from 23), confirming the pattern-based
+  fix actually generalizes; ran for real, 24 updated (3 more videos had been uploaded by the owner's batch
+  overnight), 0 failures. Combined with the 9-30 run: **100 videos updated total, 0 skipped, 22 gone, 0 failures**
+  across the whole channel. Verified directly: Blackbird kept its hand-added "Key/Tempo"/"How to play along"
+  paragraphs untouched; Wild World (the owner's own reference example) matches the target layout exactly.
+- The owner asked whether the generation log reports how many images were reused per song -- it already did
+  (`library.summary_line()`, built in the original 2026-09-25 feature) but had never actually printed anything
+  useful because `library` was `None` whenever the setting was off, i.e. always, until this session's fix. No
+  code change needed, just confirmed and explained.
+- `v2.0.73` is the version covering both the image-library fix and the finished backfill.
