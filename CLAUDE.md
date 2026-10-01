@@ -155,14 +155,15 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image
    falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
    solid colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
-   **Shared image library** (spec 9-25; `Settings.use_image_library` OFF until the owner reviews
-   `scripts/preview_library_matches.py`'s contact sheet in `reports/`; `image_library_min_score` provisional 0.34):
-   before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`: SQLite + deduped PNGs; env
-   `PLAYALONG_IMAGE_LIBRARY`) by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py`
-   [`--dry-run`/`--limit N`] may download the ~605 MB weights). `library_session.LibrarySession` COPIES a hit into
-   `images/` (one picture per line per song), files every purchase with its prompt, disables itself on error. Redo's
-   "Generate new images" (`fresh_images=True`) skips it; pictures it moved aside are never offered to that song again
-   (`image_library_rejected.json`, recorded at once). `python -m lyricvideo.image_library stats`.
+   **Shared image library** (spec 9-25, decoupled HISTORY 9-30: saving unconditional; `use_image_library` controls
+   only reuse; `image_library_min_score` provisional 0.34, see `scripts/preview_library_matches.py`'s contact
+   sheets in `reports/`): before buying, look in
+   `~/PlayAlongVideoProductionImages/` (`image_library.py`: SQLite + deduped PNGs; env `PLAYALONG_IMAGE_LIBRARY`)
+   by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py` [`--dry-run`/`--limit N`] may
+   download the ~605 MB weights). `LibrarySession` copies a hit into `images/`, files every purchase with its
+   prompt regardless of the setting, disables itself on error. Reuse (`skip_lookup`) is off when the setting is
+   off or Redo's "Generate new images"; a moved-aside picture is never offered again
+   (`image_library_rejected.json`). `python -m lyricvideo.image_library stats`.
 7. **render** (`assemble.py`/`layout.py`/`render.py`) -- lyrics (karaoke word sweep, Ken Burns), NOW/NEXT/timeline chord
    bar, Key/BPM badge, chord legend over the audio into `work_dir/<slug>.mp4`. Font: `--font`, else
    `Settings.font_path`, via `pipeline.resolve_font` (a missing file -> `default_font()` with a warning; candidates

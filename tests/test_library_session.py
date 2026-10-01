@@ -174,9 +174,23 @@ def test_close_frees_the_embedder(tmp_path):
     assert embedder.closed is True
 
 
-def test_open_library_session_is_none_when_the_setting_is_off(tmp_path):
-    assert open_library_session(Settings(), "song", "Song", tmp_path / "images") is None
+def test_open_library_session_is_none_only_without_settings_at_all(tmp_path):
+    """No settings object at all -- the only case with nothing to open a session with. Owner, 2026-09-30:
+    saving must happen "no matter what the check mark is", so Settings(use_image_library=False) is NOT this case
+    any more (see the next test) -- only a missing Settings object is."""
     assert open_library_session(None, "song", "Song", tmp_path / "images") is None
+
+
+def test_open_library_session_still_opens_with_the_setting_off_but_skips_lookup(tmp_path):
+    """The checkbox being off must still build/grow the library (saving is unconditional) -- it only ever
+    controls whether an EXISTING picture gets offered back instead of buying a new one."""
+    session = open_library_session(
+        Settings(use_image_library=False), "song", "Song", tmp_path / "images",
+        embedder=_FakeEmbedder({}), library=ImageLibrary(tmp_path / "lib"),
+    )
+
+    assert session is not None
+    assert session.skip_lookup is True
 
 
 def test_open_library_session_builds_a_seeded_session_from_the_settings(tmp_path):

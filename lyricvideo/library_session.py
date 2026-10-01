@@ -146,9 +146,14 @@ def open_library_session(
     settings, song_slug: str, song_title: str, images_dir: Path, fresh_images: bool = False,
     embedder: Embedder | None = None, library: ImageLibrary | None = None,
 ) -> LibrarySession | None:
-    """None whenever the library is off, unavailable, or fails to open -- the images stage then behaves exactly
-    as it did before this feature existed. `embedder`/`library` are injection points for tests."""
-    if settings is None or not settings.use_image_library:
+    """None only when `settings` itself is missing, or the library backend is unavailable/fails to open -- NOT
+    simply because `Settings.use_image_library` is off. Owner, 2026-09-30: "no matter what the check mark is...
+    i want these saved" -- every bought picture is filed into the library (with its real prompt) regardless of
+    that setting; the setting (like a per-song "Generate new images" Redo) controls ONLY whether an existing
+    library picture is ever offered back in place of buying a new one (`skip_lookup`). So a video with the
+    checkbox off still builds and grows the library, it just never reuses from it. `embedder`/`library` are
+    injection points for tests."""
+    if settings is None:
         return None
     try:
         if embedder is None:
@@ -158,7 +163,8 @@ def open_library_session(
         if library is None:
             library = ImageLibrary()
         session = LibrarySession(
-            library, embedder, song_slug, song_title, settings.image_library_min_score, skip_lookup=fresh_images,
+            library, embedder, song_slug, song_title, settings.image_library_min_score,
+            skip_lookup=fresh_images or not settings.use_image_library,
         )
         session.seed_used_ids(images_dir)
         session.used_ids |= rejected_image_ids(images_dir.parent)       # pictures the owner replaced: never again

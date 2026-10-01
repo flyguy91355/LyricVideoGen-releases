@@ -168,3 +168,47 @@ def test_looks_clean_accepts_an_ordinary_description():
 
     assert looks_clean("Body.\n\n☕ Tips: https://ko-fi.com/playalongvideos\n\nThanks!")
     assert looks_clean("📌 Song key: C major (not D major as shown in the video)\n\nBody.")
+
+
+# --- old boilerplate is recognized by substance, not exact wording (real historical variants found live) -----------
+
+def test_strip_boilerplate_paragraphs_drops_a_tip_paragraph_in_any_wording():
+    from scripts.update_support_description import strip_boilerplate_paragraphs
+
+    text = "Body.\n\nTips are never expected, but always appreciated ☕\nhttps://ko-fi.com/playalongvideos"
+    assert strip_boilerplate_paragraphs(text) == "Body."
+
+
+def test_strip_boilerplate_paragraphs_drops_a_thank_you_in_any_wording():
+    from scripts.update_support_description import strip_boilerplate_paragraphs
+
+    text = "Body.\n\nI hope you're enjoying  Play Along Videos and that they're helping you grow as a musician."
+    assert strip_boilerplate_paragraphs(text) == "Body."
+
+
+def test_strip_boilerplate_paragraphs_drops_the_old_teaser():
+    from scripts.update_support_description import strip_boilerplate_paragraphs
+
+    text = (
+        '☕ Tips are never expected, but always appreciated: https://ko-fi.com/playalongvideos\n'
+        '▼ Click "more" for the song info ▼\n\nBody.'
+    )
+    assert strip_boilerplate_paragraphs(text) == "Body."
+
+
+def test_strip_boilerplate_paragraphs_keeps_hand_added_unique_content():
+    """Real (Blackbird): extra 'Key/Tempo' and 'How to play along' paragraphs the owner added by hand must survive."""
+    from scripts.update_support_description import strip_boilerplate_paragraphs
+
+    text = (
+        "Body.\n\n"
+        "I hope you're enjoying the Play Along Videos channel and that these videos are helping you grow as a "
+        "musician.\n*Tips are never expected, but always appreciated* ☕\n\U0001f449 https://ko-fi.com/playalongvideos\n"
+        "Thanks for playing along!\n\n"
+        "\U0001f3b8 Key: G major · Tempo: about 92 BPM\n\n"
+        "How to play along: the lyrics scroll in time with the song."
+    )
+
+    result = strip_boilerplate_paragraphs(text)
+
+    assert result == "Body.\n\n🎸 Key: G major · Tempo: about 92 BPM\n\nHow to play along: the lyrics scroll in time with the song."

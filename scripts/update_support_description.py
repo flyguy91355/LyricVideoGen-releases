@@ -67,6 +67,26 @@ def _song_facts(work_dir: Path) -> tuple[str, str, str] | None:
     return title, _load_artist(work_dir), full_lyrics
 
 
+_BOILERPLATE_MARKERS = ("ko-fi.com/playalongvideos", "grow as a musician")
+_TEASER_PREFIX = '▼ Click "more"'
+
+
+def strip_boilerplate_paragraphs(text: str) -> str:
+    """Drops any paragraph that is old support-template boilerplate (a tip line, a thank-you sign-off, or the
+    retired "click more" teaser) under ANY of the several different exact wordings this channel has actually used
+    since 2026-09-13 -- recognized by a stable substring each wording shares, not an exact match, since
+    enumerating every historical variant by hand is fragile and keeps missing real ones (found empirically:
+    angie, blackbird, cocaine, wild-world and others all differ in exact sign-off wording, and Blackbird's is
+    styled with markdown/emoji on top of that). A paragraph matching neither marker -- including hand-added
+    unique content like Blackbird's own extra "Key/Tempo" and "How to play along" paragraphs -- is left alone."""
+    paragraphs = (text or "").strip().split("\n\n")
+    kept = [
+        p for p in paragraphs
+        if not any(marker in p for marker in _BOILERPLATE_MARKERS) and not p.strip().startswith(_TEASER_PREFIX)
+    ]
+    return "\n\n".join(kept).strip()
+
+
 def new_description(
     current: str, template: str, old_texts: list[str], *,
     anthropic_client=None, work_dir: Path | None = None, ready_chars: int = READY_CHARS,
@@ -79,6 +99,7 @@ def new_description(
     show."""
     note, rest = split_key_note(current)
     rest = strip_song_key_line(rest)
+    rest = strip_boilerplate_paragraphs(rest)
     body = description_body(rest, old_texts, template)
     regenerated = False
     if anthropic_client is not None and len(body) < ready_chars and work_dir is not None:
