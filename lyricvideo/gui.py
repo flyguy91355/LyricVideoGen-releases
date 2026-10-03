@@ -487,6 +487,7 @@ def _scan_youtube_comments(gui) -> None:
                 if add_pending_reply(PendingReply(
                     comment_id=comment.comment_id, video_id=comment.video_id, author=comment.author,
                     comment_text=comment.text, draft_reply=draft, is_error_report=is_error_report,
+                    video_title=state.title,
                 )):
                     added = True
                 mark_comment_seen(comment.comment_id)
@@ -3139,9 +3140,11 @@ class LyricVideoGUI:
         rows = []
         for reply in replies:
             badge = "⚠ " if reply.is_error_report else ""
-            heading = f"{reply.author}: {reply.comment_text}" + (" ⚠ possible error report" if reply.is_error_report else "")
-            rows.append((reply.comment_id, reply, f"{badge}{reply.author}", _one_line(reply.comment_text), heading,
-                         reply.draft_reply))
+            video = reply.video_title or "(unknown video)"   # owner, 2026-10-03: show which song/video this is on
+            heading = f"{video} -- {reply.author}: {reply.comment_text}" + (
+                " ⚠ possible error report" if reply.is_error_report else "")
+            preview = f"[{video}] {_one_line(reply.comment_text)}"
+            rows.append((reply.comment_id, reply, f"{badge}{reply.author}", preview, heading, reply.draft_reply))
         self.replies_view.set_items(rows)
         self._show_replies_count(len(replies))
 

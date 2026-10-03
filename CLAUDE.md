@@ -124,23 +124,23 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    **Key check** (`key_decision.py`, HISTORY 9-26/9-27; owner: video and description MUST show the real key):
    `settle_song_key()` sets `chord_track.key` when the chord-based estimate (`key_estimate.py`) AGREES with a Claude
    second opinion among its candidates (`key_opinion.py`); else the song is HELD before images and Flagged with **Set
-   Key** (`key_owner.json`, always wins, survives Redo). A Set Key the saved chords already carry confirms at once
+   Key** (`key_owner.json`, wins, survives Redo). A Set Key the saved chords already carry confirms at once
    (`confirm_owner_key`; the video needs no remaking); otherwise Render Anyway's resume runs `apply_saved_owner_key`
-   (respells, and records the confirmed decision even when nothing changed). During a job Set Key shows a message; a
+   (respells, records the decision regardless). During a job Set Key shows a message; a
    non-key says 'Not a key'. On an uploaded song (listed only while its EASY version waits on the key,
    `easy_version_waits_on_key`, reason 'key (EASY waits)') `_settle_key_of_uploaded_song` respells and confirms without
    re-rendering, then offers Rebuild EASY version. `key_decision.json` records it. `parse_key` accepts every real
-   spelling (Cb/Fb/E#/B#, ♯/♭, sharp/flat, any case, m/min/minor/maj/major), refuses double accidentals and a lone
+   spelling (Cb/Fb/E#/B#, ♯/♭, sharp/flat, any case, m/min/minor/maj/major), refuses double accidentals and a
    capital 'M', never raises. `chord_theory.spell_in_key` spells by function: the key's own chords in its letters and
    flats/sharps, a borrowed chord by the step it alters (D major's bVI is Bb); Cb/E# etc. become B/F, so only
    `CHORD_SHAPES` names result (`respell_chord_track`, `transpose_chord_track`). `Settings.prefer_flats` ('Use flats
    in flat keys') off -> chords and the Key label use sharps ('A# major'); `key_decision.json`/`key_owner.json` always
-   store the flat spelling; applied in settle_song_key, apply_saved_owner_key, transpose_chord_track, settle_keys.py.
+   store the flat spelling; applied in settle_song_key, apply_saved_owner_key, settle_keys.py.
    `schedule_upload` refuses an unsettled key (`KeyNotConfirmed`); unsettled songs stay out of the pending lists
    (`key_needs_attention`). `scripts/settle_keys.py` (dry run;
    `--apply`) asks only songs with no decision or one in review (else 'already-settled', no Claude call); a corrected
    song's video becomes `*.previous.mp4`, `easychords/` moves to `easychords_prior_<time>/` unless on YouTube; `--apply`
-   then remakes it from images (10-1; `--no-render` or a failed remake holds for Render Anyway).
+   then remakes it from images (`--no-render` or a failed remake holds for Render Anyway).
    `scripts/add_key_note.py` puts `📌 Song key: X (not Y as shown in the video)` on live descriptions.
 6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
    line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
@@ -263,8 +263,8 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   Anyway, Remove, Set Key (plain text, no emoji). A `<song>/easychords` row gets only Watch/Remove and Rebuild EASY
   version (`_on_rebuild_easy_flagged`); the other handlers refuse it (`_refuse_easy_variant`).
 - **YouTube Comments** / **Pending Engagement Comments**: collapsible and lazy, each one list + one editor
-  (`_DraftQueueView`); edits are kept per draft id across refreshes, Approve posts the edited text, the header shows
-  "N waiting".
+  (`_DraftQueueView`); each reply names its video too (10-3, `PendingReply.video_title`); edits are kept per draft
+  id across refreshes, Approve posts the edited text, the header shows "N waiting".
 - **Settings popup** (`_open_settings_window`): built once, then hidden/shown (`_show_settings_dialog`/
   `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set every 50 ms up to 20x -- X11 refuses a grab until
   the window is mapped); transient/grab_set/lift/focus_force/brief-topmost like the Update dialog; its confirms are

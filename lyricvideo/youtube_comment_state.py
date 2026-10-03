@@ -74,6 +74,9 @@ class PendingReply:
     comment_text: str
     draft_reply: str
     is_error_report: bool
+    video_title: str = ""  # owner, 2026-10-03: "i dont know what song or video the comments are comming from" --
+    # the uploaded video's own title (YoutubeState.title), so a reply drafted before this field existed just
+    # shows blank rather than failing to load (_load_items' cls(**item) needs every field optional-or-present)
 
 
 def _load_items(path: Path, cls):

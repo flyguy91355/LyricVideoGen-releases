@@ -424,6 +424,35 @@ def test_pending_replies_are_not_built_at_launch_and_edits_survive_every_refresh
         gc.collect()
 
 
+def test_the_reply_list_shows_which_video_each_comment_is_on(isolated, monkeypatch):
+    """owner, 2026-10-03: "i dont know what song or video the comments are comming from" -- both the row shown in
+    the list and the heading above the editor now name the video; an older queued reply with no video_title saved
+    (the field didn't exist yet) falls back to a plain placeholder instead of showing blank."""
+    reply = PendingReply(comment_id="a", video_id="v", author="fan a", comment_text="is 1:02 right?",
+                         draft_reply="draft a", is_error_report=False, video_title="Some Song - Artist - (Play Along)")
+    old_reply = PendingReply(comment_id="b", video_id="v2", author="fan b", comment_text="great video",
+                             draft_reply="draft b", is_error_report=False)   # video_title defaults to ""
+    monkeypatch.setattr(gui, "load_pending_replies", lambda: [reply, old_reply])
+    try:
+        root = _new_ctk_root(ctk)
+    except Exception:
+        pytest.skip("no display available for a real window")
+    root.withdraw()
+    try:
+        app = LyricVideoGUI(root)
+        view = app.replies_view
+        _open(app, "YouTube Comments")
+
+        assert "Some Song - Artist - (Play Along)" in view.tree.item("a", "values")[1]
+        view.select("a")
+        assert "Some Song - Artist - (Play Along)" in view.heading.cget("text")
+        view.select("b")
+        assert "(unknown video)" in view.heading.cget("text")
+    finally:
+        root.destroy()
+        gc.collect()
+
+
 def test_a_comment_check_that_finds_nothing_new_does_not_touch_the_panel(monkeypatch, tmp_path):
     monkeypatch.setattr(gui, "PROJECT_ROOT", tmp_path)
     (tmp_path / "work").mkdir()

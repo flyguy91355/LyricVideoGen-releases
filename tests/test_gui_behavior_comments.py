@@ -62,6 +62,20 @@ def test_an_easy_chord_video_is_checked_for_comments_too(tmp_path, monkeypatch):
     assert sorted(read) == ["vid-a", "vid-b"]
 
 
+def test_a_queued_reply_remembers_which_video_its_comment_is_on(tmp_path, monkeypatch):
+    """owner, 2026-10-03: "i dont know what song or video the comments are comming from" -- a drafted reply now
+    carries the uploaded video's own title, not just its opaque video_id, so the GUI can show it."""
+    _uploaded(tmp_path, "some-song", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, 1) for vid in ids})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen: [_comment("c1", video_id)])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title: ("thanks!", False))
+
+    LyricVideoGUI._check_youtube_comments_worker(_stub())
+
+    [reply] = load_pending_replies()
+    assert reply.video_title == "Title some-song"
+
+
 def test_a_video_whose_comment_count_has_not_changed_costs_no_comment_read(tmp_path, monkeypatch):
     """F016/F043: every check read every public video's comments (plus a status call each) -- hundreds of quota units
     every 20 minutes. Now only a video whose count moved since its last complete check is read."""
