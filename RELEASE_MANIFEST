@@ -53,6 +53,7 @@ lyricvideo/key_decision.py
 lyricvideo/key_estimate.py
 lyricvideo/key_note.py
 lyricvideo/key_opinion.py
+lyricvideo/key_research.py
 lyricvideo/key_rollout.py
 lyricvideo/layout.py
 lyricvideo/library_preview.py
@@ -153,6 +154,7 @@ tests/test_key_decision.py
 tests/test_key_estimate.py
 tests/test_key_note.py
 tests/test_key_opinion.py
+tests/test_key_research.py
 tests/test_key_rollout.py
 tests/test_layout.py
 tests/test_library_preview.py

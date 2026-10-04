@@ -15,7 +15,8 @@ from pathlib import Path
 from .key_decision import load_decision, load_owner_key, settle_song_key
 from .key_estimate import estimate_key_from_chords, parse_key, respell_chord_track
 from .models import atomic_write_text, load_song, save_song
-from .pipeline import HELD_MARKER
+from .key_decision import KEY_HOLD_PREFIX
+from .pipeline import HELD_MARKER, _held_reason
 from .youtube_state import STATE_FILENAME
 
 
@@ -64,6 +65,13 @@ def _set_easy_version_aside(work_dir: Path) -> tuple[bool, str]:
         return False, (f"its EASY CHORD version (made for the old key) could not be moved aside ({type(e).__name__}: {e}); "
                        "it is set aside when the video is made again")
     return True, f"its EASY CHORD version (made for the old key) was moved to {target.name}; make it again after the video"
+
+
+def key_hold_released(work_dir: Path) -> bool:
+    """True for a song held for its KEY (marker reason starts 'Key check:') whose key decision is now confirmed -- by web
+    research, the second opinion or the owner: nothing but the video is left to make (Render Anyway does the same)."""
+    decision = load_decision(Path(work_dir))
+    return bool(decision is not None and decision.confirmed and _held_reason(work_dir).startswith(KEY_HOLD_PREFIX))
 
 
 def settle_saved_song(work_dir: Path, anthropic_client, *, apply: bool, prefer_flats: bool = True) -> RolloutResult:

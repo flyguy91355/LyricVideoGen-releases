@@ -6,7 +6,8 @@
   .venv/bin/python scripts/settle_keys.py --only blackbird
   .venv/bin/python scripts/settle_keys.py --apply --no-render   # correct and hold, like before 2026-10-01
 
-For each song the key from its saved chords and a second opinion (one small Claude call, a fraction of a cent) must agree.
+For each song the key from its saved chords and a second opinion (one small Claude call, a fraction of a cent) must agree;
+when they do not, a web search (key_research.py: Haiku 4.5, up to 2 searches) settles it if two cited sources agree.
 A song whose key is already confirmed (agreed, an earlier --apply, or your Set Key) is not asked about again, so a re-run
 costs nothing for it and can never demote it.
   already-settled  its key was confirmed before and the video shows it: nothing changes, no Claude call.
@@ -18,7 +19,8 @@ costs nothing for it and can never demote it.
                    Review for a manual Render Anyway, with the reason printed. Pass --no-render to always leave it held
                    instead. Either way, its EASY CHORD version (if any) still needs Generate EASY CHORD Versions. An EASY
                    CHORD video already on YouTube is left alone.
-  review           the two disagree: the song waits for you -- press Set Key in Flagged for Lyrics Review.
+                   A song held before its video for its key (no video yet) that comes out confirmed is made right here too.
+  review           research could not settle it either: the song waits for you -- press Set Key in Flagged for Lyrics Review.
   no-chords / skipped-uploaded  nothing to do.
 Chords are spelled per Settings' "Use flats in flat keys" box. A report of the run is saved to reports/key_rollout_<time>.json."""
 
@@ -56,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     from dotenv import load_dotenv
     load_dotenv(PROJECT_ROOT / ".env")
     import anthropic
-    from lyricvideo.key_rollout import settle_saved_song
+    from lyricvideo.key_rollout import key_hold_released, settle_saved_song
     from lyricvideo.settings import Settings
 
     client = anthropic.Anthropic()
@@ -77,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {r.action:9} {r.slug:40} {r.old_key:11} -> {r.new_key or '?'}")
             if r.action == "corrected" and r.detail:
                 print(f"            {r.detail}")
-        if r.action == "corrected" and args.apply and args.render:
+        if args.apply and args.render and r.action in ("corrected", "already-right", "already-settled") and key_hold_released(folder):
             try:
                 _rerender(folder, settings)
             except Exception as e:
@@ -87,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("            video made again at its corrected key")
                 rendered += 1
     counts = Counter(r.action for r in results)
+    if rendered and not counts.get("corrected"):
+        print(f"{rendered} song(s) held for their key were released and made")
     print(f"\n{'APPLIED' if args.apply else 'DRY RUN (nothing written)'}: " + ", ".join(f"{n} {a}" for a, n in sorted(counts.items())))
     if args.apply and args.render and counts.get("corrected"):
         print(f"{rendered}/{counts['corrected']} corrected song(s) made again automatically")

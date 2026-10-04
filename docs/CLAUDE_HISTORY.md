@@ -5177,3 +5177,11 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   useful because `library` was `None` whenever the setting was off, i.e. always, until this session's fix. No
   code change needed, just confirmed and explained.
 - `v2.0.73` is the version covering both the image-library fix and the finished backfill.
+
+## HISTORY 10-4: key research
+
+- Owner found the key check never researched anything: it compared the chords with Claude's from-memory pick (right for 40/80 songs) and sent every
+  disagreement to Set Key (13 holds in the 301-400 batch). `key_research.py` now looks the key up on the web (Haiku 4.5, basic
+  `web_search_20250305`, <=2 searches; Haiku takes no `effort`) and confirms only a high-confidence answer with >=2 cited sources.
+  Measured $0.042 for one song (Knocks Me Off My Feet: chords C, memory F, sources C). `settle_keys.py --apply --only <slug>` also makes
+  the video of a song held for its key once it is confirmed. Owner: "i dont want any songs in review if they dont have to be".

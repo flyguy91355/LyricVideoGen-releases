@@ -16,6 +16,7 @@ from .key_estimate import (
     KeyEstimate, candidate_keys, chord_summary, estimate_key_from_chords, parse_key, respell_chord_track,
 )
 from .key_opinion import ask_published_key
+from .key_research import KeyResearch, research_song_key
 from .models import ChordTrack, Song, atomic_write_text, original_song_dir
 from .chord_theory import key_name
 
@@ -28,12 +29,15 @@ KEY_HOLD_PREFIX = "Key check:"       # a HeldBeforeVideo concern starting with t
 class KeyDecision:
     status: str                     # "confirmed" | "review"
     key: str = ""                   # the settled key; "" while in review
-    source: str = ""                # "owner" | "agreed" ("" while in review)
+    source: str = ""                # "owner" | "agreed" | "researched" ("" while in review)
     chord_key: str = ""             # what the chords say
     published_key: str = ""         # what the second opinion chose ("" = none)
     candidates: list[str] = field(default_factory=list)
     margin: float = 0.0
     at: str = ""
+    research_key: str = ""          # what the web research chose ("" = none / not run)
+    research_sources: list[str] = field(default_factory=list)
+    research_notes: str = ""
 
     @property
     def confirmed(self) -> bool:
@@ -45,22 +49,34 @@ class KeyDecision:
         if not self.chord_key:
             return f"{KEY_HOLD_PREFIX} no chords were detected, so the song's key is unknown. Set Key to give it, then make the video."
         opinion = f"the second opinion says {self.published_key}" if self.published_key else "there was no second opinion"
+        if self.research_notes or self.research_key:
+            found = f" ({', '.join(self.research_sources[:3])})" if self.research_sources else ""
+            opinion += f"; web research {'chose ' + self.research_key if self.research_key else 'found no key'}{found}"
+            opinion += f": {self.research_notes}" if self.research_notes else ""
         return (
             f"{KEY_HOLD_PREFIX} the song's key needs your confirmation. The chords say {self.chord_key}; {opinion}. "
             "Set Key to choose it, then make the video."
         )
 
 
-def decide_key(estimate: KeyEstimate | None, published: str | None, owner: str | None, candidates: list[str]) -> KeyDecision:
+def decide_key(
+    estimate: KeyEstimate | None, published: str | None, owner: str | None, candidates: list[str],
+    researched: KeyResearch | None = None,
+) -> KeyDecision:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     chord_key = estimate.name if estimate else ""
     base = dict(chord_key=chord_key, published_key=published or "", candidates=list(candidates),
                 margin=estimate.margin if estimate else 0.0, at=stamp)
+    if researched is not None:
+        base.update(research_key=researched.key, research_sources=list(researched.sources), research_notes=researched.notes)
     owner_parsed = parse_key(owner)
     if owner_parsed is not None:
         return KeyDecision(status="confirmed", key=key_name(owner_parsed[0], owner_parsed[1], True), source="owner", **base)
     if estimate is not None and published and parse_key(published) == (estimate.tonic, estimate.mode):
         return KeyDecision(status="confirmed", key=estimate.name, source="agreed", **base)
+    researched_key = parse_key(researched.key) if researched is not None and researched.confident else None
+    if estimate is not None and researched_key is not None:     # the cited sources settle a disagreement (key_research.py)
+        return KeyDecision(status="confirmed", key=key_name(researched_key[0], researched_key[1], True), source="researched", **base)
     return KeyDecision(status="review", **base)
 
 
@@ -113,7 +129,11 @@ def settle_song_key(
     published = None
     if owner is None and estimate is not None and anthropic_client is not None:
         published = ask_published_key(anthropic_client, title, artist, candidates, chord_summary(chord_track))
-    decision = decide_key(estimate, published, owner, candidates)
+    researched = None
+    agreed = estimate is not None and published and parse_key(published) == (estimate.tonic, estimate.mode)
+    if owner is None and estimate is not None and anthropic_client is not None and not agreed:
+        researched = research_song_key(anthropic_client, title, artist, candidates, chord_summary(chord_track))
+    decision = decide_key(estimate, published, owner, candidates, researched)
     if save:
         save_decision(work_dir, decision)
     if decision.confirmed:

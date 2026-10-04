@@ -7,7 +7,7 @@ tab/chord sheet) composited over AI-generated Ken-Burns backgrounds that change
 per lyric line -- and per chord during instrumental gaps. `deep_review/` retries
 the flagged backlog (below). Specs/plans live in `docs/superpowers/` (the 9-06
 tab-PDF design is superseded by the 9-09 MP3-only merge; CustomTkinter Settings
-GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
+GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
 
 ## Running it
 
@@ -123,8 +123,9 @@ GUI 9-09). Narrative history: `docs/CLAUDE_HISTORY.md` ("HISTORY m-dd").
    `gui._stage_to_resume`: no chords -> detect_chords, chords + video -> render, chords + key decision -> images.
    **Key check** (`key_decision.py`, HISTORY 9-26/9-27; owner: video and description MUST show the real key):
    `settle_song_key()` sets `chord_track.key` when the chord-based estimate (`key_estimate.py`) AGREES with a Claude
-   second opinion among its candidates (`key_opinion.py`); else the song is HELD before images and Flagged with **Set
-   Key** (`key_owner.json`, wins, survives Redo). A Set Key the saved chords already carry confirms at once
+   second opinion among its candidates (`key_opinion.py`); on disagreement `key_research.py` (Haiku 4.5, web search <=2,
+   ~4 cents) settles it only on high confidence + 2 cited sources (`source` "researched"; a Render Anyway resume of
+   an unresearched hold searches too); else the song is HELD before images and Flagged with **Set Key** (`key_owner.json`, wins, survives Redo). A Set Key the saved chords already carry confirms at once
    (`confirm_owner_key`; the video needs no remaking); otherwise Render Anyway's resume runs `apply_saved_owner_key`
    (respells, records the decision regardless). During a job Set Key shows a message; a
    non-key says 'Not a key'. On an uploaded song (listed only while its EASY version waits on the key,
@@ -250,7 +251,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   list acts on the highlighted row (double-click Watches); Remove hides it (`_drop_list_row`, no rescan), files
   untouched. Filled on first expand by one non-daemon scanner thread (`_refresh_song_list` -> `_start_list_load`;
   `_poll_list_results` applies on Tk; a generation counter drops stale results); `invalidate()` on an open section
-  rescans in the background, old rows kept meanwhile; `_refresh_retry_upload_options` invalidates all six lists;
+  rescans in the background; `_refresh_retry_upload_options` invalidates all six lists;
   Batch's `"batch_item_done"` refreshes them live. Pending and EASY CHORD are checklists (☑ column: click or Space;
   all start ticked; ticks survive refreshes; `_TickFlag`s in `_pending_upload_vars`/`_easy_chord_backfill_vars`).
 - **Scans** (`pipeline.list_*`) parse each `lyrics_timed.json` once per file version (keyed by folder + (inode,
@@ -339,13 +340,12 @@ Public target -> uploaded Private with a future `publishAt`: `compute_next_publi
 schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe;
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
-`scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`; exits 1
-for a missing work folder or an `--only` matching nothing) lists cut-short mp4s in every song and easychords folder,
+`scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo, with
 Easy Chords ticked for an EASY one, remakes them); key_rollout and `_set_aside_videos` skip that name.
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
-raises). Testing-mode tokens expire every 7 days, so reconnecting is expected. Status label + Connect refresh on a
+raises). Status label + Connect refresh on a
 background thread (never call YouTube from the Tk thread; also every 20-minute tick). Worker threads format an error's
 text BEFORE a deferred `root.after` lambda (`except ... as e` unbinds `e`; 9-14).
 **GUI uploads**: "Upload to YouTube" = a `list_rendered_songs()` list + Upload (the only path that re-sends a song,
@@ -407,6 +407,6 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 `tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
 (per-user path constants and default arguments redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
 never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
-create their root with `_new_ctk_root(ctk)` (retries CTk(): rare Windows fd-capture failure). Some self-skip on
+create their root with `_new_ctk_root(ctk)` (retries CTk()). Some self-skip on
 Windows (trailing-space, symlinks, POSIX perms). Align tests need FFmpeg's shared DLLs on PATH (torchcodec).
 Tests write only to pytest's `tmp_path`, never a fixed path (a leftover file caused a stale-cache bug).

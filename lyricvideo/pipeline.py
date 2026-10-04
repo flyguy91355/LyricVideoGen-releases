@@ -1543,6 +1543,13 @@ def run_pipeline(
         if apply_saved_owner_key(work_dir, song, prefer_flats=prefer_flats):
             save_song(song, timed_path)
         saved = load_decision(work_dir)
+        if saved is not None and not saved.confirmed and load_owner_key(work_dir) is None and not (saved.research_key or saved.research_notes):
+            # A song held for its key before web research existed (key_research.py): look the key up now instead of
+            # leaving it for Set Key. A song research already looked at is not searched again (no repeat spend).
+            saved, song.chord_track = settle_song_key(
+                work_dir, song.chord_track, song.title, _song_artist(info_path), _key_client(), prefer_flats=prefer_flats,
+            )
+            save_song(song, timed_path)
         if saved is not None and not saved.confirmed:
             _hold_for_key(work_dir, final_path, saved.concern())
 
