@@ -339,8 +339,8 @@ Public target -> uploaded Private with a future `publishAt`: `compute_next_publi
 schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe;
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
-Thumbnails (`thumbnail.py`/`thumbnail_job.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render (Haiku
-prompt + 3 flux guitar pictures, best kept as `thumbnail_bg.png`, full title (<=100 px) left of every chord diagram; EASY reuses its song's
+Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render (Sonnet
+prompt of the song's central image + 3 flux pictures, best kept as `thumbnail_bg.png`, full title (<=100 px; one word up to 150) left of the chord diagrams; EASY reuses its song's
 picture + green "EASY CHORDS · CAPO n" badge), set after upload (`set_thumbnail`, 50 units, soft-fail); `scripts/backfill_thumbnails.py`.
 `scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo, with
@@ -406,7 +406,7 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 ```
 
 `tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
-(per-user path constants and default arguments redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
+(per-user path constants redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
 never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
 Tests write only to pytest's `tmp_path`, never a fixed path (a leftover file caused a stale-cache bug).

@@ -62,7 +62,7 @@ class Claude:
 
 def test_the_prompt_asks_for_one_guitar_no_people_no_text_and_a_clear_bottom():
     p = th.build_prompt_request("Blackbird", "The Beatles", "blackbird singing in the dead of night")
-    for needle in ("ONE GUITAR", "No people or faces", "no piano", "no text", "bottom edge"):
+    for needle in ("ONE GUITAR", "No people or faces", "no piano", "no text", "bottom edge", "CENTRAL IMAGE", "LITERALLY"):
         assert needle in p
 
 
@@ -77,8 +77,8 @@ def test_generate_buys_two_candidates_keeps_the_better_and_cleans_up(tmp_path, m
     claude = Claude()
     result = th.generate_thumbnail(tmp_path, claude, "tok", title="Blackbird", artist="The Beatles", lyrics="x", candidates=2)
     assert result.path == tmp_path / th.THUMBNAIL_FILE and result.path.exists()
-    assert claude.calls[0]["model"] == "claude-haiku-4-5"
-    assert abs(result.cost_usd - (0.001 + 0.0005 + 2 * 0.003)) < 1e-9
+    assert claude.calls[0]["model"] == "claude-sonnet-5" and claude.calls[0]["thinking"] == {"type": "disabled"}
+    assert abs(result.cost_usd - (0.002 + 0.001 + 2 * 0.003)) < 1e-9
     with Image.open(tmp_path / th.THUMBNAIL_BG_FILE) as bg:
         assert bg.getpixel((900, 300)) == (230, 150, 40)
     assert not list(tmp_path.glob("thumbnail_candidate_*"))
@@ -181,3 +181,41 @@ def test_the_title_stays_left_of_the_chord_panel(tmp_path):
         # no near-white title pixels in the panel columns below the tag (the diagrams' own lines are grey, not pure white)
         white = sum(1 for y in range(170, 330, 3) for x in range(700, 1240, 3) if min(img.getpixel((x, y))) > 250)
     assert white < 15
+
+
+def _draw():
+    from PIL import ImageDraw
+    return ImageDraw.Draw(solid((0, 0, 0)))
+
+
+def test_a_one_word_title_grows_to_fill_the_area():
+    font, lines, size = th.layout_title(_draw(), "DREAMS", 600, 390, None)
+    assert lines == ["DREAMS"] and th.TITLE_MAX_SIZE < size <= th.ONE_WORD_MAX_SIZE
+    _f, _l, long_word = th.layout_title(_draw(), "SUPERCALIFRAGILISTICEXPIALIDOCIOUS", 600, 390, None)
+    assert long_word <= th.ONE_WORD_MAX_SIZE                               # never overflows the width
+
+
+def test_a_short_multi_word_title_stacks_on_two_lines():
+    font, lines, size = th.layout_title(_draw(), "FREE BIRD", 600, 390, None)
+    assert lines == ["FREE", "BIRD"] and size == th.TITLE_MAX_SIZE
+    font, lines, size = th.layout_title(_draw(), "DEAD FLOWERS", 600, 390, None)
+    assert lines == ["DEAD", "FLOWERS"]
+
+
+def test_long_titles_still_wrap_and_shrink_unchanged():
+    font, lines, size = th.layout_title(_draw(), "SORRY SEEMS TO BE THE HARDEST WORD", 600, 390, None)
+    assert " ".join(lines) == "SORRY SEEMS TO BE THE HARDEST WORD" and size <= th.TITLE_MAX_SIZE
+
+
+def test_chord_panel_geometry_and_the_title_stopping_short_of_it():
+    assert th.chord_panel_geometry(9)[5] == 640 and th.chord_panel_geometry(5)[5] == 722      # left edges
+    assert th.chord_panel_geometry(3)[0] == 3 and th.chord_panel_geometry(15)[0] == 5          # columns
+
+
+def test_the_title_never_runs_into_a_dense_panel(tmp_path):
+    out = th.compose_thumbnail(solid((40, 40, 40)), "Blackbird", "The Beatles", tmp_path / "t.jpg",
+                               chord_labels=["G", "C", "Cm", "A", "A7", "G7", "Em", "D", "F"])
+    with Image.open(out) as img:
+        x0 = th.chord_panel_geometry(9)[5]
+        white = sum(1 for y in range(160, 260, 2) for x in range(x0 - 20, x0 + 40, 2) if min(img.getpixel((x, y))) > 250)
+    assert white == 0

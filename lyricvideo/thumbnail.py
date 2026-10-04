@@ -27,8 +27,10 @@ THUMBNAIL_FILE = "thumbnail.jpg"
 THUMBNAIL_BG_FILE = "thumbnail_bg.png"
 THUMBNAIL_SET_FILE = "thumbnail_set.json"      # {"video_id": ...}: this video's thumbnail is on YouTube
 MAX_BYTES = 1_900_000                          # YouTube's own limit is far higher; the owner's research said stay under 2 MB
-PROMPT_MODEL = "claude-haiku-4-5"
-_HAIKU_IN, _HAIKU_OUT, _IMAGE_COST = 1.00e-6, 5.00e-6, 0.003      # flux-schnell $3/1000 (imagery.py)
+# The prompt-writing step needs real interpretation of a song's meaning (owner, 2026-10-04: the Haiku version gave Bed of Roses two
+# guitars in a room); Sonnet is $2/$10 per MTok, about half a cent per song. Thinking is off (a one-prompt answer).
+PROMPT_MODEL = "claude-sonnet-5"
+_HAIKU_IN, _HAIKU_OUT, _IMAGE_COST = 2.00e-6, 10.00e-6, 0.003      # Sonnet prices (name kept); flux-schnell $3/1000 (imagery.py)
 # A bold CONDENSED face first (owner, 2026-10-04: never shorten a title -- a narrow font lets a long one stay big), then plain
 # bold ones as fallbacks for a machine without it.
 _FONT_CANDIDATES = (
@@ -110,14 +112,33 @@ def lift_if_dark(image: Image.Image) -> Image.Image:
     return ImageEnhance.Color(ImageEnhance.Contrast(out).enhance(1.1)).enhance(1.15)
 
 
-def draw_chord_panel(canvas: Image.Image, labels: list[str], font_path: str | None) -> Image.Image:
-    """Every chord of the song as a fingering diagram, in the top-right (owner, 2026-10-04: all of them), sized to fit: one
-    row up to 4 chords, two up to 8, more beyond. Drawn BEFORE the title, so a long title is in front of them."""
-    shapes = [(label, get_chord_shape(label)) for label in labels]
-    shapes = [(label, shape) for label, shape in shapes if shape is not None]
-    if not shapes:
-        return canvas
-    n = len(shapes)
+ONE_WORD_MAX_SIZE = 150         # a one-word title grows to fill the empty area (owner, 2026-10-04)
+
+
+def layout_title(draw, text: str, max_width: int, max_height: int, font_path: str | None):
+    """(font, lines, size). Long titles wrap and shrink to fit (_fit_title, <= TITLE_MAX_SIZE). A title that would sit on ONE
+    short line instead fills the empty area: one word grows to the width (<= ONE_WORD_MAX_SIZE); several words are stacked on
+    two lines at TITLE_MAX_SIZE, like "DEAD / FLOWERS"."""
+    font, lines, size = _fit_title(draw, text, max_width, max_height, font_path)
+    words = text.split()
+    if len(lines) != 1 or not words:
+        return font, lines, size
+    if len(words) == 1:
+        for big in range(ONE_WORD_MAX_SIZE, size - 1, -4):
+            big_font = _bold_font(big, font_path)
+            if draw.textlength(text, font=big_font) <= max_width and big * 1.02 <= max_height:
+                return big_font, [text], big
+        return font, lines, size
+    best = min(range(1, len(words)), key=lambda k: max(len(" ".join(words[:k])), len(" ".join(words[k:]))))
+    stacked = [" ".join(words[:best]), " ".join(words[best:])]
+    stacked_font = _bold_font(TITLE_MAX_SIZE, font_path)
+    if all(draw.textlength(l, font=stacked_font) <= max_width for l in stacked) and 2 * TITLE_MAX_SIZE * 1.02 <= max_height:
+        return stacked_font, stacked, TITLE_MAX_SIZE
+    return font, lines, size
+
+
+def chord_panel_geometry(n: int) -> tuple[int, int, int, int, int, int]:
+    """(cols, rows, cell width, cell height, gap, left edge) of the chord panel for n diagrams."""
     cols = n if n <= 4 else (4 if n <= 8 else 5)
     rows = -(-n // cols)
     gap, region_w, region_h = 10, 600, 330
@@ -126,7 +147,17 @@ def draw_chord_panel(canvas: Image.Image, labels: list[str], font_path: str | No
     while rows * ch + (rows - 1) * gap > region_h and cw > 40:
         cw -= 4
         ch = int(cw * 1.28)
-    x0 = THUMB_SIZE[0] - 40 - (cols * cw + (cols - 1) * gap)
+    return cols, rows, cw, ch, gap, THUMB_SIZE[0] - 40 - (cols * cw + (cols - 1) * gap)
+
+
+def draw_chord_panel(canvas: Image.Image, labels: list[str], font_path: str | None) -> Image.Image:
+    """Every chord of the song as a fingering diagram, in the top-right (owner, 2026-10-04: all of them), sized to fit: one
+    row up to 4 chords, two up to 8, more beyond. Drawn BEFORE the title, so a long title is in front of them."""
+    shapes = [(label, get_chord_shape(label)) for label in labels]
+    shapes = [(label, shape) for label, shape in shapes if shape is not None]
+    if not shapes:
+        return canvas
+    cols, rows, cw, ch, gap, x0 = chord_panel_geometry(len(shapes))
     out = canvas.convert("RGBA")
     font = font_path or next((f for f in _FONT_CANDIDATES if Path(f).exists()), "")
     for i, (label, shape) in enumerate(shapes):
@@ -181,15 +212,17 @@ def compose_thumbnail(
 
     text = re.sub(r"\s+", " ", title or "").strip().upper()      # the whole title, never shortened
     # with the chord panel up there the title keeps to the space LEFT of it, so no diagram is hidden
-    title_top = 245 if sub_tag else 175                            # an EASY CHORDS badge sits under the tag: the text starts lower
-    font, lines, size = _fit_title(draw, text, 600 if has_chords else 780, 565 - title_top - 90 if sub_tag else 390, font_path)
+    title_top = 222 if sub_tag else 175                            # an EASY CHORDS badge sits under the tag: the text starts lower
+    shown = sum(1 for label in (chord_labels or []) if get_chord_shape(label) is not None)
+    title_width = min(600, chord_panel_geometry(shown)[5] - 50 - 24) if has_chords else 780       # stop short of the panel
+    font, lines, size = layout_title(draw, text, title_width, 565 - title_top - 90 if sub_tag else 390, font_path)
     y = title_top
     for line in lines:
         draw.text((50, y), line, font=font, fill=(255, 255, 255), stroke_width=max(6, size // 18), stroke_fill=(0, 0, 0))
         y += int(size * 1.02)
     artist_text = (artist or "").upper().strip()
     if artist_text:
-        afont = _bold_font(78, font_path)
+        afont = _bold_font(84, font_path)
         while draw.textlength(artist_text, font=afont) > 800 and afont.size > 40:
             afont = _bold_font(afont.size - 4, font_path)
         draw.text((54, y + 14), artist_text, font=afont, fill=_ARTIST_YELLOW, stroke_width=5, stroke_fill=(0, 0, 0))
@@ -199,10 +232,10 @@ def compose_thumbnail(
     draw.rounded_rectangle([50, 40, 50 + width + 48, 124], radius=14, fill=_TAG_RED)
     draw.text((74, 82), tag, font=tag_font, fill=(255, 255, 255), anchor="lm")
     if sub_tag:
-        sub_font = _bold_font(54, font_path)
+        sub_font = _bold_font(38, font_path)                     # smaller than the channel tag (54) -- owner, 2026-10-04
         sub_w = draw.textlength(sub_tag, font=sub_font)
-        draw.rounded_rectangle([50, 136, 50 + sub_w + 48, 220], radius=14, fill=_SUB_TAG_GREEN)
-        draw.text((74, 178), sub_tag, font=sub_font, fill=(255, 255, 255), anchor="lm")
+        draw.rounded_rectangle([50, 134, 50 + sub_w + 40, 198], radius=12, fill=_SUB_TAG_GREEN)
+        draw.text((70, 166), sub_tag, font=sub_font, fill=(255, 255, 255), anchor="lm")
 
     out_path = Path(out_path)
     for quality in (92, 86, 80, 74, 68):
@@ -218,20 +251,25 @@ def compose_thumbnail(
 
 def build_prompt_request(title: str, artist: str, lyrics: str) -> str:
     return (
-        f'Song: "{title}" by {artist}. Lyrics:\n{lyrics[:3000]}\n\n'
-        "Write ONE image-generation prompt (max 60 words) for a YouTube thumbnail background for a guitar play-along video of this song. "
-        "The main subject is ONE GUITAR (acoustic or electric, whichever suits the song), large, dramatic and sharply lit, shown in a "
-        "scene drawn from what the song is about (its setting, imagery, mood). Place the guitar on the RIGHT half, upper to middle of the "
-        "frame, well away from the bottom edge and bottom corners; the left side darker and simple. "
-        "Bright, vivid, high contrast, a glowing well-lit subject against a darker background, cinematic lighting. "
-        "No people or faces, no hands, no piano or other instruments, no text, letters or logos. Reply with ONLY the prompt."
+        f'Song: "{title}" by {artist}. Lyrics:\n{lyrics[:3500]}\n\n'
+        "You are designing the thumbnail picture for a guitar play-along video of this song. A viewer who knows the song must recognise "
+        "from the picture alone what it is about.\n"
+        "Step 1 (think silently): what is this song really about, and what is its CENTRAL IMAGE or metaphor? The title usually names it; "
+        "otherwise take it from the most vivid lines. Pick 2 or 3 concrete visual motifs straight from the lyrics (objects, places, "
+        "weather, time of day) -- never a generic 'cozy room' or 'sunset'.\n"
+        "Step 2: write ONE image-generation prompt (max 70 words) that shows that central image LITERALLY and big, with ONE GUITAR "
+        "(acoustic or electric, whichever suits the song) as part of the scene, interacting with it (resting on it, leaning against it, "
+        "surrounded by it). Put the guitar and the central image on the RIGHT half, upper to middle of the frame, well away from the bottom "
+        "edge and corners; the left side darker and simple. Bright, vivid, high contrast, cinematic lighting, a glowing well-lit subject on "
+        "a darker background. No people or faces, no hands, no piano or other instruments, no text, letters or logos.\n"
+        "Reply with ONLY the prompt from step 2."
     )
 
 
 def write_background_prompt(anthropic_client, title: str, artist: str, lyrics: str) -> tuple[str, float]:
     """(the image prompt, its cost). Raises if Claude's reply has no text."""
     response = anthropic_client.messages.create(
-        model=PROMPT_MODEL, max_tokens=300, messages=[{"role": "user", "content": build_prompt_request(title, artist, lyrics)}],
+        model=PROMPT_MODEL, max_tokens=600, thinking={"type": "disabled"}, messages=[{"role": "user", "content": build_prompt_request(title, artist, lyrics)}],
     )
     text = "".join(getattr(b, "text", "") for b in response.content if getattr(b, "type", "") == "text").strip()
     if not text:
