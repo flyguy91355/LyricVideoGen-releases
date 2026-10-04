@@ -39,6 +39,13 @@ def _lyrics_of(work_dir: Path) -> str:
         return ""
 
 
+def _easy_badge(work_dir: Path) -> str:
+    """"EASY CHORDS", or "EASY CHORDS · CAPO 2" when the folder's marker records the capo fret."""
+    from .chord_theory import load_easy_chord_capo_marker
+    fret = (load_easy_chord_capo_marker(work_dir) or {}).get("capo_fret")
+    return f"EASY CHORDS · CAPO {int(fret)}" if isinstance(fret, (int, float)) and fret else "EASY CHORDS"
+
+
 def _chord_labels(work_dir: Path) -> list[str]:
     """Every chord of the folder's own saved chord track (an EASY folder: its capo shapes), in order of first appearance."""
     try:
@@ -66,15 +73,15 @@ def ensure_thumbnail(
         if Path(song_dir) != work_dir:                      # an EASY CHORD version: its song's picture, its own tag
             labels = _chord_labels(work_dir) if show_chords else None
             made = compose_from_saved_background(work_dir, song_dir, title=_title_and_artist(song_dir)[0] or title,
-                                                 artist=artist or _title_and_artist(song_dir)[1], tag="EASY CHORDS",
-                                                 font_path=font_path, chord_labels=labels)
+                                                 artist=artist or _title_and_artist(song_dir)[1],
+                                                 font_path=font_path, chord_labels=labels, sub_tag=_easy_badge(work_dir))
             if made is not None:
                 return made
             if ensure_thumbnail(song_dir, anthropic_client, replicate_token, font_path=font_path, http_client=http_client,
                                 show_chords=show_chords) is None:
                 return None
-            return compose_from_saved_background(work_dir, song_dir, title=title, artist=artist, tag="EASY CHORDS",
-                                                 font_path=font_path, chord_labels=labels)
+            return compose_from_saved_background(work_dir, song_dir, title=title, artist=artist,
+                                                 font_path=font_path, chord_labels=labels, sub_tag=_easy_badge(work_dir))
         if anthropic_client is None or not replicate_token:
             return None
         kwargs = {"http_client": http_client} if http_client is not None else {}

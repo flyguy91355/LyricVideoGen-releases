@@ -38,6 +38,7 @@ _FONT_CANDIDATES = (
     "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "/Library/Fonts/Arial Bold.ttf",
 )
 _TAG_RED = (204, 0, 0)
+_SUB_TAG_GREEN = (24, 140, 70)       # the EASY CHORDS badge under the red channel tag
 _ARTIST_YELLOW = (255, 208, 0)
 
 
@@ -162,7 +163,7 @@ def _fit_title(draw, text: str, max_width: int, max_height: int, font_path: str 
 
 def compose_thumbnail(
     background: Image.Image, title: str, artist: str, out_path: Path, *, tag: str = "PLAY ALONG VIDEOS", font_path: str | None = None,
-    chord_labels: list[str] | None = None,
+    chord_labels: list[str] | None = None, sub_tag: str | None = None,
 ) -> Path:
     """1280x720 JPEG under MAX_BYTES: the picture, a dark gradient on the left for the text, the title big in white with a
     thick outline, the artist in yellow, the red tag top-left. Nothing is drawn in the bottom-right corner."""
@@ -180,8 +181,9 @@ def compose_thumbnail(
 
     text = re.sub(r"\s+", " ", title or "").strip().upper()      # the whole title, never shortened
     # with the chord panel up there the title keeps to the space LEFT of it, so no diagram is hidden
-    font, lines, size = _fit_title(draw, text, 600 if has_chords else 780, 390, font_path)
-    y = 175
+    title_top = 245 if sub_tag else 175                            # an EASY CHORDS badge sits under the tag: the text starts lower
+    font, lines, size = _fit_title(draw, text, 600 if has_chords else 780, 565 - title_top - 90 if sub_tag else 390, font_path)
+    y = title_top
     for line in lines:
         draw.text((50, y), line, font=font, fill=(255, 255, 255), stroke_width=max(6, size // 18), stroke_fill=(0, 0, 0))
         y += int(size * 1.02)
@@ -196,6 +198,11 @@ def compose_thumbnail(
     width = draw.textlength(tag, font=tag_font)
     draw.rounded_rectangle([50, 40, 50 + width + 48, 124], radius=14, fill=_TAG_RED)
     draw.text((74, 82), tag, font=tag_font, fill=(255, 255, 255), anchor="lm")
+    if sub_tag:
+        sub_font = _bold_font(54, font_path)
+        sub_w = draw.textlength(sub_tag, font=sub_font)
+        draw.rounded_rectangle([50, 136, 50 + sub_w + 48, 220], radius=14, fill=_SUB_TAG_GREEN)
+        draw.text((74, 178), sub_tag, font=sub_font, fill=(255, 255, 255), anchor="lm")
 
     out_path = Path(out_path)
     for quality in (92, 86, 80, 74, 68):
@@ -271,8 +278,8 @@ def generate_thumbnail(
 
 
 def compose_from_saved_background(
-    work_dir: Path, source_dir: Path, *, title: str, artist: str, tag: str, font_path: str | None = None,
-    chord_labels: list[str] | None = None,
+    work_dir: Path, source_dir: Path, *, title: str, artist: str, tag: str = "PLAY ALONG VIDEOS", font_path: str | None = None,
+    chord_labels: list[str] | None = None, sub_tag: str | None = None,
 ) -> Path | None:
     """A thumbnail for `work_dir` from the picture `source_dir` already chose (an EASY CHORD version uses its song's, with
     its own tag); None when `source_dir` has none."""
@@ -282,4 +289,4 @@ def compose_from_saved_background(
     with Image.open(background) as img:
         data = img.convert("RGB")
         data.load()
-    return compose_thumbnail(data, title, artist, Path(work_dir) / THUMBNAIL_FILE, tag=tag, font_path=font_path, chord_labels=chord_labels)
+    return compose_thumbnail(data, title, artist, Path(work_dir) / THUMBNAIL_FILE, tag=tag, font_path=font_path, chord_labels=chord_labels, sub_tag=sub_tag)

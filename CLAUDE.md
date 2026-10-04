@@ -340,8 +340,8 @@ schedule (`reserved_publish_datetimes()`, one claim per video), localizing each 
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
 Thumbnails (`thumbnail.py`/`thumbnail_job.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render (Haiku
-prompt + 3 flux guitar pictures, best kept as `thumbnail_bg.png`, subject moved right, full title (<=100 px) left of every chord diagram (`thumbnail_show_chords`); EASY reuses its song's
-picture), set after upload (`set_thumbnail`, 50 units, soft-fail); `scripts/backfill_thumbnails.py`.
+prompt + 3 flux guitar pictures, best kept as `thumbnail_bg.png`, full title (<=100 px) left of every chord diagram; EASY reuses its song's
+picture + green "EASY CHORDS · CAPO n" badge), set after upload (`set_thumbnail`, 50 units, soft-fail); `scripts/backfill_thumbnails.py`.
 `scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo, with
 Easy Chords ticked for an EASY one, remakes them); key_rollout and `_set_aside_videos` skip that name.

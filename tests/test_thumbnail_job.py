@@ -118,3 +118,18 @@ def test_the_songs_own_chords_go_on_its_thumbnail_and_the_setting_turns_them_off
     (folder / THUMBNAIL_FILE).unlink()
     job.ensure_thumbnail(folder, object(), "tok", show_chords=False)
     assert got == [["C", "G"], None]
+
+
+def test_easy_thumbnail_says_easy_chords_and_the_capo(tmp_path, monkeypatch):
+    import json
+    song, easy = tmp_path / "s", tmp_path / "s" / "easychords"
+    make_song(song)
+    make_song(easy)
+    (easy / "easy_chord_capo.json").write_text(json.dumps({"capo_fret": 2, "shape_key": "D"}), encoding="utf-8")
+    Image.new("RGB", (1280, 720), (200, 120, 60)).save(song / THUMBNAIL_BG_FILE)
+    got = {}
+    real = job.compose_from_saved_background
+    monkeypatch.setattr(job, "compose_from_saved_background", lambda *a, **k: (got.update(k), real(*a, **k))[1])
+    assert job.ensure_thumbnail(easy, object(), "tok") is not None
+    assert got["sub_tag"] == "EASY CHORDS · CAPO 2"
+    assert job._easy_badge(tmp_path) == "EASY CHORDS"          # no marker / no fret: just EASY CHORDS

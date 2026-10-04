@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DROPPED = {"ain-t-talkin-bout-love", "bohemian-rhapsody", "ironic"}      # blocked/not on YouTube; the owner dropped them
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     work_root = PROJECT_ROOT / "work"
     todo = []
     for name, folder, state in uploaded_song_dirs(work_root):
+        if name.replace("\\", "/").split("/")[0] in DROPPED:       # the owner dropped these: never touch them
+            continue
         if args.only and name.replace("\\", "/") != args.only.replace("\\", "/"):
             continue
         marker = folder / th.THUMBNAIL_SET_FILE

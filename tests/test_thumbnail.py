@@ -110,9 +110,9 @@ def test_empty_prompt_raises(tmp_path):
 def test_easy_version_reuses_its_songs_picture_with_its_own_tag(tmp_path):
     song, easy = tmp_path / "song", tmp_path / "song" / "easychords"
     easy.mkdir(parents=True)
-    assert th.compose_from_saved_background(easy, song, title="T", artist="A", tag="EASY CHORDS") is None
+    assert th.compose_from_saved_background(easy, song, title="T", artist="A", sub_tag="EASY CHORDS") is None
     solid((200, 120, 60)).save(song / th.THUMBNAIL_BG_FILE)
-    out = th.compose_from_saved_background(easy, song, title="T", artist="A", tag="EASY CHORDS")
+    out = th.compose_from_saved_background(easy, song, title="T", artist="A", sub_tag="EASY CHORDS")
     assert out == easy / th.THUMBNAIL_FILE and out.exists()
 
 
