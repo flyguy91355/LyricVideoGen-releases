@@ -128,10 +128,13 @@ def pick_song_image(anthropic_client, title: str, artist: str, lyrics: str, imag
     """(the song's own picture that best shows what the song is about, the cost). The pictures were made from this song's lyrics
     and are already paid for (owner, 2026-10-04: "we have a bird in the images for the song already"). The brightest, most
     contrasty GRID_MAX are laid out in one numbered grid and Claude picks the one that shows the song's central image best, bright
-    and clear. Falls back to the best-scoring one if Claude's answer cannot be read. (None, 0) when the song has under 3 usable pictures."""
+    and clear. Falls back to the best-scoring one if Claude's answer cannot be read. A song with ONE usable picture just uses it (no
+    call, no cost); (None, 0) only when it has none -- the caller then generates one."""
     paths = _usable_song_images(images_dir)
-    if len(paths) < 3:
+    if not paths:
         return None, 0.0
+    if len(paths) == 1:
+        return paths[0], 0.0
     scored = []
     for path in paths:
         with Image.open(path) as img:

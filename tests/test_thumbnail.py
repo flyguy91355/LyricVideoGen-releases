@@ -251,14 +251,19 @@ def test_an_unreadable_answer_falls_back_to_the_best_scoring_picture(tmp_path):
     assert picked is not None
 
 
-def test_too_few_or_placeholder_pictures_means_no_pick(tmp_path):
-    folder = _song_images(tmp_path / "images", 2)
-    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", folder) == (None, 0.0)
+def test_one_usable_picture_is_just_used_and_none_means_no_pick(tmp_path):
+    one = _song_images(tmp_path / "one", 1)
+    claude = Eyes("PICK: 0")
+    picked, cost = th.pick_song_image(claude, "T", "A", "x", one)
+    assert picked == next(one.glob("*.png")) and cost == 0.0 and claude.calls == []      # no call, nothing spent
+    two = _song_images(tmp_path / "two", 2)
+    assert th.pick_song_image(Eyes("PICK: 1"), "T", "A", "x", two)[0] is not None            # two or more: Claude chooses
     plain = tmp_path / "flat"
     plain.mkdir()
     for i in range(4):
-        Image.new("RGB", FRAME_SIZE, (30, 30, 40)).save(plain / f"p{i}.png")      # the app's solid placeholder
-    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", plain) == (None, 0.0)
+        Image.new("RGB", FRAME_SIZE, (30, 30, 40)).save(plain / f"p{i}.png")                  # the app's solid placeholder
+    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", plain) == (None, 0.0)           # only then is one generated
+    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", tmp_path / "missing") == (None, 0.0)
 
 
 def test_a_failed_vision_call_still_gives_a_picture(tmp_path):
