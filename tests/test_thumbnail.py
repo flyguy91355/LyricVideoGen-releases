@@ -114,3 +114,19 @@ def test_easy_version_reuses_its_songs_picture_with_its_own_tag(tmp_path):
     solid((200, 120, 60)).save(song / th.THUMBNAIL_BG_FILE)
     out = th.compose_from_saved_background(easy, song, title="T", artist="A", tag="EASY CHORDS")
     assert out == easy / th.THUMBNAIL_FILE and out.exists()
+
+
+def test_the_subject_is_moved_to_the_right_away_from_the_title():
+    left = Image.new("RGB", (1280, 720), (8, 8, 12))
+    for x in range(120, 260):
+        for y in range(300, 420):
+            left.putpixel((x, y), (255, 160, 30))                  # a lit subject on the LEFT
+    assert th.subject_centre(left)[0] < 0.3
+    moved = th.reframe_subject_right(left)
+    assert 0.55 < th.subject_centre(moved)[0] < 0.9               # now on the right
+
+
+def test_a_picture_with_nothing_standing_out_is_just_zoomed():
+    plain = solid((90, 90, 90))
+    out = th.reframe_subject_right(plain)
+    assert out.size[0] < 1280 and abs(out.size[0] / out.size[1] - 16 / 9) < 0.02

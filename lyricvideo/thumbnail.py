@@ -3,7 +3,7 @@ the song is about, with the song title and artist drawn big on top by code (an i
 PLAY ALONG tag. The whole title is always shown, in a bold condensed font so a long one stays large. Layout from the owner's research of what draws clicks: 1280x720, one subject, 3-5 big bold words with an
 outline, high contrast (bright subject on a dark side), the bottom-right corner (YouTube's duration badge) kept clear.
 
-Two candidate images are bought (about 0.3 cent each) and the one with the better brightness/contrast/colour score is kept;
+Three candidate images are bought (about 0.3 cent each) and the one with the better brightness/contrast/colour score is kept;
 a dark pick is lifted. The chosen picture is kept as thumbnail_bg.png, so an EASY CHORD version's thumbnail is made from
 its song's picture at no cost. Never raises into the caller's job: pipeline.py and the upload wrap it."""
 
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageStat
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps, ImageStat
 
 from .imagery import generate_line_image
 
@@ -67,6 +67,36 @@ def background_score(image: Image.Image) -> float:
     return 0.45 * brightness + 0.35 * contrast + 0.20 * min(saturation / 0.6, 1.0)
 
 
+def subject_centre(image: Image.Image) -> tuple[float, float]:
+    """(x, y) as shares of the picture of where its subject is: the centroid of its brightest, most colourful pixels (a
+    lit guitar in a dark scene). The middle when nothing stands out."""
+    small = image.convert("RGB").resize((96, 54))
+    scores = []
+    for y in range(54):
+        for x in range(96):
+            r, g, b = small.getpixel((x, y))
+            _h, sat, val = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            scores.append((val * (0.4 + sat), x, y))
+    scores.sort(reverse=True)
+    top = scores[: max(1, len(scores) // 12)]
+    total = sum(w for w, _x, _y in top) or 1.0
+    return (sum(w * x for w, x, _y in top) / total / 96, sum(w * y for w, _x, y in top) / total / 54)
+
+
+def reframe_subject_right(image: Image.Image, zoom: float = 1.3, target_x: float = 0.72) -> Image.Image:
+    """Zooms in and shifts the crop so the picture's subject lands about `target_x` across (the right of the thumbnail, clear
+    of the title) and a little above the middle; a subject on the left is mirrored over first. One already there is only zoomed."""
+    img = image.convert("RGB")
+    w, h = img.size
+    cx, cy = subject_centre(img)
+    if cx < 0.4:                       # on the left: a crop cannot move it right, so mirror the picture (it holds no text)
+        img, cx = ImageOps.mirror(img), 1.0 - cx
+    cw, ch = w / zoom, h / zoom
+    left = min(max(cx * w - target_x * cw, 0), w - cw)
+    top = min(max(cy * h - 0.45 * ch, 0), h - ch)
+    return img.crop((int(left), int(top), int(left + cw), int(top + ch)))
+
+
 def lift_if_dark(image: Image.Image) -> Image.Image:
     """A pick whose right side averages dark is brightened (up to 1.8x) with a touch of contrast and colour."""
     right = image.convert("RGB").crop((image.width // 2, 0, image.width, image.height))
@@ -105,7 +135,7 @@ def compose_thumbnail(
 ) -> Path:
     """1280x720 JPEG under MAX_BYTES: the picture, a dark gradient on the left for the text, the title big in white with a
     thick outline, the artist in yellow, the red tag top-left. Nothing is drawn in the bottom-right corner."""
-    bg = lift_if_dark(background).resize(THUMB_SIZE)
+    bg = lift_if_dark(reframe_subject_right(background)).resize(THUMB_SIZE)
     shade = Image.new("L", THUMB_SIZE)
     sd = ImageDraw.Draw(shade)
     for x in range(THUMB_SIZE[0]):
@@ -170,7 +200,7 @@ def write_background_prompt(anthropic_client, title: str, artist: str, lyrics: s
 
 def generate_thumbnail(
     work_dir: Path, anthropic_client, replicate_token: str, *, title: str, artist: str, lyrics: str,
-    candidates: int = 2, http_client=httpx, font_path: str | None = None,
+    candidates: int = 3, http_client=httpx, font_path: str | None = None,
 ) -> ThumbnailResult:
     """Buys `candidates` pictures from one prompt, keeps the best-scoring as thumbnail_bg.png, composes thumbnail.jpg."""
     work_dir = Path(work_dir)
