@@ -163,3 +163,31 @@ def test_no_song_pictures_falls_back_to_generating_and_the_setting_can_force_it(
     (tmp_path / THUMBNAIL_FILE).unlink()
     monkeypatch.setattr(job, "pick_song_image", lambda *a: (_ for _ in ()).throw(AssertionError("asked")))
     assert job.ensure_thumbnail(tmp_path, object(), "tok", use_song_images=False) is not None and made == [1, 1]
+
+
+def test_a_songs_own_picture_is_marked_and_an_easy_thumbnail_uses_it_uncropped(tmp_path, monkeypatch):
+    from lyricvideo import thumbnail as th
+    song, easy = tmp_path / "s", tmp_path / "s" / "easychords"
+    make_song(song)
+    make_song(easy)
+    song_images = song / "images"
+    song_images.mkdir()
+    for i in range(3):
+        Image.new("RGB", (1280, 720), (60 + 20 * i, 90, 120)).save(song_images / f"i{i}.png")
+    monkeypatch.setattr(job, "pick_song_image", lambda client, t, a, l, d: (sorted(Path(d).glob("*.png"))[0], 0.0))
+    job.ensure_thumbnail(song, object(), "tok")
+    assert (song / th.THUMBNAIL_OWN_FILE).exists()
+    seen = {}
+    real = th.compose_thumbnail
+    monkeypatch.setattr(th, "compose_thumbnail", lambda *a, **k: (seen.update(reframe=k.get("reframe")), real(*a, **k))[1])
+    job.ensure_thumbnail(easy, None, "")
+    assert seen["reframe"] is False                      # the EASY version shows the same uncropped picture
+
+
+def test_a_generated_picture_clears_the_own_marker(tmp_path, monkeypatch):
+    from lyricvideo import thumbnail as th
+    (tmp_path / th.THUMBNAIL_OWN_FILE).write_text("1")
+    monkeypatch.setattr(th, "write_background_prompt", lambda *a: ("p", 0.0))
+    monkeypatch.setattr(th, "generate_line_image", lambda tok, p, out, **k: Image.new("RGB", (1280, 720), (100, 100, 100)).save(out))
+    th.generate_thumbnail(tmp_path, object(), "tok", title="t", artist="a", lyrics="x", candidates=1)
+    assert not (tmp_path / th.THUMBNAIL_OWN_FILE).exists()

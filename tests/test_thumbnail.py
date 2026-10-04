@@ -236,37 +236,54 @@ class Eyes(Claude):
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=self.text)], usage=usage)
 
 
-def test_pick_song_image_asks_claude_to_choose_among_the_songs_own_pictures(tmp_path):
+
+
+
+
+
+
+
+def _answer(count, pick, overrides=None):
+    """Claude's compact answer: for each flag the list of pictures that show it. overrides = {picture number: {flag: True}}."""
+    import json as _json
+    flagged = {f: [] for f in th._FLAGS}
+    for n, flags in (overrides or {}).items():
+        for flag, on in flags.items():
+            if on:
+                flagged[flag].append(n)
+    return _json.dumps({**flagged, "pick": pick})
+
+
+def test_pick_song_image_shows_claude_the_grid_and_the_checklist(tmp_path):
     folder = _song_images(tmp_path / "images", 5)
-    claude = Eyes("PICK: 1")
+    claude = Eyes(_answer(5, 1))
     picked, cost = th.pick_song_image(claude, "Blackbird", "The Beatles", "blackbird singing", folder)
-    assert picked in th._usable_song_images(folder) and cost > 0
+    assert picked is not None and cost > 0
     sent = claude.calls[0]["messages"][0]["content"]
-    assert sent[0]["type"] == "image" and "PICK" in sent[1]["text"]
+    assert sent[0]["type"] == "image"
+    for needle in ("alcohol", "drugs", "weapon", "nudity", "readable words", "neon", "piano", "not a guitar", "too dark"):
+        assert needle in sent[1]["text"]
+    assert "no alcohol, drugs, smoking or weapons" in th.build_prompt_request("T", "A", "x")
 
 
-def test_an_unreadable_answer_falls_back_to_the_best_scoring_picture(tmp_path):
-    folder = _song_images(tmp_path / "images", 4)
-    picked, _ = th.pick_song_image(Eyes("no idea"), "T", "A", "x", folder)
-    assert picked is not None
+def test_the_code_drops_every_flagged_picture_even_if_claude_picked_it(tmp_path):
+    folder = _song_images(tmp_path / "images", 5)
+    ranked = sorted(th._usable_song_images(folder), key=lambda p: -th.background_score(Image.open(p)))
+    # Claude picks 0 but flags it as having a piano: the code must not use it
+    picked, _ = th.pick_song_image(Eyes(_answer(5, 0, {0: {"non_guitar_instrument": True}})), "T", "A", "x", folder)
+    assert picked == ranked[1]
+    for flag in ("alcohol_or_drink", "readable_text_or_signs", "drugs_or_smoking", "weapon_or_violence", "nudity", "dark_or_murky"):
+        picked, _ = th.pick_song_image(Eyes(_answer(5, 2, {2: {flag: True}})), "T", "A", "x", folder)
+        assert picked != ranked[2], flag
 
 
-def test_one_usable_picture_is_just_used_and_none_means_no_pick(tmp_path):
-    one = _song_images(tmp_path / "one", 1)
-    claude = Eyes("PICK: 0")
-    picked, cost = th.pick_song_image(claude, "T", "A", "x", one)
-    assert picked == next(one.glob("*.png")) and cost == 0.0 and claude.calls == []      # no call, nothing spent
-    two = _song_images(tmp_path / "two", 2)
-    assert th.pick_song_image(Eyes("PICK: 1"), "T", "A", "x", two)[0] is not None            # two or more: Claude chooses
-    plain = tmp_path / "flat"
-    plain.mkdir()
-    for i in range(4):
-        Image.new("RGB", FRAME_SIZE, (30, 30, 40)).save(plain / f"p{i}.png")                  # the app's solid placeholder
-    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", plain) == (None, 0.0)           # only then is one generated
-    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", tmp_path / "missing") == (None, 0.0)
+def test_no_clean_picture_unreadable_answer_or_failed_call_all_mean_generate_a_new_one(tmp_path):
+    folder = _song_images(tmp_path / "images", 3)
+    all_flagged = {n: {"readable_text_or_signs": True} for n in range(3)}
+    assert th.pick_song_image(Eyes(_answer(3, 0, all_flagged)), "T", "A", "x", folder)[0] is None
+    assert th.pick_song_image(Eyes("no idea"), "T", "A", "x", folder)[0] is None
+    assert th.pick_song_image(Eyes('{"pick": 0}'), "T", "A", "x", folder)[0] is None            # no flags object: not trusted
 
-
-def test_a_failed_vision_call_still_gives_a_picture(tmp_path):
     class Down:
         messages = None
 
@@ -276,6 +293,12 @@ def test_a_failed_vision_call_still_gives_a_picture(tmp_path):
         def create(self, **kw):
             raise RuntimeError("down")
 
-    folder = _song_images(tmp_path / "images", 4)
-    picked, cost = th.pick_song_image(Down(), "T", "A", "x", folder)
-    assert picked is not None and cost == 0.0
+    assert th.pick_song_image(Down(), "T", "A", "x", folder) == (None, 0.0)
+
+
+def test_a_song_with_one_picture_has_it_checked_too_and_no_pictures_means_no_call(tmp_path):
+    one = _song_images(tmp_path / "one", 1)
+    claude = Eyes(_answer(1, 0))
+    assert th.pick_song_image(claude, "T", "A", "x", one)[0] is not None and len(claude.calls) == 1
+    assert th.pick_song_image(Eyes(_answer(1, 0, {0: {"alcohol_or_drink": True}})), "T", "A", "x", one)[0] is None
+    assert th.pick_song_image(claude, "T", "A", "x", tmp_path / "missing") == (None, 0.0) and len(claude.calls) == 1

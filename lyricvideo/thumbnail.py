@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import colorsys
 import io
+import json
 import re
 import tempfile
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from .imagery import generate_line_image, is_fallback_image
 THUMB_SIZE = (1280, 720)
 THUMBNAIL_FILE = "thumbnail.jpg"
 THUMBNAIL_BG_FILE = "thumbnail_bg.png"
+THUMBNAIL_OWN_FILE = "thumbnail_bg_own"         # marker: thumbnail_bg.png is one of the SONG'S pictures (shown uncropped), not a generated one
 THUMBNAIL_SET_FILE = "thumbnail_set.json"      # {"video_id": ...}: this video's thumbnail is on YouTube
 MAX_BYTES = 1_900_000                          # YouTube's own limit is far higher; the owner's research said stay under 2 MB
 # The prompt-writing step needs real interpretation of a song's meaning (owner, 2026-10-04: the Haiku version gave Bed of Roses two
@@ -105,7 +107,6 @@ def reframe_subject_right(image: Image.Image, zoom: float = 1.3, target_x: float
 
 
 GRID_MAX = 12                    # how many of a song's own pictures Claude is shown (the best-scoring ones)
-_PICK_RE = re.compile(r"PICK:\s*(\d+)", re.IGNORECASE)
 
 
 def _usable_song_images(images_dir: Path) -> list[Path]:
@@ -124,56 +125,85 @@ def _usable_song_images(images_dir: Path) -> list[Path]:
     return found
 
 
+_FLAGS = ("alcohol_or_drink", "drugs_or_smoking", "weapon_or_violence", "nudity", "readable_text_or_signs", "non_guitar_instrument", "dark_or_murky")
+
+
+def _rank_clean(flagged: dict, count: int) -> list[int]:
+    """Indices (best first, as shown) of the pictures that appear in NONE of the flag lists. A missing or malformed flags object
+    raises, so an unreadable answer is never taken to mean "all clean"."""
+    if not isinstance(flagged, dict) or not set(_FLAGS) <= set(flagged):
+        raise ValueError("flags missing")
+    bad = set()
+    for flag in _FLAGS:
+        numbers = flagged[flag]
+        if not isinstance(numbers, list):
+            raise ValueError("flag list malformed")
+        bad.update(n for n in numbers if isinstance(n, int))
+    return [n for n in range(count) if n not in bad]
+
+
 def pick_song_image(anthropic_client, title: str, artist: str, lyrics: str, images_dir: Path) -> tuple[Path | None, float]:
-    """(the song's own picture that best shows what the song is about, the cost). The pictures were made from this song's lyrics
-    and are already paid for (owner, 2026-10-04: "we have a bird in the images for the song already"). The brightest, most
-    contrasty GRID_MAX are laid out in one numbered grid and Claude picks the one that shows the song's central image best, bright
-    and clear. Falls back to the best-scoring one if Claude's answer cannot be read. A song with ONE usable picture just uses it (no
-    call, no cost); (None, 0) only when it has none -- the caller then generates one."""
+    """(the song's own picture that best shows what the song is about, the cost). The pictures were made from this song's lyrics and
+    are already paid for (owner, 2026-10-04: "we have a bird in the images for the song already"). The brightest, most contrasty
+    GRID_MAX are laid out in one numbered grid. Claude DESCRIBES each against a fixed checklist (alcohol, drugs, weapons, nudity,
+    readable text or signs, any instrument that is not a guitar, too dark) and picks the one that best shows the song's central image;
+    the CODE then drops every picture with a flag, so an unsuitable one can never be chosen (a vodka bottle, then a piano, were picked
+    when the rules were only part of the pick prompt). None -- and the caller generates a new picture -- when the song has none, no
+    picture is clean, or the call or its answer fails."""
     paths = _usable_song_images(images_dir)
     if not paths:
         return None, 0.0
-    if len(paths) == 1:
-        return paths[0], 0.0
     scored = []
     for path in paths:
         with Image.open(path) as img:
             scored.append((background_score(img), path))
     scored.sort(key=lambda x: -x[0])
     shortlist = [p for _s, p in scored[:GRID_MAX]]
-    cols, w, h = 4, 400, 225
+    cols, w, h = 3, 480, 270
     rows = -(-len(shortlist) // cols)
     sheet = Image.new("RGB", (cols * w, rows * h), (0, 0, 0))
     draw = ImageDraw.Draw(sheet)
     for i, path in enumerate(shortlist):
         with Image.open(path) as img:
             sheet.paste(img.convert("RGB").resize((w, h)), ((i % cols) * w, (i // cols) * h))
-        draw.rectangle([(i % cols) * w, (i // cols) * h, (i % cols) * w + 62, (i // cols) * h + 44], fill=(0, 0, 0))
-        draw.text(((i % cols) * w + 8, (i // cols) * h + 4), str(i), font=_bold_font(36), fill=(255, 255, 0))
+        draw.rectangle([(i % cols) * w, (i // cols) * h, (i % cols) * w + 70, (i // cols) * h + 50], fill=(0, 0, 0))
+        draw.text(((i % cols) * w + 8, (i // cols) * h + 4), str(i), font=_bold_font(40), fill=(255, 255, 0))
     buffer = io.BytesIO()
-    sheet.save(buffer, "JPEG", quality=80)
+    sheet.save(buffer, "JPEG", quality=82)
+    flags = ", ".join(f'"{f}": [...]' for f in _FLAGS)
     prompt = (
-        f'These are pictures made for the song "{title}" by {artist}. Lyrics:\n{lyrics[:2500]}\n\n'
-        "Pick the ONE picture that best shows what this song is about -- its central image or metaphor -- and would make someone who knows "
-        "the song recognise it. It must be bright and clear, with ONE strong subject and a simpler or darker left side (the title goes there). "
-        "Prefer a clearly visible subject over a dark or murky one. Reply with exactly: PICK: <number>"
+        f'These numbered pictures were made for the song "{title}" by {artist}. Lyrics:\n{lyrics[:2000]}\n\n'
+        "Look at EVERY picture and list the numbers of the ones that show: alcohol or a bottle of drink; drugs or smoking; a weapon or "
+        "violence or blood; nudity; ANY readable words, letters, numbers, logos, brand labels, neon or street signs (even partly cut off); a "
+        "piano, keyboard, drums or any instrument that is not a guitar; or that are too dark or murky to read as a thumbnail. Be strict.\n"
+        f'Then pick the ONE picture that best shows what the song is about (its central image or metaphor), with ONE strong, fully visible '
+        f"subject. The title will cover the LEFT third and chord diagrams the TOP-RIGHT quarter, so prefer a subject in the lower-middle or "
+        f"lower-right, not cut off at an edge and not in those two areas.\nReply with ONLY this JSON (a list may be empty): "
+        f'{{{flags}, "pick": <number>}}'
     )
     try:
         response = anthropic_client.messages.create(
-            model=PROMPT_MODEL, max_tokens=60, thinking={"type": "disabled"},
+            model=PROMPT_MODEL, max_tokens=1500, thinking={"type": "disabled"},
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(buffer.getvalue()).decode()}},
                 {"type": "text", "text": prompt},
             ]}],
         )
     except Exception:
-        return shortlist[0], 0.0
+        return None, 0.0
     text = "".join(getattr(b, "text", "") for b in response.content if getattr(b, "type", "") == "text")
     usage = getattr(response, "usage", None)
     cost = getattr(usage, "input_tokens", 0) * _HAIKU_IN + getattr(usage, "output_tokens", 0) * _HAIKU_OUT
-    match = _PICK_RE.search(text)
-    index = int(match.group(1)) if match else 0
-    return shortlist[index if 0 <= index < len(shortlist) else 0], cost
+    first, last = text.find("{"), text.rfind("}")
+    try:
+        data = json.loads(text[first:last + 1])
+        clean = _rank_clean(data, len(shortlist))
+        pick = data.get("pick")
+    except (ValueError, AttributeError, TypeError):
+        return None, cost
+    if not clean:
+        return None, cost
+    return shortlist[pick if isinstance(pick, int) and pick in clean else clean[0]], cost
 
 
 def lift_if_dark(image: Image.Image) -> Image.Image:
@@ -268,13 +298,14 @@ def _fit_title(draw, text: str, max_width: int, max_height: int, font_path: str 
 
 def compose_thumbnail(
     background: Image.Image, title: str, artist: str, out_path: Path, *, tag: str = "PLAY ALONG VIDEOS", font_path: str | None = None,
-    chord_labels: list[str] | None = None, sub_tag: str | None = None,
+    chord_labels: list[str] | None = None, sub_tag: str | None = None, reframe: bool = True,
 ) -> Path:
     """1280x720 JPEG under MAX_BYTES: the picture, a dark gradient on the left for the text, the title big in white with a
     thick outline, the artist in yellow, the red tag top-left. Nothing is drawn in the bottom-right corner."""
     has_chords = bool(chord_labels) and any(get_chord_shape(label) is not None for label in chord_labels)
     # with the chord panel up there the subject goes lower-right, under it
-    bg = lift_if_dark(reframe_subject_right(background, target_y=0.66 if has_chords else 0.45)).resize(THUMB_SIZE)
+    framed = reframe_subject_right(background, target_y=0.66 if has_chords else 0.45) if reframe else background.convert("RGB")
+    bg = lift_if_dark(framed).resize(THUMB_SIZE)      # the song's own pictures are not cropped (reframe=False): they are already composed
     shade = Image.new("L", THUMB_SIZE)
     sd = ImageDraw.Draw(shade)
     for x in range(THUMB_SIZE[0]):
@@ -335,7 +366,7 @@ def build_prompt_request(title: str, artist: str, lyrics: str) -> str:
         "(acoustic or electric, whichever suits the song) as part of the scene, interacting with it (resting on it, leaning against it, "
         "surrounded by it). Put the guitar and the central image on the RIGHT half, upper to middle of the frame, well away from the bottom "
         "edge and corners; the left side darker and simple. Bright, vivid, high contrast, cinematic lighting, a glowing well-lit subject on "
-        "a darker background. No people or faces, no hands, no piano or other instruments, no text, letters or logos.\n"
+        "a darker background. No people or faces, no hands, no piano or other instruments, no text, letters or logos, and no alcohol, drugs, smoking or weapons.\n"
         "Reply with ONLY the prompt from step 2."
     )
 
@@ -379,6 +410,7 @@ def generate_thumbnail(
     with Image.open(best[1]) as img:
         data = img.convert("RGB")
         data.load()
+    (work_dir / THUMBNAIL_OWN_FILE).unlink(missing_ok=True)       # a generated picture: shown reframed
     png = work_dir / THUMBNAIL_BG_FILE
     tmp = work_dir / (THUMBNAIL_BG_FILE + ".tmp.png")
     data.save(tmp, "PNG")
@@ -401,4 +433,5 @@ def compose_from_saved_background(
     with Image.open(background) as img:
         data = img.convert("RGB")
         data.load()
-    return compose_thumbnail(data, title, artist, Path(work_dir) / THUMBNAIL_FILE, tag=tag, font_path=font_path, chord_labels=chord_labels, sub_tag=sub_tag)
+    return compose_thumbnail(data, title, artist, Path(work_dir) / THUMBNAIL_FILE, tag=tag, font_path=font_path, chord_labels=chord_labels,
+                             sub_tag=sub_tag, reframe=not (Path(source_dir) / THUMBNAIL_OWN_FILE).exists())

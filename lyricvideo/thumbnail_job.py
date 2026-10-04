@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .models import load_song, original_song_dir
 from .thumbnail import (
-    THUMBNAIL_FILE, compose_from_saved_background, compose_thumbnail, generate_thumbnail, pick_song_image, THUMBNAIL_BG_FILE,
+    THUMBNAIL_FILE, THUMBNAIL_OWN_FILE, compose_from_saved_background, compose_thumbnail, generate_thumbnail, pick_song_image, THUMBNAIL_BG_FILE,
 )
 
 log = logging.getLogger("playalongvideoproduction")
@@ -92,8 +92,9 @@ def ensure_thumbnail(
                     data = img.convert("RGB")
                     data.load()
                 data.save(work_dir / THUMBNAIL_BG_FILE, "PNG")
+                (work_dir / THUMBNAIL_OWN_FILE).write_text("1", encoding="utf-8")
                 return compose_thumbnail(data, title, artist, work_dir / THUMBNAIL_FILE, font_path=font_path,
-                                         chord_labels=_chord_labels(work_dir) if show_chords else None)
+                                         chord_labels=_chord_labels(work_dir) if show_chords else None, reframe=False)
         kwargs = {"http_client": http_client} if http_client is not None else {}
         return generate_thumbnail(
             work_dir, anthropic_client, replicate_token, title=title, artist=artist, lyrics=_lyrics_of(work_dir),
