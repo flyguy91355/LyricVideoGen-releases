@@ -47,7 +47,7 @@ def test_a_long_title_is_shown_whole_in_a_narrow_font(tmp_path):
     draw = ImageDraw.Draw(solid((0, 0, 0)))
     font, lines, size = th._fit_title(draw, "SORRY SEEMS TO BE THE HARDEST WORD", 780, 390, None)
     assert " ".join(lines) == "SORRY SEEMS TO BE THE HARDEST WORD" and len(lines) <= 3     # nothing dropped
-    assert size >= 100                                                                          # and still big
+    assert 80 <= size <= th.TITLE_MAX_SIZE                                                      # modest, never above the cap
 
 
 class Claude:
@@ -166,3 +166,18 @@ def test_many_chords_fit_in_the_panel_region():
 def test_unknown_chords_are_skipped_not_fatal(tmp_path):
     th.compose_thumbnail(solid((90, 90, 120)), "T", "A", tmp_path / "t.jpg", chord_labels=["N.C.", "Zzz"])      # no diagrams, no crash
     assert (tmp_path / "t.jpg").exists()
+
+
+def test_a_short_title_is_capped_not_blown_up(tmp_path):
+    from PIL import ImageDraw
+    font, lines, size = th._fit_title(ImageDraw.Draw(solid((0, 0, 0))), "DEAD FLOWERS", 600, 390, None)
+    assert size == th.TITLE_MAX_SIZE == 100
+
+
+def test_the_title_stays_left_of_the_chord_panel(tmp_path):
+    out = th.compose_thumbnail(solid((60, 60, 60)), "See Emily Play", "Pink Floyd", tmp_path / "t.jpg", chord_labels=["Am", "D", "G", "Em", "C"])
+    from PIL import Image as _I
+    with _I.open(out) as img:
+        # no near-white title pixels in the panel columns below the tag (the diagrams' own lines are grey, not pure white)
+        white = sum(1 for y in range(170, 330, 3) for x in range(700, 1240, 3) if min(img.getpixel((x, y))) > 250)
+    assert white < 15

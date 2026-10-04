@@ -146,9 +146,12 @@ def _wrap(draw, text: str, font, max_width: int) -> list[str]:
     return lines + [cur] if cur else lines
 
 
-def _fit_title(draw, text: str, max_width: int, max_height: int, font_path: str | None):
-    """The largest bold size (<= 210 px) at which the title fits in max_width x max_height on at most 3 lines."""
-    for size in range(210, 59, -6):
+TITLE_MAX_SIZE = 100            # owner, 2026-10-04: 210 then 140 were too big; Sorry Seems (86 px) is the model
+
+
+def _fit_title(draw, text: str, max_width: int, max_height: int, font_path: str | None, max_size: int = TITLE_MAX_SIZE):
+    """The largest bold size (<= max_size px) at which the title fits in max_width x max_height on at most 3 lines."""
+    for size in range(max_size, 59, -6):
         font = _bold_font(size, font_path)
         lines = _wrap(draw, text, font, max_width)
         if len(lines) <= 3 and len(lines) * size * 1.02 <= max_height and all(draw.textlength(l, font=font) <= max_width for l in lines):
@@ -176,7 +179,8 @@ def compose_thumbnail(
     draw = ImageDraw.Draw(bg)
 
     text = re.sub(r"\s+", " ", title or "").strip().upper()      # the whole title, never shortened
-    font, lines, size = _fit_title(draw, text, 780, 390, font_path)
+    # with the chord panel up there the title keeps to the space LEFT of it, so no diagram is hidden
+    font, lines, size = _fit_title(draw, text, 600 if has_chords else 780, 390, font_path)
     y = 175
     for line in lines:
         draw.text((50, y), line, font=font, fill=(255, 255, 255), stroke_width=max(6, size // 18), stroke_fill=(0, 0, 0))
