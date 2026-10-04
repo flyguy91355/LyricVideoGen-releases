@@ -143,9 +143,10 @@ def _rank_clean(flagged: dict, count: int) -> list[int]:
 
 
 def pick_song_image(anthropic_client, title: str, artist: str, lyrics: str, images_dir: Path) -> tuple[Path | None, float]:
-    """(the song's own picture that best shows what the song is about, the cost). The pictures were made from this song's lyrics and
-    are already paid for (owner, 2026-10-04: "we have a bird in the images for the song already"). The brightest, most contrasty
-    GRID_MAX are laid out in one numbered grid. Claude DESCRIBES each against a fixed checklist (alcohol, drugs, weapons, nudity,
+    """(the song's own picture that makes the best YouTube thumbnail, the cost). The pictures are the video's own backgrounds, made
+    from the song's lyrics and already paid for (owner, 2026-10-04: "we have a bird in the images for the song already"; then "just
+    pick the overall best one for the thumbnail, dont worry that it matches the song"). The brightest, most contrasty GRID_MAX are laid
+    out in one numbered grid. Claude DESCRIBES each against a fixed checklist (alcohol, drugs, weapons, nudity,
     readable text or signs, any instrument that is not a guitar, too dark) and picks the one that best shows the song's central image;
     the CODE then drops every picture with a flag, so an unsuitable one can never be chosen (a vodka bottle, then a piano, were picked
     when the rules were only part of the pick prompt). None -- and the caller generates a new picture -- when the song has none, no
@@ -172,14 +173,15 @@ def pick_song_image(anthropic_client, title: str, artist: str, lyrics: str, imag
     sheet.save(buffer, "JPEG", quality=82)
     flags = ", ".join(f'"{f}": [...]' for f in _FLAGS)
     prompt = (
-        f'These numbered pictures were made for the song "{title}" by {artist}. Lyrics:\n{lyrics[:2000]}\n\n'
+        f'These numbered pictures are backgrounds from a guitar play-along video of "{title}" by {artist}. Pick the ONE that would make the '
+        "best YouTube THUMBNAIL -- the one most likely to stop someone scrolling: bright and sharp, strong contrast, ONE clear eye-catching "
+        "subject that is fully visible, striking colour. The title will cover the LEFT third and chord diagrams the TOP-RIGHT quarter, so prefer "
+        "a subject in the lower-middle or lower-right, not cut off at an edge and not in those two areas. It does NOT have to match the song.\n"
         "Look at EVERY picture and list the numbers of the ones that show: alcohol or a bottle of drink; drugs or smoking; a weapon or "
         "violence or blood; nudity; ANY readable words, letters, numbers, logos, brand labels, neon or street signs (even partly cut off); a "
-        "piano, keyboard, drums or any instrument that is not a guitar; or that are too dark or murky to read as a thumbnail. Be strict.\n"
-        f'Then pick the ONE picture that best shows what the song is about (its central image or metaphor), with ONE strong, fully visible '
-        f"subject. The title will cover the LEFT third and chord diagrams the TOP-RIGHT quarter, so prefer a subject in the lower-middle or "
-        f"lower-right, not cut off at an edge and not in those two areas.\nReply with ONLY this JSON (a list may be empty): "
-        f'{{{flags}, "pick": <number>}}'
+        "piano, keyboard, drums or any instrument that is not a guitar; or that are too dark or murky to read as a thumbnail. Be strict -- "
+        "those can never be picked.\n"
+        f'Reply with ONLY this JSON (a list may be empty): {{{flags}, "pick": <number>}}'
     )
     try:
         response = anthropic_client.messages.create(

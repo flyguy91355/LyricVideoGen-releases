@@ -261,7 +261,7 @@ def test_pick_song_image_shows_claude_the_grid_and_the_checklist(tmp_path):
     assert picked is not None and cost > 0
     sent = claude.calls[0]["messages"][0]["content"]
     assert sent[0]["type"] == "image"
-    for needle in ("alcohol", "drugs", "weapon", "nudity", "readable words", "neon", "piano", "not a guitar", "too dark"):
+    for needle in ("alcohol", "drugs", "weapon", "nudity", "readable words", "neon", "piano", "not a guitar", "too dark", "THUMBNAIL", "does NOT have to match"):
         assert needle in sent[1]["text"]
     assert "no alcohol, drugs, smoking or weapons" in th.build_prompt_request("T", "A", "x")
 

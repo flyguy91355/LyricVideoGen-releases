@@ -340,10 +340,10 @@ schedule (`reserved_publish_datetimes()`, one claim per video), localizing each 
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
 Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
-Sonnet drops unsuitable ones (alcohol, text, non-guitar) and picks, uncropped; a new picture only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
+Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most striking, uncropped; a new picture only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
 word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
 soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
-`scripts/find_truncated_videos.py` (dry run; `--only`; `--jobs`) lists cut-short mp4s in every song and easychords folder,
+`scripts/find_truncated_videos.py` (dry run; `--only`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo remakes them); key_rollout and `_set_aside_videos` skip that name.
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
@@ -406,7 +406,7 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 ```
 
 `tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
-(per-user path constants redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
+(per-user path constants redirected; XDG_CACHE_HOME stays real): the suite
 never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
 Tests write only to pytest's `tmp_path`, never a fixed path (a leftover file caused a stale-cache bug).
