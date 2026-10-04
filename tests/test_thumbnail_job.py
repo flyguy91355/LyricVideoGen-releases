@@ -96,3 +96,25 @@ def test_pipeline_hook_respects_the_setting_and_never_raises(tmp_path, monkeypat
     assert len(called) == 1
     monkeypatch.setattr(job, "ensure_thumbnail", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     pipeline._make_thumbnail_after_render(tmp_path, SimpleNamespace(generate_thumbnails=True))     # swallowed
+
+
+def test_the_songs_own_chords_go_on_its_thumbnail_and_the_setting_turns_them_off(tmp_path, monkeypatch):
+    from lyricvideo.models import ChordEvent, ChordTrack
+    folder = tmp_path / "s"
+    make_song(folder)
+    song = job.load_song(folder / "lyrics_timed.json")
+    song.chord_track = ChordTrack(events=[ChordEvent(0.0, 2.0, "C"), ChordEvent(2.0, 4.0, "G")], bpm=100.0)
+    job.save_song(song, folder / "lyrics_timed.json") if hasattr(job, "save_song") else __import__("lyricvideo.models", fromlist=["save_song"]).save_song(song, folder / "lyrics_timed.json")
+    got = []
+
+    def fake(work_dir, client, token, *, title, artist, lyrics, chord_labels=None, **kw):
+        got.append(chord_labels)
+        (work_dir / THUMBNAIL_FILE).write_bytes(b"jpg")
+        from lyricvideo.thumbnail import ThumbnailResult
+        return ThumbnailResult(work_dir / THUMBNAIL_FILE, 0.0)
+
+    monkeypatch.setattr(job, "generate_thumbnail", fake)
+    job.ensure_thumbnail(folder, object(), "tok")
+    (folder / THUMBNAIL_FILE).unlink()
+    job.ensure_thumbnail(folder, object(), "tok", show_chords=False)
+    assert got == [["C", "G"], None]

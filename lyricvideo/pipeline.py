@@ -938,6 +938,7 @@ def _make_thumbnail_after_render(work_dir: Path, settings) -> None:
         path = ensure_thumbnail(
             work_dir, anthropic.Anthropic(), os.environ.get("REPLICATE_API_TOKEN", ""),
             font_path=getattr(settings, "font_path", None) or None,
+            show_chords=getattr(settings, "thumbnail_show_chords", True),
         )
         if path is not None:
             print(f"Thumbnail ready: {path.name}")

@@ -74,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     made = set_ok = failed = 0
     for name, folder, state in todo:
         try:
-            path = ensure_thumbnail(folder, client, token, font_path=getattr(settings, "font_path", None) or None)
+            path = ensure_thumbnail(folder, client, token, font_path=getattr(settings, "font_path", None) or None,
+                                    show_chords=settings.thumbnail_show_chords)
             if path is None:
                 print(f"  SKIP {name}: no thumbnail could be made")
                 failed += 1

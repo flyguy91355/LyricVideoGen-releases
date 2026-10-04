@@ -130,3 +130,39 @@ def test_a_picture_with_nothing_standing_out_is_just_zoomed():
     plain = solid((90, 90, 90))
     out = th.reframe_subject_right(plain)
     assert out.size[0] < 1280 and abs(out.size[0] / out.size[1] - 16 / 9) < 0.02
+
+
+def test_chord_panel_is_drawn_before_the_title_so_the_title_is_in_front(tmp_path, monkeypatch):
+    seen = {}
+    real = th.draw_chord_panel
+
+    def spy(canvas, labels, font_path):
+        region = canvas.crop((50, 170, 700, 420))                 # where the big title will be drawn
+        seen["white_before_title"] = sum(1 for px in region.getdata() if min(px) > 245)
+        return real(canvas, labels, font_path)
+
+    monkeypatch.setattr(th, "draw_chord_panel", spy)
+    th.compose_thumbnail(solid((90, 90, 120)), "See Emily Play", "Pink Floyd", tmp_path / "t.jpg", chord_labels=["Am", "D", "G", "Em"])
+    assert seen["white_before_title"] == 0                         # the title had not been drawn yet
+
+
+def test_chord_panel_paints_the_top_right_and_none_without_chords(tmp_path):
+    base = solid((60, 60, 60))
+    plain = th.draw_chord_panel(base, [], None)
+    assert plain is base
+    out = th.draw_chord_panel(base, ["C", "G", "Am", "F"], None)
+    box = out.crop((680, 36, 1240, 200))
+    assert any(px != (60, 60, 60) for px in box.getdata())
+    assert out.crop((0, 400, 600, 720)).getpixel((300, 300)) == (60, 60, 60)      # nothing elsewhere
+
+
+def test_many_chords_fit_in_the_panel_region():
+    labels = ["Gm7", "Em7", "Eb", "Gm", "Cm", "Am7", "D7", "Cm7", "F", "Bb", "Dm7", "F#", "Bbmaj7", "Ebmaj7", "D"]
+    out = th.draw_chord_panel(solid((10, 10, 10)), labels, None)
+    changed = [(x, y) for y in range(0, 720, 4) for x in range(0, 1280, 4) if out.getpixel((x, y)) != (10, 10, 10)]
+    assert changed and min(x for x, _ in changed) >= 600 and max(y for _, y in changed) <= 400 and max(x for x, _ in changed) <= 1245
+
+
+def test_unknown_chords_are_skipped_not_fatal(tmp_path):
+    th.compose_thumbnail(solid((90, 90, 120)), "T", "A", tmp_path / "t.jpg", chord_labels=["N.C.", "Zzz"])      # no diagrams, no crash
+    assert (tmp_path / "t.jpg").exists()

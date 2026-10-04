@@ -39,8 +39,18 @@ def _lyrics_of(work_dir: Path) -> str:
         return ""
 
 
+def _chord_labels(work_dir: Path) -> list[str]:
+    """Every chord of the folder's own saved chord track (an EASY folder: its capo shapes), in order of first appearance."""
+    try:
+        from .pipeline import ordered_unique_chords
+        return list(ordered_unique_chords(load_song(Path(work_dir) / "lyrics_timed.json").chord_track))
+    except Exception:
+        return []
+
+
 def ensure_thumbnail(
     work_dir: Path, anthropic_client, replicate_token: str, *, font_path: str | None = None, http_client=None,
+    show_chords: bool = True,
 ) -> Path | None:
     """The folder's thumbnail.jpg, made now if it has none; None when nothing could be made (missing title, no API keys, a
     failed image). Never raises. A folder that already has one keeps it (a Redo does not buy another)."""
@@ -54,21 +64,23 @@ def ensure_thumbnail(
             return None
         song_dir = original_song_dir(work_dir)
         if Path(song_dir) != work_dir:                      # an EASY CHORD version: its song's picture, its own tag
+            labels = _chord_labels(work_dir) if show_chords else None
             made = compose_from_saved_background(work_dir, song_dir, title=_title_and_artist(song_dir)[0] or title,
                                                  artist=artist or _title_and_artist(song_dir)[1], tag="EASY CHORDS",
-                                                 font_path=font_path)
+                                                 font_path=font_path, chord_labels=labels)
             if made is not None:
                 return made
-            if ensure_thumbnail(song_dir, anthropic_client, replicate_token, font_path=font_path, http_client=http_client) is None:
+            if ensure_thumbnail(song_dir, anthropic_client, replicate_token, font_path=font_path, http_client=http_client,
+                                show_chords=show_chords) is None:
                 return None
             return compose_from_saved_background(work_dir, song_dir, title=title, artist=artist, tag="EASY CHORDS",
-                                                 font_path=font_path)
+                                                 font_path=font_path, chord_labels=labels)
         if anthropic_client is None or not replicate_token:
             return None
         kwargs = {"http_client": http_client} if http_client is not None else {}
         return generate_thumbnail(
             work_dir, anthropic_client, replicate_token, title=title, artist=artist, lyrics=_lyrics_of(work_dir),
-            font_path=font_path, **kwargs,
+            font_path=font_path, chord_labels=_chord_labels(work_dir) if show_chords else None, **kwargs,
         ).path
     except Exception as e:
         log.warning("Could not make a thumbnail for %s: %s: %s", work_dir.name, type(e).__name__, e)

@@ -18,6 +18,8 @@ from pathlib import Path
 import httpx
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps, ImageStat
 
+from .chord_diagram import draw_single_chord_diagram
+from .chord_shapes import get_chord_shape
 from .imagery import generate_line_image
 
 THUMB_SIZE = (1280, 720)
@@ -83,7 +85,7 @@ def subject_centre(image: Image.Image) -> tuple[float, float]:
     return (sum(w * x for w, x, _y in top) / total / 96, sum(w * y for w, _x, y in top) / total / 54)
 
 
-def reframe_subject_right(image: Image.Image, zoom: float = 1.3, target_x: float = 0.72) -> Image.Image:
+def reframe_subject_right(image: Image.Image, zoom: float = 1.3, target_x: float = 0.72, target_y: float = 0.45) -> Image.Image:
     """Zooms in and shifts the crop so the picture's subject lands about `target_x` across (the right of the thumbnail, clear
     of the title) and a little above the middle; a subject on the left is mirrored over first. One already there is only zoomed."""
     img = image.convert("RGB")
@@ -93,7 +95,7 @@ def reframe_subject_right(image: Image.Image, zoom: float = 1.3, target_x: float
         img, cx = ImageOps.mirror(img), 1.0 - cx
     cw, ch = w / zoom, h / zoom
     left = min(max(cx * w - target_x * cw, 0), w - cw)
-    top = min(max(cy * h - 0.45 * ch, 0), h - ch)
+    top = min(max(cy * h - target_y * ch, 0), h - ch)
     return img.crop((int(left), int(top), int(left + cw), int(top + ch)))
 
 
@@ -105,6 +107,31 @@ def lift_if_dark(image: Image.Image) -> Image.Image:
         return image.convert("RGB")
     out = ImageEnhance.Brightness(image.convert("RGB")).enhance(min(1.8, 105.0 / max(mean, 30.0)))
     return ImageEnhance.Color(ImageEnhance.Contrast(out).enhance(1.1)).enhance(1.15)
+
+
+def draw_chord_panel(canvas: Image.Image, labels: list[str], font_path: str | None) -> Image.Image:
+    """Every chord of the song as a fingering diagram, in the top-right (owner, 2026-10-04: all of them), sized to fit: one
+    row up to 4 chords, two up to 8, more beyond. Drawn BEFORE the title, so a long title is in front of them."""
+    shapes = [(label, get_chord_shape(label)) for label in labels]
+    shapes = [(label, shape) for label, shape in shapes if shape is not None]
+    if not shapes:
+        return canvas
+    n = len(shapes)
+    cols = n if n <= 4 else (4 if n <= 8 else 5)
+    rows = -(-n // cols)
+    gap, region_w, region_h = 10, 600, 330
+    cw = min(160, (region_w - (cols - 1) * gap) // cols)
+    ch = int(cw * 1.28)
+    while rows * ch + (rows - 1) * gap > region_h and cw > 40:
+        cw -= 4
+        ch = int(cw * 1.28)
+    x0 = THUMB_SIZE[0] - 40 - (cols * cw + (cols - 1) * gap)
+    out = canvas.convert("RGBA")
+    font = font_path or next((f for f in _FONT_CANDIDATES if Path(f).exists()), "")
+    for i, (label, shape) in enumerate(shapes):
+        r, c = divmod(i, cols)
+        out.alpha_composite(draw_single_chord_diagram(shape, label, (cw, ch), font, panel_alpha=235), (x0 + c * (cw + gap), 36 + r * (ch + gap)))
+    return out.convert("RGB")
 
 
 def _wrap(draw, text: str, font, max_width: int) -> list[str]:
@@ -132,15 +159,20 @@ def _fit_title(draw, text: str, max_width: int, max_height: int, font_path: str 
 
 def compose_thumbnail(
     background: Image.Image, title: str, artist: str, out_path: Path, *, tag: str = "PLAY ALONG VIDEOS", font_path: str | None = None,
+    chord_labels: list[str] | None = None,
 ) -> Path:
     """1280x720 JPEG under MAX_BYTES: the picture, a dark gradient on the left for the text, the title big in white with a
     thick outline, the artist in yellow, the red tag top-left. Nothing is drawn in the bottom-right corner."""
-    bg = lift_if_dark(reframe_subject_right(background)).resize(THUMB_SIZE)
+    has_chords = bool(chord_labels) and any(get_chord_shape(label) is not None for label in chord_labels)
+    # with the chord panel up there the subject goes lower-right, under it
+    bg = lift_if_dark(reframe_subject_right(background, target_y=0.66 if has_chords else 0.45)).resize(THUMB_SIZE)
     shade = Image.new("L", THUMB_SIZE)
     sd = ImageDraw.Draw(shade)
     for x in range(THUMB_SIZE[0]):
         sd.line([(x, 0), (x, THUMB_SIZE[1])], fill=int(190 * max(0.0, 1 - x / 840)))
     bg = Image.composite(Image.new("RGB", THUMB_SIZE, (5, 8, 16)), bg, shade)
+    if has_chords:
+        bg = draw_chord_panel(bg, list(chord_labels), font_path)        # before the title: the title is in front
     draw = ImageDraw.Draw(bg)
 
     text = re.sub(r"\s+", " ", title or "").strip().upper()      # the whole title, never shortened
@@ -200,7 +232,7 @@ def write_background_prompt(anthropic_client, title: str, artist: str, lyrics: s
 
 def generate_thumbnail(
     work_dir: Path, anthropic_client, replicate_token: str, *, title: str, artist: str, lyrics: str,
-    candidates: int = 3, http_client=httpx, font_path: str | None = None,
+    candidates: int = 3, http_client=httpx, font_path: str | None = None, chord_labels: list[str] | None = None,
 ) -> ThumbnailResult:
     """Buys `candidates` pictures from one prompt, keeps the best-scoring as thumbnail_bg.png, composes thumbnail.jpg."""
     work_dir = Path(work_dir)
@@ -230,12 +262,13 @@ def generate_thumbnail(
     tmp.replace(png)
     for n in range(max(1, candidates)):
         (work_dir / f"thumbnail_candidate_{n}.png").unlink(missing_ok=True)
-    path = compose_thumbnail(data, title, artist, work_dir / THUMBNAIL_FILE, font_path=font_path)
+    path = compose_thumbnail(data, title, artist, work_dir / THUMBNAIL_FILE, font_path=font_path, chord_labels=chord_labels)
     return ThumbnailResult(path, cost, best[0])
 
 
 def compose_from_saved_background(
     work_dir: Path, source_dir: Path, *, title: str, artist: str, tag: str, font_path: str | None = None,
+    chord_labels: list[str] | None = None,
 ) -> Path | None:
     """A thumbnail for `work_dir` from the picture `source_dir` already chose (an EASY CHORD version uses its song's, with
     its own tag); None when `source_dir` has none."""
@@ -245,4 +278,4 @@ def compose_from_saved_background(
     with Image.open(background) as img:
         data = img.convert("RGB")
         data.load()
-    return compose_thumbnail(data, title, artist, Path(work_dir) / THUMBNAIL_FILE, tag=tag, font_path=font_path)
+    return compose_thumbnail(data, title, artist, Path(work_dir) / THUMBNAIL_FILE, tag=tag, font_path=font_path, chord_labels=chord_labels)
