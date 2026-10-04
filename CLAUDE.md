@@ -5,14 +5,12 @@ karaoke-style scrolling lyrics (forced-aligned to the real vocal stem) and a
 NOW/NEXT/timeline chord bar (chords detected directly from the audio, never a
 tab/chord sheet) composited over AI-generated Ken-Burns backgrounds that change
 per lyric line -- and per chord during instrumental gaps. `deep_review/` retries
-the flagged backlog (below). Specs/plans live in `docs/superpowers/` (the 9-06
-tab-PDF design is superseded by the 9-09 MP3-only merge; CustomTkinter Settings
-GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
+the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `docs/CLAUDE_HISTORY.md`.
 
 ## Running it
 
 - **Linux and Windows.** Launchers `run_playalongvideoproduction.sh`/`.bat` call the venv's own `python`, never
-  `source .venv/bin/activate` (HISTORY 9-09); `venv.py`'s `venv_python()` resolves `.venv/bin/python` vs
+  `source .venv/bin/activate`; `venv.py`'s `venv_python()` resolves `.venv/bin/python` vs
   `.venv/Scripts/python.exe` -- read every `.venv/bin/python` below that way. `.gitattributes`: `*.sh`/`.githooks/*`
   LF, `*.bat` CRLF.
 - **GUI** (`gui.py`, CustomTkinter; desktop icon or the launcher): pick an audio file -- title/artist/lyrics are
@@ -24,7 +22,7 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
   - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
     googleapiclient, tensorflow, crema (`tests/test_gui_perf_imports.py`) -- gui's `_LazyAnthropic` and `build()`
     wrapper, pipeline's lazy `anthropic` proxy, align's in-function torch import, assemble's `_load_moviepy`.
-  - Quit: X (`WM_DELETE_WINDOW` -> `_on_close_window`; tests invoke the registered Tcl callback, HISTORY 9-10) and
+  - Quit: X (`WM_DELETE_WINDOW` -> `_on_close_window`; tests invoke the registered Tcl callback) and
     Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
     Update runs (closing kills it; no resume). `_shut_down` withdraws the window at once, then destroys it; `_closing`
     stops new scans.
@@ -38,7 +36,7 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
     / No = regenerate all (each backed up like Redo) / Cancel (Esc, X). An erroring file is logged and skipped. In one
     Batch a folder already given to the SAME known artist's file is shared (two rips are never made or uploaded
     twice); any other artist gets its own folder as above. Existing stems -> `BatchItem.resume_stage="fetch_lyrics"`.
-    `release_memory()` (gc + Linux malloc_trim) after every song, pass or fail (RSS creep, HISTORY 9-18). The folder
+    `release_memory()` (gc + Linux malloc_trim) after every song, pass or fail (RSS creep). The folder
     path is never `.strip()`'d (`resolve_existing_folder()`, 9-10); the last folder lives in its own JSON
     (`load_last_batch_folder`/`save_last_batch_folder`) -- not a Settings field: `SettingsPanel.collect()` replaces
     `Settings` wholesale and would reset any field with no widget.
@@ -115,13 +113,13 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
    `held_before_video.json` (`REDO_STOPPED_REASON`) holds it until a render: a Redo that dies mid-run shows in
    Flagged with Render Anyway, never in Pending/Upload. MMS_FA knows only a-z and `'`:
    `_normalize_word_for_alignment` spells numbers out ("31" -> "thirtyone", "10,000" -> "tenthousand"), folds
-   accents, reads `&` as "and", else gives the `*` token (issue #3). Display text never changes.
+   accents, reads `&` as "and", else gives the `*` token. Display text never changes.
 5. **detect_chords** (`detect_chords.py`, `chord_theory.py`) -- `crema` (CNN/CRNN, ISC) on `no_vocals.wav`, collapsed
    to 5 qualities by `_simplify_chord_label()` (every pumpp `3567s` quality mapped explicitly; `minmaj7` -> minor
    triad); returns sharp labels and key "". Needs old TF/Keras/sklearn -- **`.venv` is Python 3.11**; see
    `requirements.txt` pins. A resume past this stage whose song has no chords runs it (and the key settle) first;
    `gui._stage_to_resume`: no chords -> detect_chords, chords + video -> render, chords + key decision -> images.
-   **Key check** (`key_decision.py`, HISTORY 9-26/9-27; owner: video and description MUST show the real key):
+   **Key check** (`key_decision.py`; owner: video and description MUST show the real key):
    `settle_song_key()` sets `chord_track.key` when the chord-based estimate (`key_estimate.py`) AGREES with a Claude
    second opinion among its candidates (`key_opinion.py`); on disagreement `key_research.py` (Haiku 4.5, web search <=2,
    ~4 cents) settles it only on high confidence + 2 cited sources (`source` "researched"; a Render Anyway resume of
@@ -142,7 +140,7 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
    `--apply`) asks only songs with no decision or one in review (else 'already-settled', no Claude call); a corrected
    song's video becomes `*.previous.mp4`, `easychords/` moves to `easychords_prior_<time>/` unless on YouTube; `--apply`
    then remakes it from images (`--no-render` or a failed remake holds for Render Anyway).
-   `scripts/add_key_note.py` puts `📌 Song key: X (not Y as shown in the video)` on live descriptions.
+   `scripts/add_key_note.py` adds `📌 Song key: X` notes to live descriptions.
 6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
    line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
    renders; a sliver adopts its neighbour's caption; `[Instrumental]` only for a chordless song), cached by content
@@ -172,11 +170,11 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
    FreeType faces across threads).
    - **Atomic output**: renders to `<name>.mp4.rendering` (temp audio `.rendering-audio.m4a` beside it, never the
      CWD), reads the picture length back (`_check_rendered_video`, ffmpeg stream copy), then `os.replace`s. A failed
-     or killed render keeps the previous video and never leaves a cut-short mp4 (issue #7); `.rendering*` leftovers
+     or killed render keeps the previous video and never leaves a cut-short mp4; `.rendering*` leftovers
      are never listed and are replaced next render. `rendered_stream_seconds(path)` -> (picture s, audio s), backed
      by `_frame_count_from_report()`: prefers ffmpeg's own `frame=` count, falling back to `time=` x the report's own
-     `fps` when a build (confirmed on 6.1.1-3ubuntu5) prints no `frame=` for a stream-copy-to-null pass -- else that
-     build refuses every video, cut short or not (issue #8, HISTORY 9-27). libx265 gets `-pix_fmt yuv420p -tag:v
+     `fps` when a build prints no `frame=` for a stream-copy-to-null pass -- else that
+     build refuses every video, cut short or not (issue #8). libx265 gets `-pix_fmt yuv420p -tag:v
      hvc1`. `AudioFileClip` is closed in a `finally`.
    - Backgrounds: `_BackgroundCache` (LRU of 4 keyed by the real file, pre-scaled). A missing key shows the nearest
      existing picture in timeline order (previous first), else any of the song's; an undecodable one warns once and
@@ -197,8 +195,7 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
      bell rings (`like_subscribe_state`, 4 s) + benefit line; in the count-in (donate
      spot) and the last `like_subscribe_lead_seconds` (10, under the donate label). Settings `show_like_subscribe`/etc.
    - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
-     (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()` (one misaligned word cannot claim
-     minutes, 9-09): past a line's plausible end "current" advances to the next line as an unsung preview (9-15),
+     (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()`: past a line's plausible end "current" advances to the next line as an unsung preview (9-15),
      blank after the last; previews show only `Settings.lyric_preview_lead_seconds` (3.0) ahead. `scroll_progress`
      uses `_plausible_line_end()`; word highlight keys on each word's start.
    - `layout.build_image_timeline()`: one segment per sung line; in gaps one per instrumental chord, short ones merged
@@ -277,7 +274,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   (`_apply_pass_mark_change`). Building a `SettingsPanel` is wrapped in `_suppress_settings_save` (`load_from()` fires
   `on_change` early; 9-11).
 - **SettingsPanel** (`settings_panel.py`; `~/.playalongvideoproduction/settings.json`): writes disk ONLY via Save
-  Settings (HISTORY 9-10). A field differing from `self._baseline` gets a ● and a bold+orange label
+  Settings. A field differing from `self._baseline` gets a ● and a bold+orange label
   (`_refresh_dirty_indicators`/`_dirty_fields`; only flipped labels are redrawn); Save shows an itemized `old → new`
   confirm, and a failed write (OSError) shows an error and stays unsaved; Discard reloads the baseline. gui's
   `self.settings` updates live, so this session's runs use the latest values. Each field shows its default
@@ -293,7 +290,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
 `requirements.txt` pins `moviepy>=1.0.3,<2.0` and `decorator<5.0,>=4.0.2` (moviepy 1.0.3's decorators silently
 break under decorator 5: fps resolves to `None`) -- never bump either without re-verifying rendered output.
 `.venv`'s Python 3.11 must be a real system install (`python3.11-tk`, deadsnakes), never `uv`'s standalone build:
-its Tk lacks Xft and breaks the GUI font (HISTORY 9-14).
+its Tk lacks Xft and breaks the GUI font.
 
 ## Update Available Feature
 
@@ -342,6 +339,9 @@ Public target -> uploaded Private with a future `publishAt`: `compute_next_publi
 schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe;
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
+Thumbnails (`thumbnail.py`/`thumbnail_job.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render (Haiku
+prompt + 2 flux guitar pictures, best kept as `thumbnail_bg.png`, full title in a condensed font; EASY reuses its song's
+picture), set after upload (`set_thumbnail`, 50 units, soft-fail; `thumbnail_set.json`); `scripts/backfill_thumbnails.py`.
 `scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo, with
 Easy Chords ticked for an EASY one, remakes them); key_rollout and `_set_aside_videos` skip that name.

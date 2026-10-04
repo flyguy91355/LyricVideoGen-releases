@@ -278,6 +278,16 @@ def update_video_description(youtube_client, video_id: str, description: str) ->
     youtube_client.videos().update(part="snippet", body={"id": video_id, "snippet": snippet}).execute()
 
 
+def set_thumbnail(youtube_client, video_id: str, image_path: Path) -> None:
+    """Sets the video's custom thumbnail (thumbnails.set, 50 quota units; needs a verified channel -- this one is). JPEG or
+    PNG; raises on any API error, like every call here -- callers decide whether that matters."""
+    from googleapiclient.http import MediaFileUpload
+
+    mime = "image/png" if str(image_path).lower().endswith(".png") else "image/jpeg"
+    media = MediaFileUpload(str(image_path), mimetype=mime)
+    youtube_client.thumbnails().set(videoId=video_id, media_body=media).execute()
+
+
 def is_quota_exceeded_error(exc: Exception) -> bool:
     """Whether exc is YouTube's daily API quota being exhausted (a 429
     RATE_LIMIT_EXCEEDED) -- distinct from any other HttpError, so callers

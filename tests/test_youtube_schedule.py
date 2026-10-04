@@ -1068,3 +1068,56 @@ def test_a_template_whose_top_starts_with_a_pin_is_not_taken_for_a_key_note():
     assert rerender_description(noted, pinned_template, []) == (
         f"📌 Tip jar: https://example.invalid/tip\n\nBody.\n\n{note}\n\nThanks!"
     )
+
+
+def _upload_settings(**extra):
+    return SimpleNamespace(
+        youtube_privacy="unlisted", youtube_category_id="26", youtube_made_for_kids=False, youtube_upload_times="15:00", **extra,
+    )
+
+
+def test_schedule_upload_sets_the_thumbnail_and_records_it(tmp_path, monkeypatch):
+    import json
+    from lyricvideo import thumbnail_job, youtube_schedule
+    work_dir = _make_song_work_dir(tmp_path)
+    thumb = work_dir / "thumbnail.jpg"
+    thumb.write_bytes(b"jpg")
+    monkeypatch.setattr(thumbnail_job, "ensure_thumbnail", lambda *a, **k: thumb)
+    sent = []
+    monkeypatch.setattr(youtube_schedule, "set_thumbnail", lambda client, vid, path: sent.append((vid, path)))
+    assert schedule_upload(_FakeYoutubeClient(video_id="vid9"), _FakeAnthropicClient(), work_dir, _upload_settings()) == "vid9"
+    assert sent == [("vid9", thumb)]
+    assert json.loads((work_dir / "thumbnail_set.json").read_text())["video_id"] == "vid9"
+
+
+def test_thumbnail_is_skipped_when_the_setting_is_off(tmp_path, monkeypatch):
+    from lyricvideo import thumbnail_job, youtube_schedule
+    work_dir = _make_song_work_dir(tmp_path)
+    monkeypatch.setattr(thumbnail_job, "ensure_thumbnail", lambda *a, **k: (_ for _ in ()).throw(AssertionError("made")))
+    monkeypatch.setattr(youtube_schedule, "set_thumbnail", lambda *a: (_ for _ in ()).throw(AssertionError("set")))
+    assert schedule_upload(_FakeYoutubeClient(video_id="v"), _FakeAnthropicClient(), work_dir,
+                           _upload_settings(generate_thumbnails=False)) == "v"
+
+
+def test_a_failing_thumbnail_never_fails_the_upload(tmp_path, monkeypatch):
+    from lyricvideo import thumbnail_job, youtube_schedule
+    work_dir = _make_song_work_dir(tmp_path)
+    thumb = work_dir / "thumbnail.jpg"
+    thumb.write_bytes(b"jpg")
+    monkeypatch.setattr(thumbnail_job, "ensure_thumbnail", lambda *a, **k: thumb)
+
+    def quota(*a):
+        raise RuntimeError("quotaExceeded")
+
+    monkeypatch.setattr(youtube_schedule, "set_thumbnail", quota)
+    assert schedule_upload(_FakeYoutubeClient(video_id="v2"), _FakeAnthropicClient(), work_dir, _upload_settings()) == "v2"
+    assert (work_dir / "youtube_state.json").exists()                  # the upload is recorded
+    assert not (work_dir / "thumbnail_set.json").exists()               # the backfill will retry it
+
+
+def test_no_thumbnail_made_means_nothing_is_set(tmp_path, monkeypatch):
+    from lyricvideo import thumbnail_job, youtube_schedule
+    work_dir = _make_song_work_dir(tmp_path)
+    monkeypatch.setattr(thumbnail_job, "ensure_thumbnail", lambda *a, **k: None)
+    monkeypatch.setattr(youtube_schedule, "set_thumbnail", lambda *a: (_ for _ in ()).throw(AssertionError("set")))
+    assert schedule_upload(_FakeYoutubeClient(video_id="v3"), _FakeAnthropicClient(), work_dir, _upload_settings()) == "v3"

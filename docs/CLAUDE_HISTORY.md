@@ -5193,3 +5193,12 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   show the song's first frame (image, lyrics, chord bar, chart) and the first chord to play, not a bare picture: `make_frame` now builds the
   real scene at song_t 0 in the count-in and reads the chord bar at the first non-"N" chord. Burned in, so not clickable; YouTube's own
   clickable Subscribe is an end screen, which only Studio can add. Songs made before this need a render-only Redo to get it.
+
+## HISTORY 10-4: custom thumbnails
+
+- Owner: YouTube was choosing the thumbnail (the app never set one). Researched what draws clicks (big bold 3-5 words, high contrast, one
+  subject, duration-badge corner clear, consistency) and chose: one generated GUITAR picture per song from its lyrics/gist (no piano, no people), the
+  FULL title in a bold condensed font ("dont condense titles ... change the font instead"), artist in yellow, red PLAY ALONG tag. Test run on
+  Blackbird/Free Bird/Stairway cost about 1.1 cents total; fixes after review: a dark pick is lifted, two candidates scored and the better kept,
+  prompt keeps the guitar right and off the bottom edge. `thumbnails.set` is 50 quota units (official docs); the upload sets it soft-fail and
+  `scripts/backfill_thumbnails.py` covers videos already live. Same day: render-only redo of all 105 pending videos for the Like/Subscribe look.

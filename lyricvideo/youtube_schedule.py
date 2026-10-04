@@ -43,7 +43,7 @@ from .key_decision import KeyNotConfirmed, confirmed_key_for_upload
 from .key_note import split_key_note, strip_song_key_line
 from .models import load_song
 from .pipeline import slugify
-from .youtube import reserved_publish_datetimes, upload_video
+from .youtube import reserved_publish_datetimes, set_thumbnail, upload_video
 from .youtube_metadata import (
     build_easy_chord_title, build_play_along_title, generate_video_metadata, is_valid_youtube_title,
 )
@@ -506,4 +506,29 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
             f"{work_dir.name} was uploaded as {video_id} but could not be recorded in {work_dir / STATE_FILENAME} "
             f"({type(e).__name__}: {e}) -- do not upload it again; fix the folder and record that id."
         ) from e
+    _set_thumbnail_soft(youtube_client, anthropic_client, work_dir, video_id, settings)
     return video_id
+
+
+def _set_thumbnail_soft(youtube_client, anthropic_client, work_dir: Path, video_id: str, settings) -> None:
+    """Makes the folder's thumbnail if it has none (thumbnail_job.py) and sets it on the video just uploaded (owner,
+    2026-10-04). NEVER raises: the video is already on YouTube, so a failed thumbnail only warns -- scripts/
+    backfill_thumbnails.py sets it later (a folder without thumbnail_set.json is retried there)."""
+    import os
+    from .thumbnail import THUMBNAIL_SET_FILE
+    from .thumbnail_job import ensure_thumbnail
+
+    if not getattr(settings, "generate_thumbnails", True):
+        return
+    try:
+        path = ensure_thumbnail(
+            work_dir, anthropic_client, os.environ.get("REPLICATE_API_TOKEN", ""),
+            font_path=getattr(settings, "font_path", None) or None,
+        )
+        if path is None:
+            log.warning("%s has no thumbnail; YouTube will pick one. Run scripts/backfill_thumbnails.py later.", work_dir.name)
+            return
+        set_thumbnail(youtube_client, video_id, path)
+        (Path(work_dir) / THUMBNAIL_SET_FILE).write_text(json.dumps({"video_id": video_id}), encoding="utf-8")
+    except Exception as e:
+        log.warning("Could not set the thumbnail of %s (%s): %s: %s", work_dir.name, video_id, type(e).__name__, e)

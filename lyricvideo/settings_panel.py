@@ -539,6 +539,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._multiline_text("support_description_text", "Description layout (blank = off)")
 
         self._section("Like & Subscribe")
+        self._check("generate_thumbnails", "Make a custom YouTube thumbnail for each video")
         self._check("show_like_subscribe", "Show Like / Subscribe buttons")
         self._check("like_subscribe_on_countdown", "Also show during the count-in")
         self._slider("like_subscribe_lead_seconds", "Show during the last...", 3, 30, 27, lambda v: f"{int(v)}s")

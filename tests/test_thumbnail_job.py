@@ -1,0 +1,98 @@
+import json
+from pathlib import Path
+
+from PIL import Image
+
+from lyricvideo import thumbnail_job as job
+from lyricvideo.models import LyricLine, Song, Word, save_song
+from lyricvideo.thumbnail import THUMBNAIL_BG_FILE, THUMBNAIL_FILE
+
+
+def make_song(folder: Path, title="Blackbird", artist="The Beatles"):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "song_info.json").write_text(json.dumps({"title": title, "artist": artist}), encoding="utf-8")
+    line = LyricLine(words=[Word(word="blackbird", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)
+    save_song(Song(title=title, audio_path="a.m4a", lines=[line]), folder / "lyrics_timed.json")
+
+
+def test_existing_thumbnail_is_kept_and_nothing_is_bought(tmp_path, monkeypatch):
+    make_song(tmp_path)
+    (tmp_path / THUMBNAIL_FILE).write_bytes(b"x")
+    monkeypatch.setattr(job, "generate_thumbnail", lambda *a, **k: (_ for _ in ()).throw(AssertionError("bought")))
+    assert job.ensure_thumbnail(tmp_path, object(), "tok") == tmp_path / THUMBNAIL_FILE
+
+
+def test_makes_one_from_the_folders_title_artist_and_lyrics(tmp_path, monkeypatch):
+    make_song(tmp_path)
+    seen = {}
+
+    def fake(work_dir, client, token, *, title, artist, lyrics, **kw):
+        seen.update(title=title, artist=artist, lyrics=lyrics)
+        (work_dir / THUMBNAIL_FILE).write_bytes(b"jpg")
+        from lyricvideo.thumbnail import ThumbnailResult
+        return ThumbnailResult(work_dir / THUMBNAIL_FILE, 0.01)
+
+    monkeypatch.setattr(job, "generate_thumbnail", fake)
+    assert job.ensure_thumbnail(tmp_path, object(), "tok") == tmp_path / THUMBNAIL_FILE
+    assert seen == {"title": "Blackbird", "artist": "The Beatles", "lyrics": "blackbird"}
+
+
+def test_missing_keys_or_title_make_nothing_and_never_raise(tmp_path):
+    make_song(tmp_path)
+    assert job.ensure_thumbnail(tmp_path, None, "tok") is None
+    assert job.ensure_thumbnail(tmp_path, object(), "") is None
+    assert job.ensure_thumbnail(tmp_path / "nowhere", object(), "tok") is None
+
+
+def test_a_failure_inside_is_swallowed(tmp_path, monkeypatch):
+    make_song(tmp_path)
+    monkeypatch.setattr(job, "generate_thumbnail", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("replicate down")))
+    assert job.ensure_thumbnail(tmp_path, object(), "tok") is None
+
+
+def test_easy_folder_reuses_its_songs_picture_with_no_purchase(tmp_path, monkeypatch):
+    song, easy = tmp_path / "blackbird", tmp_path / "blackbird" / "easychords"
+    make_song(song)
+    make_song(easy)
+    Image.new("RGB", (1280, 720), (200, 120, 60)).save(song / THUMBNAIL_BG_FILE)
+    monkeypatch.setattr(job, "generate_thumbnail", lambda *a, **k: (_ for _ in ()).throw(AssertionError("bought")))
+    out = job.ensure_thumbnail(easy, object(), "tok")
+    assert out == easy / THUMBNAIL_FILE and out.exists()
+
+
+def test_set_thumbnail_sends_the_file_to_the_video(tmp_path):
+    from lyricvideo.youtube import set_thumbnail
+    image = tmp_path / "t.jpg"
+    image.write_bytes(b"\xff\xd8\xff\xd9")
+    calls = {}
+
+    class Thumbs:
+        def set(self, **kw):
+            calls.update(kw)
+            return SimpleNamespaceExec()
+
+    class SimpleNamespaceExec:
+        def execute(self):
+            calls["executed"] = True
+
+    class Client:
+        def thumbnails(self):
+            return Thumbs()
+
+    set_thumbnail(Client(), "vid1", image)
+    assert calls["videoId"] == "vid1" and calls["executed"] and calls["media_body"].mimetype() == "image/jpeg"
+
+
+def test_pipeline_hook_respects_the_setting_and_never_raises(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from lyricvideo import pipeline
+    called = []
+    monkeypatch.setattr(job, "ensure_thumbnail", lambda *a, **k: called.append(a) or None)
+    pipeline._make_thumbnail_after_render(tmp_path, SimpleNamespace(generate_thumbnails=False))
+    pipeline._make_thumbnail_after_render(tmp_path, None)
+    assert called == []
+    monkeypatch.setattr(pipeline.anthropic, "Anthropic", lambda: object(), raising=False)
+    pipeline._make_thumbnail_after_render(tmp_path, SimpleNamespace(generate_thumbnails=True))
+    assert len(called) == 1
+    monkeypatch.setattr(job, "ensure_thumbnail", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    pipeline._make_thumbnail_after_render(tmp_path, SimpleNamespace(generate_thumbnails=True))     # swallowed

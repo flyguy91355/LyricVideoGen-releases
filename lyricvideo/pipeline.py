@@ -928,6 +928,23 @@ def _hold_for_key(work_dir: Path, final_path: Path, concern: str) -> None:
     raise HeldBeforeVideo(concern)
 
 
+def _make_thumbnail_after_render(work_dir: Path, settings) -> None:
+    """The video's custom thumbnail (thumbnail.py), made once beside it (a Redo or re-render keeps the one it has) when
+    Settings.generate_thumbnails is on and the keys are there. Never raises: a missing thumbnail is made at upload."""
+    if settings is None or not getattr(settings, "generate_thumbnails", True):
+        return
+    try:
+        from .thumbnail_job import ensure_thumbnail
+        path = ensure_thumbnail(
+            work_dir, anthropic.Anthropic(), os.environ.get("REPLICATE_API_TOKEN", ""),
+            font_path=getattr(settings, "font_path", None) or None,
+        )
+        if path is not None:
+            print(f"Thumbnail ready: {path.name}")
+    except Exception as e:
+        print(f"WARNING: no thumbnail made ({type(e).__name__}: {e}); one is made when the video is uploaded.")
+
+
 def _key_client():
     """A Claude client for the key's second opinion; None when there is no API key (the key then waits for the owner)."""
     try:
@@ -1658,6 +1675,7 @@ def run_pipeline(
         # gets its own EASY CHORD (capo) variant when this is on, rendered with the same Settings as this video; an
         # EASY version this song already has is remade, or set aside when it no longer matches the song (issue #7
         # review). Never raises: a problem there must never make this finished video look like it failed.
+        _make_thumbnail_after_render(work_dir, settings)
         _update_easy_version_after_render(work_dir, song, settings, font_path)
 
     if end_idx < STAGES.index("render"):

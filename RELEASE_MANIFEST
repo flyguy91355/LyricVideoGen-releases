@@ -77,6 +77,8 @@ lyricvideo/settings_panel.py
 lyricvideo/settings_preview.py
 lyricvideo/sync.py
 lyricvideo/text_clean.py
+lyricvideo/thumbnail.py
+lyricvideo/thumbnail_job.py
 lyricvideo/timing_gate.py
 lyricvideo/transcribe.py
 lyricvideo/update/__init__.py
@@ -102,6 +104,7 @@ run_playalongvideoproduction.sh
 scripts/add_key_note.py
 scripts/backfill_channel_organization.py
 scripts/backfill_support_overlay_description.py
+scripts/backfill_thumbnails.py
 scripts/cut_release.sh
 scripts/find_truncated_videos.py
 scripts/fix_playlist_data_20260923.py
@@ -193,6 +196,8 @@ tests/test_settings_preview.py
 tests/test_settle_keys_script.py
 tests/test_sync.py
 tests/test_text_clean.py
+tests/test_thumbnail.py
+tests/test_thumbnail_job.py
 tests/test_timing_gate.py
 tests/test_transcribe.py
 tests/test_unsung_leading_lines.py
