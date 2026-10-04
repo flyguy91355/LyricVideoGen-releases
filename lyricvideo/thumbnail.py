@@ -1,6 +1,6 @@
 """A YouTube thumbnail made for each video (owner, 2026-10-04): one generated image of a GUITAR in a scene drawn from what
 the song is about, with the song title and artist drawn big on top by code (an image model misspells words) and a red
-PLAY ALONG tag. The whole title is always shown, in a bold condensed font so a long one stays large. Layout from the owner's research of what draws clicks: 1280x720, one subject, 3-5 big bold words with an
+PLAY ALONG VIDEOS tag (the channel's name). The whole title is always shown, in a bold condensed font so a long one stays large. Layout from the owner's research of what draws clicks: 1280x720, one subject, 3-5 big bold words with an
 outline, high contrast (bright subject on a dark side), the bottom-right corner (YouTube's duration badge) kept clear.
 
 Three candidate images are bought (about 0.3 cent each) and the one with the better brightness/contrast/colour score is kept;
@@ -131,7 +131,7 @@ def _fit_title(draw, text: str, max_width: int, max_height: int, font_path: str 
 
 
 def compose_thumbnail(
-    background: Image.Image, title: str, artist: str, out_path: Path, *, tag: str = "PLAY ALONG", font_path: str | None = None,
+    background: Image.Image, title: str, artist: str, out_path: Path, *, tag: str = "PLAY ALONG VIDEOS", font_path: str | None = None,
 ) -> Path:
     """1280x720 JPEG under MAX_BYTES: the picture, a dark gradient on the left for the text, the title big in white with a
     thick outline, the artist in yellow, the red tag top-left. Nothing is drawn in the bottom-right corner."""

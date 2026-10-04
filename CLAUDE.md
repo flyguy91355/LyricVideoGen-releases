@@ -20,7 +20,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
   Song" resets the form; the work dir falls back to the file name until identify finishes. Left column: form/Generate/Redo/log/progress; right: YouTube status/Connect, "⚙ Settings",
   comment panels. Main window 1600x1000.
   - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
-    googleapiclient, tensorflow, crema (`tests/test_gui_perf_imports.py`) -- gui's `_LazyAnthropic` and `build()`
+    googleapiclient, tensorflow, crema -- gui's `_LazyAnthropic` and `build()`
     wrapper, pipeline's lazy `anthropic` proxy, align's in-function torch import, assemble's `_load_moviepy`.
   - Quit: X (`WM_DELETE_WINDOW` -> `_on_close_window`; tests invoke the registered Tcl callback) and
     Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
@@ -340,7 +340,7 @@ schedule (`reserved_publish_datetimes()`, one claim per video), localizing each 
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
 Thumbnails (`thumbnail.py`/`thumbnail_job.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render (Haiku
-prompt + 3 flux guitar pictures, best kept as `thumbnail_bg.png`, subject moved right, full title condensed; EASY reuses its song's
+prompt + 3 flux guitar pictures, best kept as `thumbnail_bg.png`, subject moved right, full title condensed, "PLAY ALONG VIDEOS" tag; EASY reuses its song's
 picture), set after upload (`set_thumbnail`, 50 units, soft-fail); `scripts/backfill_thumbnails.py`.
 `scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo, with
@@ -408,5 +408,5 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 `tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
 (per-user path constants and default arguments redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
 never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
-create their root with `_new_ctk_root(ctk)` (retries CTk()).
+create their root with `_new_ctk_root(ctk)`.
 Tests write only to pytest's `tmp_path`, never a fixed path (a leftover file caused a stale-cache bug).
