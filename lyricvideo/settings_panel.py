@@ -540,6 +540,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
 
         self._section("Like & Subscribe")
         self._check("generate_thumbnails", "Make a custom YouTube thumbnail for each video")
+        self._check("thumbnail_use_song_images", "Use one of the song's own pictures for it")
         self._check("thumbnail_show_chords", "Show the song's chord diagrams on the thumbnail")
         self._check("show_like_subscribe", "Show Like / Subscribe buttons")
         self._check("like_subscribe_on_countdown", "Also show during the count-in")

@@ -525,6 +525,7 @@ def _set_thumbnail_soft(youtube_client, anthropic_client, work_dir: Path, video_
             work_dir, anthropic_client, os.environ.get("REPLICATE_API_TOKEN", ""),
             font_path=getattr(settings, "font_path", None) or None,
             show_chords=getattr(settings, "thumbnail_show_chords", True),
+            use_song_images=getattr(settings, "thumbnail_use_song_images", True),
         )
         if path is None:
             log.warning("%s has no thumbnail; YouTube will pick one. Run scripts/backfill_thumbnails.py later.", work_dir.name)

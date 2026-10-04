@@ -9,7 +9,9 @@ its song's picture at no cost. Never raises into the caller's job: pipeline.py a
 
 from __future__ import annotations
 
+import base64
 import colorsys
+import io
 import re
 import tempfile
 from dataclasses import dataclass
@@ -20,7 +22,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps, ImageStat
 
 from .chord_diagram import draw_single_chord_diagram
 from .chord_shapes import get_chord_shape
-from .imagery import generate_line_image
+from .imagery import generate_line_image, is_fallback_image
 
 THUMB_SIZE = (1280, 720)
 THUMBNAIL_FILE = "thumbnail.jpg"
@@ -100,6 +102,75 @@ def reframe_subject_right(image: Image.Image, zoom: float = 1.3, target_x: float
     left = min(max(cx * w - target_x * cw, 0), w - cw)
     top = min(max(cy * h - target_y * ch, 0), h - ch)
     return img.crop((int(left), int(top), int(left + cw), int(top + ch)))
+
+
+GRID_MAX = 12                    # how many of a song's own pictures Claude is shown (the best-scoring ones)
+_PICK_RE = re.compile(r"PICK:\s*(\d+)", re.IGNORECASE)
+
+
+def _usable_song_images(images_dir: Path) -> list[Path]:
+    """The song's own generated pictures that are real (decodable, not the solid-colour placeholder)."""
+    found = []
+    for path in sorted(Path(images_dir).glob("*")):
+        if path.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+            continue
+        try:
+            with Image.open(path) as img:
+                img.load()
+                if img.size[0] >= 640 and not is_fallback_image(path):
+                    found.append(path)
+        except Exception:
+            continue
+    return found
+
+
+def pick_song_image(anthropic_client, title: str, artist: str, lyrics: str, images_dir: Path) -> tuple[Path | None, float]:
+    """(the song's own picture that best shows what the song is about, the cost). The pictures were made from this song's lyrics
+    and are already paid for (owner, 2026-10-04: "we have a bird in the images for the song already"). The brightest, most
+    contrasty GRID_MAX are laid out in one numbered grid and Claude picks the one that shows the song's central image best, bright
+    and clear. Falls back to the best-scoring one if Claude's answer cannot be read. (None, 0) when the song has under 3 usable pictures."""
+    paths = _usable_song_images(images_dir)
+    if len(paths) < 3:
+        return None, 0.0
+    scored = []
+    for path in paths:
+        with Image.open(path) as img:
+            scored.append((background_score(img), path))
+    scored.sort(key=lambda x: -x[0])
+    shortlist = [p for _s, p in scored[:GRID_MAX]]
+    cols, w, h = 4, 400, 225
+    rows = -(-len(shortlist) // cols)
+    sheet = Image.new("RGB", (cols * w, rows * h), (0, 0, 0))
+    draw = ImageDraw.Draw(sheet)
+    for i, path in enumerate(shortlist):
+        with Image.open(path) as img:
+            sheet.paste(img.convert("RGB").resize((w, h)), ((i % cols) * w, (i // cols) * h))
+        draw.rectangle([(i % cols) * w, (i // cols) * h, (i % cols) * w + 62, (i // cols) * h + 44], fill=(0, 0, 0))
+        draw.text(((i % cols) * w + 8, (i // cols) * h + 4), str(i), font=_bold_font(36), fill=(255, 255, 0))
+    buffer = io.BytesIO()
+    sheet.save(buffer, "JPEG", quality=80)
+    prompt = (
+        f'These are pictures made for the song "{title}" by {artist}. Lyrics:\n{lyrics[:2500]}\n\n'
+        "Pick the ONE picture that best shows what this song is about -- its central image or metaphor -- and would make someone who knows "
+        "the song recognise it. It must be bright and clear, with ONE strong subject and a simpler or darker left side (the title goes there). "
+        "Prefer a clearly visible subject over a dark or murky one. Reply with exactly: PICK: <number>"
+    )
+    try:
+        response = anthropic_client.messages.create(
+            model=PROMPT_MODEL, max_tokens=60, thinking={"type": "disabled"},
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(buffer.getvalue()).decode()}},
+                {"type": "text", "text": prompt},
+            ]}],
+        )
+    except Exception:
+        return shortlist[0], 0.0
+    text = "".join(getattr(b, "text", "") for b in response.content if getattr(b, "type", "") == "text")
+    usage = getattr(response, "usage", None)
+    cost = getattr(usage, "input_tokens", 0) * _HAIKU_IN + getattr(usage, "output_tokens", 0) * _HAIKU_OUT
+    match = _PICK_RE.search(text)
+    index = int(match.group(1)) if match else 0
+    return shortlist[index if 0 <= index < len(shortlist) else 0], cost
 
 
 def lift_if_dark(image: Image.Image) -> Image.Image:

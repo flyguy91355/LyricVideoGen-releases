@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from PIL import Image
 
 from lyricvideo import thumbnail as th
+from lyricvideo.render import FRAME_SIZE
 
 
 def solid(color, size=(1280, 720)):
@@ -219,3 +220,57 @@ def test_the_title_never_runs_into_a_dense_panel(tmp_path):
         x0 = th.chord_panel_geometry(9)[5]
         white = sum(1 for y in range(160, 260, 2) for x in range(x0 - 20, x0 + 40, 2) if min(img.getpixel((x, y))) > 250)
     assert white == 0
+
+
+def _song_images(folder, n=5, size=(1280, 720)):
+    folder.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        Image.new("RGB", size, (40 + 30 * i, 60 + 20 * i, 90)).save(folder / f"img{i}.png")
+    return folder
+
+
+class Eyes(Claude):
+    def create(self, **kw):
+        self.calls.append(kw)
+        usage = SimpleNamespace(input_tokens=2000, output_tokens=8)
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=self.text)], usage=usage)
+
+
+def test_pick_song_image_asks_claude_to_choose_among_the_songs_own_pictures(tmp_path):
+    folder = _song_images(tmp_path / "images", 5)
+    claude = Eyes("PICK: 1")
+    picked, cost = th.pick_song_image(claude, "Blackbird", "The Beatles", "blackbird singing", folder)
+    assert picked in th._usable_song_images(folder) and cost > 0
+    sent = claude.calls[0]["messages"][0]["content"]
+    assert sent[0]["type"] == "image" and "PICK" in sent[1]["text"]
+
+
+def test_an_unreadable_answer_falls_back_to_the_best_scoring_picture(tmp_path):
+    folder = _song_images(tmp_path / "images", 4)
+    picked, _ = th.pick_song_image(Eyes("no idea"), "T", "A", "x", folder)
+    assert picked is not None
+
+
+def test_too_few_or_placeholder_pictures_means_no_pick(tmp_path):
+    folder = _song_images(tmp_path / "images", 2)
+    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", folder) == (None, 0.0)
+    plain = tmp_path / "flat"
+    plain.mkdir()
+    for i in range(4):
+        Image.new("RGB", FRAME_SIZE, (30, 30, 40)).save(plain / f"p{i}.png")      # the app's solid placeholder
+    assert th.pick_song_image(Eyes("PICK: 0"), "T", "A", "x", plain) == (None, 0.0)
+
+
+def test_a_failed_vision_call_still_gives_a_picture(tmp_path):
+    class Down:
+        messages = None
+
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kw):
+            raise RuntimeError("down")
+
+    folder = _song_images(tmp_path / "images", 4)
+    picked, cost = th.pick_song_image(Down(), "T", "A", "x", folder)
+    assert picked is not None and cost == 0.0

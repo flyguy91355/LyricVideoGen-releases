@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .models import load_song, original_song_dir
 from .thumbnail import (
-    THUMBNAIL_FILE, compose_from_saved_background, generate_thumbnail, THUMBNAIL_BG_FILE,
+    THUMBNAIL_FILE, compose_from_saved_background, compose_thumbnail, generate_thumbnail, pick_song_image, THUMBNAIL_BG_FILE,
 )
 
 log = logging.getLogger("playalongvideoproduction")
@@ -57,7 +57,7 @@ def _chord_labels(work_dir: Path) -> list[str]:
 
 def ensure_thumbnail(
     work_dir: Path, anthropic_client, replicate_token: str, *, font_path: str | None = None, http_client=None,
-    show_chords: bool = True,
+    show_chords: bool = True, use_song_images: bool = True,
 ) -> Path | None:
     """The folder's thumbnail.jpg, made now if it has none; None when nothing could be made (missing title, no API keys, a
     failed image). Never raises. A folder that already has one keeps it (a Redo does not buy another)."""
@@ -78,12 +78,22 @@ def ensure_thumbnail(
             if made is not None:
                 return made
             if ensure_thumbnail(song_dir, anthropic_client, replicate_token, font_path=font_path, http_client=http_client,
-                                show_chords=show_chords) is None:
+                                show_chords=show_chords, use_song_images=use_song_images) is None:
                 return None
             return compose_from_saved_background(work_dir, song_dir, title=title, artist=artist,
                                                  font_path=font_path, chord_labels=labels, sub_tag=_easy_badge(work_dir))
         if anthropic_client is None or not replicate_token:
             return None
+        if use_song_images:
+            picked, _cost = pick_song_image(anthropic_client, title, artist, _lyrics_of(work_dir), work_dir / "images")
+            if picked is not None:
+                from PIL import Image
+                with Image.open(picked) as img:
+                    data = img.convert("RGB")
+                    data.load()
+                data.save(work_dir / THUMBNAIL_BG_FILE, "PNG")
+                return compose_thumbnail(data, title, artist, work_dir / THUMBNAIL_FILE, font_path=font_path,
+                                         chord_labels=_chord_labels(work_dir) if show_chords else None)
         kwargs = {"http_client": http_client} if http_client is not None else {}
         return generate_thumbnail(
             work_dir, anthropic_client, replicate_token, title=title, artist=artist, lyrics=_lyrics_of(work_dir),

@@ -83,6 +83,7 @@ class Settings:
                                                  # whole video (owner request, 2026-09-11: less
                                                  # intrusive, and catches a viewer near the end)
     generate_thumbnails: bool = True    # a custom thumbnail per video, made at render time and set on upload (thumbnail.py)
+    thumbnail_use_song_images: bool = True  # the thumbnail's picture is one of the song's OWN pictures (else a new one is generated)
     thumbnail_show_chords: bool = True  # every chord's fingering diagram on the thumbnail (title drawn in front of them)
     show_like_subscribe: bool = True    # Like / Subscribe call to action (render.draw_like_subscribe; owner, 2026-10-04)
     like_subscribe_lead_seconds: float = 10.0   # shown during the last this-many seconds, under the donate label

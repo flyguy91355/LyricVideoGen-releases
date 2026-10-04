@@ -133,3 +133,33 @@ def test_easy_thumbnail_says_easy_chords_and_the_capo(tmp_path, monkeypatch):
     assert job.ensure_thumbnail(easy, object(), "tok") is not None
     assert got["sub_tag"] == "EASY CHORDS · CAPO 2"
     assert job._easy_badge(tmp_path) == "EASY CHORDS"          # no marker / no fret: just EASY CHORDS
+
+
+def test_the_songs_own_picture_is_used_with_no_image_purchase(tmp_path, monkeypatch):
+    from lyricvideo import thumbnail as th
+    make_song(tmp_path)
+    for i in range(4):
+        (tmp_path / "images").mkdir(exist_ok=True)
+        Image.new("RGB", (1280, 720), (60 + 20 * i, 90, 120)).save(tmp_path / "images" / f"i{i}.png")
+    monkeypatch.setattr(job, "generate_thumbnail", lambda *a, **k: (_ for _ in ()).throw(AssertionError("bought")))
+    monkeypatch.setattr(job, "pick_song_image", lambda client, t, a, l, d: (sorted(Path(d).glob("*.png"))[1], 0.004))
+    out = job.ensure_thumbnail(tmp_path, object(), "tok")
+    assert out == tmp_path / THUMBNAIL_FILE and out.exists() and (tmp_path / THUMBNAIL_BG_FILE).exists()
+
+
+def test_no_song_pictures_falls_back_to_generating_and_the_setting_can_force_it(tmp_path, monkeypatch):
+    make_song(tmp_path)
+    monkeypatch.setattr(job, "pick_song_image", lambda *a: (None, 0.0))
+    made = []
+
+    def fake(work_dir, client, token, **kw):
+        made.append(1)
+        (work_dir / THUMBNAIL_FILE).write_bytes(b"jpg")
+        from lyricvideo.thumbnail import ThumbnailResult
+        return ThumbnailResult(work_dir / THUMBNAIL_FILE, 0.01)
+
+    monkeypatch.setattr(job, "generate_thumbnail", fake)
+    assert job.ensure_thumbnail(tmp_path, object(), "tok") is not None and made == [1]
+    (tmp_path / THUMBNAIL_FILE).unlink()
+    monkeypatch.setattr(job, "pick_song_image", lambda *a: (_ for _ in ()).throw(AssertionError("asked")))
+    assert job.ensure_thumbnail(tmp_path, object(), "tok", use_song_images=False) is not None and made == [1, 1]

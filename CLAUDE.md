@@ -339,12 +339,12 @@ Public target -> uploaded Private with a future `publishAt`: `compute_next_publi
 schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe;
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
-Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render (Sonnet
-prompt of the song's central image + 3 flux pictures, best kept as `thumbnail_bg.png`, full title (<=100 px; one word up to 150) left of the chord diagrams; EASY reuses its song's
-picture + green "EASY CHORDS · CAPO n" badge), set after upload (`set_thumbnail`, 50 units, soft-fail); `scripts/backfill_thumbnails.py`.
-`scripts/find_truncated_videos.py` (dry run; `--only <song>` or `<song>/easychords`, backslash ok; `--jobs`) lists cut-short mp4s in every song and easychords folder,
-marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo, with
-Easy Chords ticked for an EASY one, remakes them); key_rollout and `_set_aside_videos` skip that name.
+Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
+Sonnet picks from a numbered grid; else Sonnet writes a prompt + 3 flux pictures), kept as `thumbnail_bg.png`; full title (<=100 px, one
+word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
+soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
+`scripts/find_truncated_videos.py` (dry run; `--only <song>`; `--jobs`) lists cut-short mp4s in every song and easychords folder,
+marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo remakes them); key_rollout and `_set_aside_videos` skip that name.
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
 raises). Status label + Connect refresh on a
