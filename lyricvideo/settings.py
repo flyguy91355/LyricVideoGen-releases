@@ -34,6 +34,8 @@ class Settings:
     encoder: str = "libx264"
     crf: int = 20
     countdown_beats: int = 4  # beat count-in before the song starts, tempo-synced to its own BPM; 0 disables it
+    countdown_seconds: float = 4.0  # owner, 2026-10-04: AT LEAST this long whatever the tempo (4+ beats on the song's beat);
+                                    # 0 = exactly countdown_beats
 
     # --- Typography & colors (render.py) --------------------------------
     font_path: str = ""  # "" = auto-detect (today's pipeline.default_font())
@@ -179,6 +181,7 @@ class Settings:
             "support_overlay_text": self.support_overlay_text,
             "support_overlay_scale": self.support_overlay_size / 100.0,
             "support_overlay_lead_seconds": self.support_overlay_lead_seconds,
+            "countdown_seconds": self.countdown_seconds,
             "show_like_subscribe": self.show_like_subscribe,
             "like_subscribe_lead_seconds": self.like_subscribe_lead_seconds,
             "like_subscribe_on_countdown": self.like_subscribe_on_countdown,

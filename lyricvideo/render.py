@@ -810,7 +810,7 @@ def _like_subscribe_patch(
     x2 = left + w_like + gap
     fill = _LS_GREY if subscribed else (_LS_RED_PRESSED if pressed else _LS_RED)
     draw.rounded_rectangle([x2, top, x2 + w_sub, top + h], radius=radius, fill=(*fill, 235))
-    label_font = load_font(font_path, sc(_LS_FONT - 2)) if subscribed else font
+    label_font = load_font(font_path, sc(_LS_FONT - 5)) if subscribed else font
     draw.text((x2 + w_sub / 2, top + h / 2), "SUBSCRIBED" if subscribed else "Subscribe", font=label_font, fill=white, anchor="mm")
 
     x3 = x2 + w_sub + gap
@@ -829,7 +829,7 @@ def _like_subscribe_patch(
 
     if cursor_q is not None:
         progress = cursor_q / 24
-        end_x, end_y = x2 + w_sub * 0.86, top + h / 2 - sc(6)     # right end of the button: clear of the label
+        end_x, end_y = x2 + w_sub * 0.91, top + h / 2 - sc(10)     # right end of the button: clear of the label
         cx = end_x + (1 - progress) * sc(170)
         cy = end_y + (1 - progress) * sc(60)
         pts = [(0, 0), (0, 34), (9, 26), (16, 40), (22, 37), (15, 24), (27, 24)]

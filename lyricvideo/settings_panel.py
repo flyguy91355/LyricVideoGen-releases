@@ -480,8 +480,10 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._option("fps", "Frame rate", FPS_OPTIONS)
         self._option("encoder", "Encoder", ENCODERS)
         self._slider("crf", "Quality (CRF, lower = better)", 14, 32, 18, lambda v: f"{int(v)}")
-        self._slider("countdown_beats", "Countdown before song starts (beats)", 0, 8, 8,
+        self._slider("countdown_beats", "Countdown beats (0 = no countdown)", 0, 8, 8,
                      lambda v: "off" if int(v) == 0 else f"{int(v)} beats")
+        self._slider("countdown_seconds", "Countdown minimum length (0 = beats)", 0.0, 8.0, 16,
+                     lambda v: "fixed beats" if v < 0.25 else f"{v:.1f}s")
 
         self._section("Typography & colors")
         self.vars["font_path"] = tk.StringVar()

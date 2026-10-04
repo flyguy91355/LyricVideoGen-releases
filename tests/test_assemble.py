@@ -1187,3 +1187,42 @@ def test_like_subscribe_is_off_unless_asked(tmp_path, monkeypatch, test_font_pat
     calls["make_frame"](0.5)
     calls["make_frame"](3.5)
     assert seen["like"] == []
+
+
+def test_countdown_beat_count_aims_for_the_target_length_on_the_beat():
+    from lyricvideo.assemble import countdown_beat_count
+    beat = lambda bpm: 60.0 / bpm
+    assert countdown_beat_count(4, 4.0, beat(60)) == 4          # slow: 4 beats, exactly 4 s
+    assert countdown_beat_count(4, 4.0, beat(50)) == 4          # 4.8 s
+    assert countdown_beat_count(4, 4.0, beat(80)) == 6          # 4.5 s: 5 beats would be 3.75 s, under the minimum
+    assert countdown_beat_count(4, 4.0, beat(129)) == 9         # fast: 9 beats = 4.19 s
+    assert countdown_beat_count(4, 4.0, beat(200)) == 14        # 4.2 s
+    assert countdown_beat_count(4, 4.0, beat(30)) == 4          # never fewer than one bar
+    assert countdown_beat_count(4, 4.0, beat(2000)) == 16       # a mis-detected tempo is capped
+    for bpm in range(40, 220, 7):                               # the count-in is NEVER under the 4 s minimum
+        assert countdown_beat_count(4, 4.0, beat(bpm)) * beat(bpm) >= 4.0 - 1e-6
+    assert countdown_beat_count(6, 0.0, beat(129)) == 6         # length off: the fixed beats
+    assert countdown_beat_count(0, 4.0, beat(60)) == 0          # count-in off stays off
+
+
+def test_assemble_video_uses_the_computed_count_in_for_length_numbers_and_audio_delay(tmp_path, monkeypatch, test_font_path):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+    from lyricvideo import assemble as assemble_module
+    shown = []
+    real = assemble_module.draw_countdown
+    monkeypatch.setattr(assemble_module, "draw_countdown",
+                        lambda frame, n, font_path, **kw: (shown.append(n), real(frame, n, font_path, **kw))[1])
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    assemble_module.assemble_video(
+        lines, ChordTrack(bpm=60.0), tmp_path, tmp_path / "audio.wav", tmp_path / "final.mp4", font_path=test_font_path,
+        countdown_beats=4, countdown_seconds=4.0,
+    )
+    assert calls["duration"] == 2.0 + 4.0                        # 60 BPM -> 4 beats of 1 s before the 2 s song
+    assert calls["audio_set_start"] == 4.0
+    for t in (0.2, 1.2, 3.2):
+        calls["make_frame"](t)
+    assert shown == [4, 3, 1]

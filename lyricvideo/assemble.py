@@ -3,6 +3,7 @@ from __future__ import annotations
 import bisect
 import dataclasses
 import logging
+import math
 import os
 import re
 import subprocess
@@ -34,6 +35,19 @@ VideoClip = None
 
 FPS = 24
 DEFAULT_COUNTDOWN_BPM = 120.0  # used only if a song's own BPM wasn't detected (0 or missing)
+COUNTDOWN_MIN_BEATS, COUNTDOWN_MAX_BEATS = 4, 16   # the count-in's beat range when its length is set in seconds
+
+
+def countdown_beat_count(fixed_beats: int, target_seconds: float, beat_duration: float) -> int:
+    """How many beats the count-in has. `fixed_beats` 0 = no count-in. With `target_seconds` > 0 (owner, 2026-10-04: AT LEAST
+    4 s whatever the tempo, on the song's beat -- the Like/Subscribe click needs that long) the fewest beats that last
+    that long, never under a full bar of 4: a slow song gets 4, a fast one more (129 BPM -> 9). Capped at 16 only so a
+    mis-detected tempo cannot make an endless count. target 0 = the fixed beat count."""
+    if fixed_beats <= 0:
+        return 0
+    if target_seconds <= 0 or beat_duration <= 0:
+        return fixed_beats
+    return max(COUNTDOWN_MIN_BEATS, min(COUNTDOWN_MAX_BEATS, math.ceil(target_seconds / beat_duration - 1e-9)))
 
 # Decoded, frame-sized backgrounds kept at once. A frame needs at most the current image, the outgoing one during a
 # crossfade and the countdown's; access follows the timeline, so a small LRU never re-decodes in practice, while
@@ -334,6 +348,7 @@ def assemble_video(
     chord_legend_scale: float = 1.0,
     chord_diagram_panel_alpha: int = 235,
     countdown_beats: int = 4,
+    countdown_seconds: float = 0.0,
     min_hold_seconds: float = 2.0,
     image_transition_seconds: float = 0.25,
     lyric_preview_lead_seconds: float = 3.0,
@@ -363,6 +378,7 @@ def assemble_video(
     # 2026-09-10: "should count down 4, and be in tempo with the song").
     bpm = chord_track.bpm if chord_track.bpm and chord_track.bpm > 0 else DEFAULT_COUNTDOWN_BPM
     beat_duration = 60.0 / bpm
+    countdown_beats = countdown_beat_count(countdown_beats, countdown_seconds, beat_duration)   # the count actually used
     countdown_duration = countdown_beats * beat_duration
 
     get_image = _BackgroundCache(

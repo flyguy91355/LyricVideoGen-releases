@@ -189,11 +189,12 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
      hand-picked Em7 022030. `chord_diagram._legend_layout()` sizes from the chord count: <=2 rows, <=0.35h including
      its top margin, never past `Settings.chord_legend_size`; panel opacity `chord_diagram_panel_alpha` (235); "Nfr"
      sits left of the low-E string. `Settings.show_chord_legend` toggles it.
-   - Count-in: `Settings.countdown_beats` (4; 0 off) beats of `60/bpm` (120 if undetected) over the song's FIRST FRAME
+   - Count-in: `Settings.countdown_beats` (4; 0 off) beats of `60/bpm` (120 if undetected), AT LEAST `countdown_seconds` (4 s:
+     `countdown_beat_count`, 4-16 beats, 129 BPM -> 9) over the song's FIRST FRAME
      (scene at 0 on a real image, `_first_available_image_key()`; chord bar/chart at the first non-N chord) with
      `render.draw_countdown()`. `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`).
    - Like/Subscribe (`render.draw_like_subscribe`, 10-4): Like pill, red Subscribe, bell; a cursor clicks it -> SUBSCRIBED,
-     bell rings (`like_subscribe_state`, 4 s, sped up to fit a short count-in) + benefit line; in the count-in (donate
+     bell rings (`like_subscribe_state`, 4 s) + benefit line; in the count-in (donate
      spot) and the last `like_subscribe_lead_seconds` (10, under the donate label). Settings `show_like_subscribe`/etc.
    - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
      (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()` (one misaligned word cannot claim
@@ -208,9 +209,8 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
    - `render.draw_support_overlay()`: `Settings.support_overlay_text` (blank = off) in the last
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
      `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
-     -- never clickable. Order HISTORY 9-29: description, then a key note if any, then tip/thank-you.
-     `scripts/update_support_description.py` (`--dry-run`) re-renders into this order, rewriting any body under
-     `READY_CHARS` (200), skipping what it can't safely convert.
+     -- never clickable. Order: description, key note, tip/thank-you (9-29).
+     `scripts/update_support_description.py` (`--dry-run`) re-renders into this order (bodies under `READY_CHARS`, 200).
 
 ## EASY CHORD versions
 
