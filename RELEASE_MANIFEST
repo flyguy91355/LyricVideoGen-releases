@@ -159,6 +159,7 @@ tests/test_key_rollout.py
 tests/test_layout.py
 tests/test_library_preview.py
 tests/test_library_session.py
+tests/test_like_subscribe.py
 tests/test_lyric_accuracy.py
 tests/test_lyric_arbiter.py
 tests/test_lyric_audio_match.py

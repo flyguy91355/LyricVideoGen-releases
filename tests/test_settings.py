@@ -172,6 +172,10 @@ def test_render_kwargs_maps_resolution_and_colors():
         "support_overlay_text": "",
         "support_overlay_scale": 1.0,
         "support_overlay_lead_seconds": 20.0,
+        "show_like_subscribe": True,
+        "like_subscribe_lead_seconds": 10.0,
+        "like_subscribe_on_countdown": True,
+        "like_subscribe_text": "New Play Along songs every day",
     }
 
 

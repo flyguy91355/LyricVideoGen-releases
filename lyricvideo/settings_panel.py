@@ -536,6 +536,12 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._slider("support_overlay_lead_seconds", "Show during the last...", 5, 60, 55, lambda v: f"{int(v)}s")
         self._multiline_text("support_description_text", "Description layout (blank = off)")
 
+        self._section("Like & Subscribe")
+        self._check("show_like_subscribe", "Show Like / Subscribe buttons")
+        self._check("like_subscribe_on_countdown", "Also show during the count-in")
+        self._slider("like_subscribe_lead_seconds", "Show during the last...", 3, 30, 27, lambda v: f"{int(v)}s")
+        self._text("like_subscribe_text", "Line under the buttons (blank = none)")
+
         self._section("Chord detection")
         self._check("snap_chords_to_key", "Bias detected chords toward the song key")
         self._check("prefer_flats", "Use flats in flat keys (Bb instead of A#)")

@@ -80,6 +80,10 @@ class Settings:
                                                  # many seconds before the song ends -- not the
                                                  # whole video (owner request, 2026-09-11: less
                                                  # intrusive, and catches a viewer near the end)
+    show_like_subscribe: bool = True    # Like / Subscribe call to action (render.draw_like_subscribe; owner, 2026-10-04)
+    like_subscribe_lead_seconds: float = 10.0   # shown during the last this-many seconds, under the donate label
+    like_subscribe_on_countdown: bool = True    # also during the count-in, in the donate label's spot
+    like_subscribe_text: str = "New Play Along songs every day"   # the benefit line under the buttons ("" = none)
     support_description_text: str = ""  # "" = the YouTube description is left as the AI wrote it -- independent of
                                          # support_overlay_text. A small TEMPLATE (youtube_schedule.render_description):
                                          # text ABOVE the song description, the marker {description}, text BELOW;
@@ -175,6 +179,10 @@ class Settings:
             "support_overlay_text": self.support_overlay_text,
             "support_overlay_scale": self.support_overlay_size / 100.0,
             "support_overlay_lead_seconds": self.support_overlay_lead_seconds,
+            "show_like_subscribe": self.show_like_subscribe,
+            "like_subscribe_lead_seconds": self.like_subscribe_lead_seconds,
+            "like_subscribe_on_countdown": self.like_subscribe_on_countdown,
+            "like_subscribe_text": self.like_subscribe_text,
         }
 
     def save(self, path: Path = CONFIG_FILE) -> None:

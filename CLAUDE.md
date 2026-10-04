@@ -189,9 +189,12 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
      hand-picked Em7 022030. `chord_diagram._legend_layout()` sizes from the chord count: <=2 rows, <=0.35h including
      its top margin, never past `Settings.chord_legend_size`; panel opacity `chord_diagram_panel_alpha` (235); "Nfr"
      sits left of the low-E string. `Settings.show_chord_legend` toggles it.
-   - Count-in: `Settings.countdown_beats` (4; 0 off) beats of `60/bpm` (120 if undetected) on a guaranteed-real
-     background (`_first_available_image_key()`, never `fallback_color`) under `render.draw_countdown()`.
-     `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`); the audio is delayed to match.
+   - Count-in: `Settings.countdown_beats` (4; 0 off) beats of `60/bpm` (120 if undetected) over the song's FIRST FRAME
+     (scene at 0 on a real image, `_first_available_image_key()`; chord bar/chart at the first non-N chord) with
+     `render.draw_countdown()`. `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`).
+   - Like/Subscribe (`render.draw_like_subscribe`, 10-4): Like pill, red Subscribe, bell; a cursor clicks it -> SUBSCRIBED,
+     bell rings (`like_subscribe_state`, 4 s, sped up to fit a short count-in) + benefit line; in the count-in (donate
+     spot) and the last `like_subscribe_lead_seconds` (10, under the donate label). Settings `show_like_subscribe`/etc.
    - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
      (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()` (one misaligned word cannot claim
      minutes, 9-09): past a line's plausible end "current" advances to the next line as an unsung preview (9-15),
@@ -206,9 +209,8 @@ GUI 9-09). History: `docs/CLAUDE_HISTORY.md`.
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
      `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
      -- never clickable. Order HISTORY 9-29: description, then a key note if any, then tip/thank-you.
-     `scripts/update_support_description.py` (`--dry-run`) re-renders into
-     this order, rewriting any body under `READY_CHARS` (200), skipping what it can't safely convert
-     (`backfill_support_overlay_description.py` retired).
+     `scripts/update_support_description.py` (`--dry-run`) re-renders into this order, rewriting any body under
+     `READY_CHARS` (200), skipping what it can't safely convert.
 
 ## EASY CHORD versions
 
@@ -246,7 +248,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
 ## GUI lists, panels and Settings
 
 - **Song lists** (Redo / Upload / Pending / EASY CHORD / Flagged): each is ONE `ttk.Treeview` (`gui._SongListView`,
-  dark via `_song_list_font`; Windows uses 'clam', whose colors 'vista' ignores) in a section starting CLOSED
+  dark via `_song_list_font`; Windows uses 'clam') in a section starting CLOSED
   (`_make_collapsible_section`, `SONG_LIST_HEIGHT`; never nest a `CTkScrollableFrame`). One Watch / ✕ Remove pair per
   list acts on the highlighted row (double-click Watches); Remove hides it (`_drop_list_row`, no rescan), files
   untouched. Filled on first expand by one non-daemon scanner thread (`_refresh_song_list` -> `_start_list_load`;
@@ -379,8 +381,7 @@ atomic writes (`youtube_state.atomic_write_text`); an unreadable one is moved to
 paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` keeps exactly one, first.
 `scripts/backfill_channel_organization.py` (loads `.env`; stops on quota; `--dry-run`, `--only`, `--key-notes`
 [default `scripts/key_notes_2026-09-26.json`]/`--no-key-notes`, `--fix-playlist-descriptions` backing up to
-`reports/`) applies this to older uploads; `fix_playlist_data_20260923.py` (`--dry-run`) drops non-`is_easy_key` songs.
-Live OAuth, comment and engagement posting have run against the real channel (9-18).
+`reports/`) applies this to older uploads.
 
 ## deep_review
 
@@ -407,6 +408,5 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 `tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
 (per-user path constants and default arguments redirected; XDG_CACHE_HOME and GIT_CONFIG_GLOBAL stay real): the suite
 never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
-create their root with `_new_ctk_root(ctk)` (retries CTk()). Some self-skip on
-Windows (trailing-space, symlinks, POSIX perms). Align tests need FFmpeg's shared DLLs on PATH (torchcodec).
+create their root with `_new_ctk_root(ctk)` (retries CTk()).
 Tests write only to pytest's `tmp_path`, never a fixed path (a leftover file caused a stale-cache bug).

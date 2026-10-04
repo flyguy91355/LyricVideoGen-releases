@@ -5185,3 +5185,11 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   `web_search_20250305`, <=2 searches; Haiku takes no `effort`) and confirms only a high-confidence answer with >=2 cited sources.
   Measured $0.042 for one song (Knocks Me Off My Feet: chords C, memory F, sources C). `settle_keys.py --apply --only <slug>` also makes
   the video of a song held for its key once it is confirmed. Owner: "i dont want any songs in review if they dont have to be".
+
+## HISTORY 10-4: Like/Subscribe overlay and a real first frame in the count-in
+
+- Owner: put like/subscribe in the count-in and the last 10 s of every new video, under the donate label; researched the common look (red Subscribe,
+  white Like/bell, a cursor click to SUBSCRIBED) and chose it plus the line "New Play Along songs every day". Owner then asked that the count-in
+  show the song's first frame (image, lyrics, chord bar, chart) and the first chord to play, not a bare picture: `make_frame` now builds the
+  real scene at song_t 0 in the count-in and reads the chord bar at the first non-"N" chord. Burned in, so not clickable; YouTube's own
+  clickable Subscribe is an end screen, which only Studio can add. Songs made before this need a render-only Redo to get it.

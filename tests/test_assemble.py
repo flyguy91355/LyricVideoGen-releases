@@ -649,7 +649,7 @@ def test_assemble_video_countdown_disabled_matches_old_behavior(tmp_path, monkey
     assert "audio_set_start" not in calls  # CompositeAudioClip path never touched
 
 
-def test_assemble_video_frame_during_countdown_uses_draw_countdown_not_the_scene(
+def test_assemble_video_frame_during_countdown_shows_the_first_frame_under_the_countdown(
     tmp_path, monkeypatch, test_font_path,
 ):
     calls = {}
@@ -692,7 +692,7 @@ def test_assemble_video_frame_during_countdown_uses_draw_countdown_not_the_scene
     calls["make_frame"](0.5)
 
     assert countdown_calls == [3]
-    assert scene_calls == []
+    assert scene_calls == [True]    # the song's first frame (image, lyrics, chord bar) is under the count-in number
 
 
 def test_assemble_video_frame_after_countdown_uses_song_relative_time(tmp_path, monkeypatch, test_font_path):
@@ -1130,3 +1130,60 @@ def test_frame_count_from_report_still_raises_when_neither_field_is_present():
     with pytest.raises(RuntimeError, match="Could not read back"):
         # time= with no fps anywhere in the report -- nothing to multiply it by
         _frame_count_from_report(Path("song.mp4"), 0, "size=N/A time=00:02:32.58 bitrate=N/A speed=3.96e+03x\n")
+
+
+def _spy_frame_draws(monkeypatch, tmp_path, test_font_path, chord_track, **kwargs):
+    calls = {}
+    FakeAudioClip, FakeVideoClip = _fake_clips(calls)
+    monkeypatch.setattr("lyricvideo.assemble.AudioFileClip", lambda path: FakeAudioClip())
+    monkeypatch.setattr("lyricvideo.assemble.VideoClip", FakeVideoClip)
+    monkeypatch.setattr("lyricvideo.assemble.CompositeAudioClip", lambda clips: clips[0])
+    from lyricvideo import assemble as assemble_module
+
+    seen = {"bar": [], "like": [], "support": []}
+    real_bar, real_like = assemble_module.draw_chord_bar, assemble_module.draw_like_subscribe
+
+    def bar(frame, track, t, font_path, **kw):
+        seen["bar"].append(t)
+        return real_bar(frame, track, t, font_path, **kw)
+
+    def like(frame, t, window, font_path, **kw):
+        seen["like"].append((round(t, 2), window, kw.get("support_text", "")))
+        return real_like(frame, t, window, font_path, **kw)
+
+    monkeypatch.setattr(assemble_module, "draw_chord_bar", bar)
+    monkeypatch.setattr(assemble_module, "draw_like_subscribe", like)
+    lines = [LyricLine(words=[Word(word="hi", start_time=0.0, end_time=1.0)], start_time=0.0, end_time=1.0)]
+    assemble_module.assemble_video(
+        lines, chord_track, tmp_path, tmp_path / "audio.wav", tmp_path / "final.mp4", font_path=test_font_path, **kwargs,
+    )
+    return calls, seen
+
+
+def test_countdown_shows_the_first_real_chord_not_a_leading_no_chord(tmp_path, monkeypatch, test_font_path):
+    track = ChordTrack(events=[ChordEvent(0.0, 0.5, "N"), ChordEvent(0.5, 1.5, "G"), ChordEvent(1.5, 2.0, "D")], bpm=120.0)
+    calls, seen = _spy_frame_draws(monkeypatch, tmp_path, test_font_path, track, countdown_beats=4)
+    calls["make_frame"](0.5)       # inside the count-in
+    calls["make_frame"](2.5)       # song_t = 0.5, after it
+    assert seen["bar"] == [0.5, 0.5]
+
+
+def test_like_subscribe_in_the_countdown_and_the_last_seconds_only(tmp_path, monkeypatch, test_font_path):
+    track = ChordTrack(events=[ChordEvent(0.0, 2.0, "G")], bpm=120.0)
+    calls, seen = _spy_frame_draws(
+        monkeypatch, tmp_path, test_font_path, track, countdown_beats=4, show_like_subscribe=True,
+        like_subscribe_lead_seconds=1.0, like_subscribe_text="More", support_overlay_text="Support",
+        support_overlay_lead_seconds=2.0,
+    )
+    calls["make_frame"](0.5)       # count-in (2 s)
+    calls["make_frame"](2.5)       # song_t 0.5 of a 2 s song: not yet within the last 1 s
+    calls["make_frame"](3.5)       # song_t 1.5: inside the last 1 s
+    assert seen["like"] == [(0.5, 2.0, ""), (0.5, 1.0, "Support")]
+
+
+def test_like_subscribe_is_off_unless_asked(tmp_path, monkeypatch, test_font_path):
+    track = ChordTrack(events=[ChordEvent(0.0, 2.0, "G")], bpm=120.0)
+    calls, seen = _spy_frame_draws(monkeypatch, tmp_path, test_font_path, track, countdown_beats=4)
+    calls["make_frame"](0.5)
+    calls["make_frame"](3.5)
+    assert seen["like"] == []

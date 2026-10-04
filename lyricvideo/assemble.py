@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import logging
 import os
 import re
@@ -17,7 +18,7 @@ from .layout import ImageSegment, build_image_timeline, build_scene
 from .models import ChordTrack, LyricLine, current_chord_at
 from .render import (
     ACCENT_COLOR, DIM_TEXT_COLOR, FRAME_SIZE, apply_ken_burns, crossfade_backgrounds, draw_chord_bar, draw_countdown,
-    draw_scene, draw_support_overlay, ken_burns_preset_for_key,
+    draw_like_subscribe, draw_scene, draw_support_overlay, ken_burns_preset_for_key,
 )
 from .render import clear_overlay_caches as _clear_render_overlay_caches
 
@@ -339,6 +340,10 @@ def assemble_video(
     support_overlay_text: str = "",
     support_overlay_scale: float = 1.0,
     support_overlay_lead_seconds: float = 20.0,
+    show_like_subscribe: bool = False,
+    like_subscribe_lead_seconds: float = 10.0,
+    like_subscribe_on_countdown: bool = True,
+    like_subscribe_text: str = "",
     capo: int | None = None,
     key_label: str | None = None,
 ) -> None:
@@ -406,36 +411,27 @@ def assemble_video(
             countdown_key_cache["key"] = _first_available_image_key(image_dir, scene.image_key)
         return countdown_key_cache["key"]
 
-    def make_frame(T: float):
-        # T is the OUTER video's own timeline, which runs countdown_duration
-        # longer than the song itself -- song_t < 0 means we're still in the
-        # lead-in, frozen on the real first moment's own background
-        # (progress=0.0, i.e. the Ken Burns pan's own starting position, so
-        # there's no visual jump the instant the real content begins right
-        # after), guaranteed to be a real generated image, never a flat
-        # placeholder color.
-        song_t = T - countdown_duration
-        if song_t < 0:
-            countdown_key = countdown_image_key()
-            if countdown_key is not None:
-                start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(countdown_key)
-                bg = apply_ken_burns(
-                    get_image(countdown_key), 0.0,
-                    start_x, start_y, end_x, end_y, zoom_start, zoom_end,
-                    frame_size=frame_size,
-                )
-            else:
-                bg = Image.new("RGB", frame_size, fallback_color)
-            beat_index = min(countdown_beats - 1, int(T / beat_duration))
-            beats_remaining = countdown_beats - beat_index
-            frame = draw_countdown(bg, beats_remaining, font_path, frame_size=frame_size, accent_color=accent_color)
-            return np.array(frame)
+    first_chord_start = next((e.start for e in chord_track.events if e.label not in ("N", "X")), 0.0)
 
+    def make_frame(T: float):
+        # T is the OUTER video's own timeline, which runs countdown_duration longer than the song itself -- song_t < 0
+        # means we're still in the count-in (owner, 2026-10-04: show the song's FIRST FRAME there -- image, lyrics,
+        # chord bar, chord chart -- not a bare picture): the frame is the song's real moment 0 (Ken Burns at its starting
+        # position, so there's no visual jump the instant the song begins), on a guaranteed-real background, with the
+        # countdown number and the Like / Subscribe call to action over it. No support overlay then.
+        song_t = T - countdown_duration
+        in_countdown = song_t < 0
+        if in_countdown:
+            song_t = 0.0
         scene = build_scene(
             lines, song_t, chord_track=chord_track, audio_duration=duration,
             image_timeline=image_timeline, image_transition_seconds=image_transition_seconds,
             lyric_preview_lead_seconds=lyric_preview_lead_seconds,
         )
+        if in_countdown:
+            countdown_key = countdown_image_key()
+            if countdown_key is not None:
+                scene = dataclasses.replace(scene, image_key=countdown_key, prev_image_key=None, image_blend=1.0)
         start_x, start_y, end_x, end_y, zoom_start, zoom_end = ken_burns_preset_for_key(scene.image_key)
         bg = apply_ken_burns(
             get_image(scene.image_key), scene.ken_burns_progress,
@@ -458,14 +454,15 @@ def assemble_video(
         frame = draw_scene(
             scene, bg, font_path, font_size=lyric_size, text_color=text_color, frame_size=frame_size,
         )
+        chord_t = first_chord_start if in_countdown else song_t   # count-in: the FIRST chord to play, NOW
         frame = draw_chord_bar(
-            frame, chord_track, song_t, font_path,
+            frame, chord_track, chord_t, font_path,
             frame_size=frame_size, accent_color=accent_color, dim_text_color=dim_text_color,
             panel_color=panel_color, panel_alpha=panel_alpha, chord_now_size=chord_now_size,
             chord_next_size=chord_next_size, show_chord_timeline=show_chord_timeline,
             show_key_bpm=show_key_bpm, timeline_window_sec=timeline_window_sec, key_label=key_label,
         )
-        current = current_chord_at(chord_track, song_t)
+        current = current_chord_at(chord_track, chord_t)
         frame = draw_chord_legend(
             frame, chord_legend_labels or [], current.label if current is not None else None, font_path,
             frame_size=frame_size, show_chord_legend=show_chord_legend, size_scale=chord_legend_scale,
@@ -476,6 +473,15 @@ def assemble_video(
             frame, capo, font_path, frame_size=frame_size, accent_color=accent_color, text_color=text_color,
             panel_color=panel_color, panel_alpha=chord_diagram_panel_alpha,
         )
+        if in_countdown:
+            frame = draw_countdown(frame, countdown_beats - min(countdown_beats - 1, int(T / beat_duration)), font_path,
+                                   frame_size=frame_size, accent_color=accent_color)
+            if show_like_subscribe and like_subscribe_on_countdown:
+                frame = draw_like_subscribe(
+                    frame, T, countdown_duration, font_path, frame_size=frame_size, benefit_text=like_subscribe_text,
+                    panel_color=panel_color, scale=support_overlay_scale,
+                )
+            return np.array(frame)
         # Owner request, 2026-09-11: only the last support_overlay_lead_seconds
         # before the song ends -- not the whole video, and never the
         # countdown/intro (that branch returns above and never reaches here).
@@ -484,6 +490,12 @@ def assemble_video(
                 frame, support_overlay_text, font_path,
                 frame_size=frame_size, accent_color=accent_color, panel_color=panel_color,
                 scale=support_overlay_scale,
+            )
+        if show_like_subscribe and like_subscribe_lead_seconds > 0 and song_t >= duration - like_subscribe_lead_seconds:
+            frame = draw_like_subscribe(
+                frame, song_t - (duration - like_subscribe_lead_seconds), like_subscribe_lead_seconds, font_path,
+                frame_size=frame_size, benefit_text=like_subscribe_text, panel_color=panel_color,
+                scale=support_overlay_scale, support_text=support_overlay_text,
             )
         return np.array(frame)
 

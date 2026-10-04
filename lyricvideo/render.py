@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from functools import lru_cache
+from typing import NamedTuple
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -138,6 +139,7 @@ def clear_overlay_caches() -> None:
     _key_bpm_badge_patch.cache_clear()
     _support_overlay_patch.cache_clear()
     _countdown_patch.cache_clear()
+    _like_subscribe_patch.cache_clear()
 
 
 def crossfade_backgrounds(prev: Image.Image, current: Image.Image, blend: float) -> Image.Image:
@@ -688,6 +690,153 @@ def _support_overlay_patch(
     box = (box_left, box_top, box_right, box_bottom)
     draw.rounded_rectangle(box, radius=int(pad_y * 1.2), fill=(*panel_color, _SUPPORT_OVERLAY_ALPHA))
     draw.text((box_left + pad_x, box_top + pad_y), text, font=font, fill=(*accent_color, 255))
+    return overlay_patch(overlay)
+
+
+# --- Like / Subscribe call to action (owner, 2026-10-04) ---------------------------------------------------------
+# Like pill + red Subscribe button + bell, the standard look, with a white cursor that clicks Subscribe (-> SUBSCRIBED,
+# the bell rings) and a short benefit line under it. Shown in the count-in (donate label's spot) and the last N seconds
+# (under the donate label). Burned in, so -- like the donate label -- not clickable.
+_LS_BASE_H = 64
+_LS_GAP = 12
+_LS_LIKE_W, _LS_SUB_W, _LS_BELL_W = 150, 250, 70
+_LS_FONT = 30
+_LS_BENEFIT_FONT = 26
+_LS_RED = (204, 0, 0)
+_LS_RED_PRESSED = (160, 0, 0)
+_LS_GREY = (150, 150, 150)
+_LS_CLICK_SECONDS = 4.0      # the click animation always plays over this long; a shorter window (a fast count-in) is sped up
+
+
+class LikeSubscribeState(NamedTuple):
+    alpha: float                 # 0..1 fade of the whole call to action
+    cursor: float | None         # 0..1 along the cursor's path to the button, None = no cursor yet
+    pressed: bool
+    subscribed: bool
+    ring: bool                   # the bell's rays are showing
+
+
+def like_subscribe_state(t: float, window: float) -> LikeSubscribeState:
+    """Where the animation stands `t` seconds into a `window`-second showing: fade in (0.4 s), cursor glides to Subscribe
+    (0.3-1.0 s), press (1.0-1.25 s), SUBSCRIBED + the bell rings for a second, hold, fade out. Pure, for tests."""
+    if window <= 0 or t < 0 or t >= window:
+        return LikeSubscribeState(0.0, None, False, False, False)
+    speed = max(1.0, _LS_CLICK_SECONDS / window)
+    u, total = t * speed, window * speed
+    fade = min(0.4, total * 0.12)
+    alpha = max(0.0, min(1.0, u / fade, (total - u) / fade))
+    cursor = None
+    if u >= 0.3:
+        x = min(1.0, (u - 0.3) / 0.7)
+        cursor = 1.0 - (1.0 - x) ** 3
+    subscribed = u >= 1.25
+    ring = subscribed and u < 2.45 and int((u - 1.25) / 0.1) % 2 == 0
+    return LikeSubscribeState(alpha, cursor, 1.0 <= u < 1.25, subscribed, ring)
+
+
+def draw_like_subscribe(
+    frame: Image.Image,
+    t: float,
+    window: float,
+    font_path: str,
+    *,
+    frame_size: tuple[int, int] = FRAME_SIZE,
+    benefit_text: str = "",
+    panel_color: tuple[int, int, int] = (11, 18, 32),
+    scale: float = 1.0,
+    support_text: str = "",
+) -> Image.Image:
+    """The Like / Subscribe call to action `t` seconds into a `window`-second showing, upper-right, in the donate label's
+    column: at the label's own spot, or -- when `support_text` is not blank (the label is up) -- directly under it.
+    Returns `frame` untouched outside the window. Copy-on-write like every draw_* here."""
+    state = like_subscribe_state(t, window)
+    if state.alpha <= 0.0:
+        return frame
+    top = _support_overlay_top(tuple(frame_size))
+    if support_text.strip():
+        font = load_font(font_path, max(1, int(_SUPPORT_OVERLAY_BASE_FONT_SIZE * scale)))
+        ascent, descent = font.getmetrics()
+        top += ascent + descent + int(2 * _SUPPORT_OVERLAY_PAD_Y * scale) + int(10 * scale)
+    patch = _like_subscribe_patch(
+        round(state.alpha * 16), None if state.cursor is None else round(state.cursor * 24), state.pressed,
+        state.subscribed, state.ring, benefit_text.strip(), font_path, frame.size, tuple(frame_size),
+        tuple(panel_color), scale, top,
+    )
+    return composite_patch(frame, patch)
+
+
+def _draw_thumb(draw, x, y, s, fill) -> None:
+    draw.rounded_rectangle([x, y + s * .42, x + s * .22, y + s * .95], radius=max(1, s * .04), fill=fill)
+    draw.polygon([(x + s * .30, y + s * .46), (x + s * .48, y + s * .10), (x + s * .62, y + s * .10),
+                  (x + s * .58, y + s * .38), (x + s * .95, y + s * .38), (x + s * .90, y + s * .92),
+                  (x + s * .30, y + s * .92)], fill=fill)
+
+
+def _draw_bell(draw, x, y, s, fill, ring: bool) -> None:
+    draw.pieslice([x + s * .15, y + s * .05, x + s * .85, y + s * .80], 180, 360, fill=fill)
+    draw.rectangle([x + s * .15, y + s * .42, x + s * .85, y + s * .78], fill=fill)
+    draw.rounded_rectangle([x + s * .05, y + s * .74, x + s * .95, y + s * .84], radius=max(1, s * .05), fill=fill)
+    draw.ellipse([x + s * .40, y + s * .86, x + s * .60, y + s * 1.0], fill=fill)
+    if ring:
+        width = max(2, int(s * .08))
+        for side in (-1, 1):
+            for k, r in enumerate((.18, .30)):
+                cx = x + s * .5 + side * s * (.62 + k * .2)
+                draw.line([(cx, y + s * (.35 - r)), (cx + side * s * .10, y + s * .35)], fill=fill, width=width)
+                draw.line([(cx + side * s * .10, y + s * .35), (cx, y + s * (.35 + r))], fill=fill, width=width)
+
+
+@lru_cache(maxsize=_OVERLAY_CACHE_SIZE)
+def _like_subscribe_patch(
+    alpha_q: int, cursor_q: int | None, pressed: bool, subscribed: bool, ring: bool, benefit_text: str,
+    font_path: str, canvas_size: tuple[int, int], frame_size: tuple[int, int], panel_color: tuple[int, int, int],
+    scale: float, top: int,
+) -> tuple[Image.Image, tuple[int, int]] | None:
+    sc = lambda v: max(1, int(v * scale))
+    h, gap = sc(_LS_BASE_H), sc(_LS_GAP)
+    w_like, w_sub, w_bell = sc(_LS_LIKE_W), sc(_LS_SUB_W), sc(_LS_BELL_W)
+    right = frame_size[0] - int(_SUPPORT_OVERLAY_MARGIN_X * scale)
+    left = right - (w_like + w_sub + w_bell + 2 * gap)
+    overlay = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    white, panel = (255, 255, 255, 255), (*panel_color, 200)
+    font = load_font(font_path, sc(_LS_FONT))
+    radius = sc(12)
+
+    draw.rounded_rectangle([left, top, left + w_like, top + h], radius=radius, fill=panel, outline=(255, 255, 255, 200), width=2)
+    _draw_thumb(draw, left + sc(16), top + sc(12), sc(40), white)
+    draw.text((left + sc(68), top + h / 2), "Like", font=font, fill=white, anchor="lm")
+
+    x2 = left + w_like + gap
+    fill = _LS_GREY if subscribed else (_LS_RED_PRESSED if pressed else _LS_RED)
+    draw.rounded_rectangle([x2, top, x2 + w_sub, top + h], radius=radius, fill=(*fill, 235))
+    label_font = load_font(font_path, sc(_LS_FONT - 2)) if subscribed else font
+    draw.text((x2 + w_sub / 2, top + h / 2), "SUBSCRIBED" if subscribed else "Subscribe", font=label_font, fill=white, anchor="mm")
+
+    x3 = x2 + w_sub + gap
+    draw.rounded_rectangle([x3, top, x3 + w_bell, top + h], radius=radius, fill=panel, outline=(255, 255, 255, 200), width=2)
+    _draw_bell(draw, x3 + sc(17), top + sc(12), sc(36), white, ring)
+
+    if benefit_text:
+        bfont = load_font(font_path, sc(_LS_BENEFIT_FONT))
+        text_w = draw.textlength(benefit_text, font=bfont)
+        pad_x, pad_y = sc(18), sc(10)
+        asc, desc = bfont.getmetrics()
+        box_top = top + h + gap
+        draw.rounded_rectangle([right - text_w - 2 * pad_x, box_top, right, box_top + asc + desc + 2 * pad_y],
+                               radius=sc(10), fill=(*panel_color, 180))
+        draw.text((right - pad_x - text_w, box_top + pad_y), benefit_text, font=bfont, fill=white)
+
+    if cursor_q is not None:
+        progress = cursor_q / 24
+        end_x, end_y = x2 + w_sub * 0.86, top + h / 2 - sc(6)     # right end of the button: clear of the label
+        cx = end_x + (1 - progress) * sc(170)
+        cy = end_y + (1 - progress) * sc(60)
+        pts = [(0, 0), (0, 34), (9, 26), (16, 40), (22, 37), (15, 24), (27, 24)]
+        draw.polygon([(cx + px * scale, cy + py * scale) for px, py in pts], fill=white, outline=(0, 0, 0, 255))
+
+    if alpha_q < 16:
+        overlay.putalpha(overlay.getchannel("A").point(lambda v: int(v * alpha_q / 16)))
     return overlay_patch(overlay)
 
 
