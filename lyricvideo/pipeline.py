@@ -54,6 +54,7 @@ from .owner_whisper import add_corrections, corrected_heard_words
 from .transcribe import (
     load_transcript_segments, load_transcript_text, load_transcript_words, lyric_hotwords, transcribe_vocals,
 )
+from .banned import is_banned
 from .youtube_state import STATE_FILENAME
 
 
@@ -120,7 +121,7 @@ def list_redoable_songs(work_root: Path) -> list[str]:
     return sorted(
         entry.name
         for entry in work_root.iterdir()
-        if entry.is_dir() and (entry / "lyrics_timed.json").exists()
+        if entry.is_dir() and (entry / "lyrics_timed.json").exists() and not is_banned(entry)
     )
 
 
@@ -136,7 +137,7 @@ def _candidate_song_dirs(work_root: Path) -> list[tuple[str, Path]]:
     pointlessly re-fetch lyrics/re-detect chords a derived video has no business re-deciding)."""
     pairs: list[tuple[str, Path]] = []
     for entry in work_root.iterdir():
-        if not entry.is_dir():
+        if not entry.is_dir() or is_banned(entry):       # a banned song (and its EASY version) is left out of every list
             continue
         pairs.append((entry.name, entry))
         nested = entry / "easychords"

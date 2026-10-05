@@ -127,9 +127,10 @@ def song_dirs(work_root: Path) -> list[tuple[str, Path]]:
     work_root = Path(work_root)
     if not work_root.is_dir():
         return []
+    from .banned import is_banned
     pairs: list[tuple[str, Path]] = []
     for entry in work_root.iterdir():
-        if not entry.is_dir():
+        if not entry.is_dir() or is_banned(entry):       # a banned song (and its EASY version) is left out of everything
             continue
         pairs.append((entry.name, entry))
         nested = entry / EASY_CHORD_SUBDIR

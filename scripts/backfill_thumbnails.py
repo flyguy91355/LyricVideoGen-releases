@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     token = os.environ.get("REPLICATE_API_TOKEN", "")
     from lyricvideo.settings import Settings
     settings = Settings.load()
-    made = set_ok = failed = 0
+    made = set_ok = failed = gone = 0
     for name, folder, state in todo:
         try:
             path = ensure_thumbnail(folder, client, token, font_path=getattr(settings, "font_path", None) or None,
@@ -90,12 +90,20 @@ def main(argv: list[str] | None = None) -> int:
             set_ok += 1
             print(f"  ok   {name}")
         except Exception as e:  # quota stops the run; anything else skips just this video
+            if getattr(getattr(e, "resp", None), "status", None) == 404:     # the video is no longer on the channel: note it, skip it from now on
+                (folder / th.THUMBNAIL_SET_FILE).write_text(json.dumps({"video_id": state.video_id, "video_missing": True}), encoding="utf-8")
+                print(f"  GONE {name}: {state.video_id} is no longer on YouTube")
+                gone += 1
+                continue
+            if "uploadRateLimitExceeded" in str(e):        # YouTube's separate daily limit on thumbnail uploads (not the API quota)
+                print(f"\nYouTube's daily CUSTOM THUMBNAIL limit is reached ({set_ok} set so far); it lifts after about 24 hours. Run again later.")
+                break
             if is_quota_exceeded_error(e):
                 print(f"\nYouTube's daily quota is used up. {set_ok} set so far; run again after it resets.")
                 break
             print(f"  FAIL {name}: {type(e).__name__}: {e}")
             failed += 1
-    print(f"\n{set_ok} thumbnail(s) set on YouTube, {failed} failed.")
+    print(f"\n{set_ok} thumbnail(s) set on YouTube, {failed} failed, {gone} video(s) no longer on YouTube.")
     return 0
 
 

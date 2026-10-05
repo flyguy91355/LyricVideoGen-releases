@@ -34,6 +34,7 @@ lyricvideo/align.py
 lyricvideo/anchors.py
 lyricvideo/assemble.py
 lyricvideo/audio_decode.py
+lyricvideo/banned.py
 lyricvideo/batch.py
 lyricvideo/chord_diagram.py
 lyricvideo/chord_shapes.py
@@ -129,6 +130,7 @@ tests/test_align_chunked.py
 tests/test_anchors.py
 tests/test_assemble.py
 tests/test_audio_decode.py
+tests/test_banned.py
 tests/test_batch.py
 tests/test_chord_diagram.py
 tests/test_chord_shapes.py

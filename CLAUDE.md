@@ -22,7 +22,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
   - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
     googleapiclient, tensorflow, crema -- gui's `_LazyAnthropic` and `build()`
     wrapper, pipeline's lazy `anthropic` proxy, align's in-function torch import, assemble's `_load_moviepy`.
-  - Quit: X (`WM_DELETE_WINDOW` -> `_on_close_window`; tests invoke the registered Tcl callback) and
+  - Quit: X (`WM_DELETE_WINDOW` -> `_on_close_window`) and
     Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
     Update runs (closing kills it; no resume). `_shut_down` withdraws the window at once, then destroys it; `_closing`
     stops new scans.
@@ -48,7 +48,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
   .venv/bin/python -m lyricvideo.pipeline --audio <path> --work-dir <dir> [--title "<override>"] [--font <ttf>] \
       [--stage identify|separate|fetch_lyrics|align|detect_chords|images|render]
   ```
-  `--stage` resumes from artifacts already in `--work-dir`; `run_pipeline()`'s `end_stage` stops early (9-22).
+  `--stage` resumes from artifacts already in `--work-dir`; `run_pipeline()`'s `end_stage` stops early.
 - Needs `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` (template `.env.example`). No trading credentials --
   unrelated to AITrading beside it.
 
@@ -174,7 +174,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      are never listed and are replaced next render. `rendered_stream_seconds(path)` -> (picture s, audio s), backed
      by `_frame_count_from_report()`: prefers ffmpeg's own `frame=` count, falling back to `time=` x the report's own
      `fps` when a build prints no `frame=` for a stream-copy-to-null pass -- else that
-     build refuses every video, cut short or not (issue #8). libx265 gets `-pix_fmt yuv420p -tag:v
+     build refuses every video, cut short or not. libx265 gets `-pix_fmt yuv420p -tag:v
      hvc1`. `AudioFileClip` is closed in a `finally`.
    - Backgrounds: `_BackgroundCache` (LRU of 4 keyed by the real file, pre-scaled). A missing key shows the nearest
      existing picture in timeline order (previous first), else any of the song's; an undecodable one warns once and
@@ -207,7 +207,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
      `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
      -- never clickable. Order: description, key note, tip/thank-you (9-29).
-     `scripts/update_support_description.py` (`--dry-run`) re-renders into this order (bodies under `READY_CHARS`, 200).
+     `scripts/update_support_description.py` re-renders into this order (bodies under `READY_CHARS`, 200).
 
 ## EASY CHORD versions
 
@@ -275,7 +275,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   `on_change` early; 9-11).
 - **SettingsPanel** (`settings_panel.py`; `~/.playalongvideoproduction/settings.json`): writes disk ONLY via Save
   Settings. A field differing from `self._baseline` gets a ● and a bold+orange label
-  (`_refresh_dirty_indicators`/`_dirty_fields`; only flipped labels are redrawn); Save shows an itemized `old → new`
+  (`_refresh_dirty_indicators`/`_dirty_fields`); Save shows an itemized `old → new`
   confirm, and a failed write (OSError) shows an error and stays unsaved; Discard reloads the baseline. gui's
   `self.settings` updates live, so this session's runs use the latest values. Each field shows its default
   (`_default_text`); each slider has a box (`_parse_clamped_float`: "%"/"s" suffix, ".5", "0,5"; unedited text is
@@ -343,6 +343,7 @@ Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail
 Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most striking, uncropped; a new picture only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
 word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
 soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
+A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo.
 `scripts/find_truncated_videos.py` (dry run; `--only`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo remakes them); key_rollout and `_set_aside_videos` skip that name.
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a

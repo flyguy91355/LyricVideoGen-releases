@@ -425,6 +425,9 @@ def schedule_upload(
 
 
 def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, settings, now: datetime | None) -> str:
+    from .banned import SongBanned, is_banned
+    if is_banned(work_dir):
+        raise SongBanned(f"{Path(work_dir).name} is tagged BANNED ON YOUTUBE, so it is never uploaded.")
     now = now or datetime.now().astimezone()
     # Owner, 2026-09-26: nothing goes out without the song's real key. Raises KeyNotConfirmed for a song whose key was never
     # checked or is waiting for the owner; the same settled key is what the description states.
