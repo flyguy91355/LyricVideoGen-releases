@@ -29,6 +29,8 @@ class Comment:
     text: str
     published_at: str
     author_channel_id: str = ""     # the commenter's channel ("" when YouTube omits it); the scan skips the channel's own
+    parent_id: str = ""             # a REPLY's thread (top-level comment) id -- where a reply to it must be posted; "" = top-level
+    context: str = ""               # a reply's conversation so far, for drafting an answer
 
 
 def _publish_at_string(when: datetime) -> str:
@@ -342,25 +344,54 @@ def _author_channel_id(snippet: dict) -> str:
     return str(channel.get("value") or "") if isinstance(channel, dict) else ""
 
 
-def list_new_comments(youtube_client, video_id: str, seen_comment_ids: set[str]) -> list[Comment]:
+def _comment_from(item: dict, video_id: str, parent_id: str = "", context: str = "") -> Comment:
+    snippet = item["snippet"]
+    return Comment(
+        comment_id=item["id"], video_id=video_id, author=snippet.get("authorDisplayName", ""),
+        text=snippet.get("textDisplay", ""), published_at=snippet.get("publishedAt", ""),
+        author_channel_id=_author_channel_id(snippet), parent_id=parent_id, context=context,
+    )
+
+
+def list_new_comments(
+    youtube_client, video_id: str, seen_comment_ids: set[str], own_channel_id: str = "",
+) -> list[Comment]:
+    """The video's unseen comments: every new top-level comment, and -- given the channel's own id -- every new REPLY in a
+    thread where the channel has already replied, posted after that reply (owner, 2026-10-16: "it doesnt see that someone
+    commented from your response"). A reply carries its thread's top-level id (`parent_id`: YouTube only lets a reply go
+    to the top-level comment) and the conversation so far (`context`). A thread whose replies YouTube did not all include
+    costs one comments.list call (1 quota unit)."""
     response = youtube_client.commentThreads().list(
-        part="snippet", videoId=video_id, textFormat="plainText", maxResults=100,
+        part="snippet,replies", videoId=video_id, textFormat="plainText", maxResults=100,
     ).execute()
     comments: list[Comment] = []
     for item in response.get("items", []):
         top_level = item["snippet"]["topLevelComment"]
-        comment_id = top_level["id"]
-        if comment_id in seen_comment_ids:
+        thread_id = top_level["id"]
+        if thread_id not in seen_comment_ids:
+            comments.append(_comment_from(top_level, video_id))
+        try:
+            total = int(item["snippet"].get("totalReplyCount", 0) or 0)
+        except (TypeError, ValueError):
+            total = 0
+        if not own_channel_id or total == 0:
             continue
-        snippet = top_level["snippet"]
-        comments.append(Comment(
-            comment_id=comment_id,
-            video_id=video_id,
-            author=snippet.get("authorDisplayName", ""),
-            text=snippet.get("textDisplay", ""),
-            published_at=snippet.get("publishedAt", ""),
-            author_channel_id=_author_channel_id(snippet),
-        ))
+        replies = (item.get("replies") or {}).get("comments") or []
+        if len(replies) < total:
+            replies = youtube_client.comments().list(
+                part="snippet", parentId=thread_id, textFormat="plainText", maxResults=100,
+            ).execute().get("items", [])
+        last_own = None
+        for reply in sorted(replies, key=lambda r: r["snippet"].get("publishedAt", "")):
+            snippet = reply["snippet"]
+            if _author_channel_id(snippet) == own_channel_id:
+                last_own = snippet.get("textDisplay", "")
+                continue
+            if last_own is None or reply["id"] in seen_comment_ids:
+                continue                      # not an answer to the channel, or already handled
+            context = (f'Their original comment: "{top_level["snippet"].get("textDisplay", "")}"\n'
+                       f'Your reply: "{last_own}"')
+            comments.append(_comment_from(reply, video_id, parent_id=thread_id, context=context))
     return comments
 
 

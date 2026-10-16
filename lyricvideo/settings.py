@@ -123,6 +123,8 @@ class Settings:
                                               # upload (owner, 2026-09-20; raise it as the aligner improves)
 
     # --- YouTube (youtube_schedule.py / gui.py) --------------------------
+    youtube_auto_approve_replies: bool = False   # owner, 2026-10-16: post drafted comment replies without Approve
+                                                 # (error reports and blank drafts still wait for the owner)
     youtube_auto_upload: bool = False
     youtube_client_secrets_path: str = ""
     youtube_privacy: str = "public"          # "public" | "unlisted" | "private"

@@ -55,7 +55,7 @@ def test_an_easy_chord_video_is_checked_for_comments_too(tmp_path, monkeypatch):
     _uploaded(tmp_path, "some-song/easychords", "vid-b")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, 1) for vid in ids})
     read = []
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen: read.append(video_id) or [])
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": read.append(video_id) or [])
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -67,8 +67,8 @@ def test_a_queued_reply_remembers_which_video_its_comment_is_on(tmp_path, monkey
     carries the uploaded video's own title, not just its opaque video_id, so the GUI can show it."""
     _uploaded(tmp_path, "some-song", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, 1) for vid in ids})
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen: [_comment("c1", video_id)])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title: ("thanks!", False))
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("c1", video_id)])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -84,8 +84,8 @@ def test_a_video_whose_comment_count_has_not_changed_costs_no_comment_read(tmp_p
     counts = {"vid-a": 3, "vid-b": 0}
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, counts[vid]) for vid in ids})
     read = []
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen: read.append(video_id) or [])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title: ("thanks!", False))
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": read.append(video_id) or [])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())       # first check: reads the one with comments
     LyricVideoGUI._check_youtube_comments_worker(_stub())       # nothing changed: reads nothing
@@ -103,7 +103,7 @@ def test_once_a_day_every_video_with_comments_is_read_even_if_its_count_did_not_
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 3)})
     read = []
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen: read.append(video_id) or [])
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": read.append(video_id) or [])
     gui._save_comment_counts({"vid-a": 3}, datetime.now().astimezone() - timedelta(hours=1))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
@@ -155,10 +155,10 @@ def test_a_failed_draft_keeps_the_comments_already_queued_and_is_retried_next_ch
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 2)})
     comments = [_comment("c1", "vid-a", "first"), _comment("c2", "vid-a", "second")]
     monkeypatch.setattr(gui, "list_new_comments",
-                        lambda client, video_id, seen: [c for c in comments if c.comment_id not in seen])
+                        lambda client, video_id, seen, own_channel="": [c for c in comments if c.comment_id not in seen])
     drafted, fail = [], {"second"}
 
-    def draft(client, text, title):
+    def draft(client, text, title, context=""):
         drafted.append(text)
         if text in fail:
             raise RuntimeError("overloaded")
@@ -183,10 +183,10 @@ def test_a_comment_whose_draft_keeps_failing_is_queued_blank_for_the_owner(tmp_p
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
     monkeypatch.setattr(gui, "list_new_comments",
-                        lambda client, video_id, seen: [] if "c1" in seen else [_comment("c1", "vid-a")])
+                        lambda client, video_id, seen, own_channel="": [] if "c1" in seen else [_comment("c1", "vid-a")])
     tries = []
     monkeypatch.setattr(gui, "draft_comment_reply",
-                        lambda *a: tries.append(1) or (_ for _ in ()).throw(RuntimeError("down")))
+                        lambda *a, **k: tries.append(1) or (_ for _ in ()).throw(RuntimeError("down")))
 
     for _ in range(MAX_DRAFT_FAILURES + 1):
         LyricVideoGUI._check_youtube_comments_worker(_stub())
@@ -224,11 +224,11 @@ def test_the_channels_own_comments_are_never_drafted_a_reply(tmp_path, monkeypat
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 2)})
     monkeypatch.setattr(gui, "_own_channel_id", lambda client: "UC-me")
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen: [
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [
         _comment("mine", "vid-a", author_channel_id="UC-me"), _comment("theirs", "vid-a", author_channel_id="UC-fan"),
     ])
     drafted = []
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title: drafted.append(text) or ("hi", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": drafted.append(text) or ("hi", False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -398,3 +398,97 @@ def test_the_draft_list_turns_approve_off_for_a_draft_being_posted():
         assert view.approve_button.cget("state") == "normal"
     finally:
         root.destroy()
+
+
+# owner, 2026-10-16: replies to the channel's replies were never seen; Check Now gave no sign it ran; auto-approve setting.
+
+def test_a_reply_is_queued_with_its_thread_and_the_conversation_reaches_the_draft(tmp_path, monkeypatch):
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 3)})
+    monkeypatch.setattr(gui, "_own_channel_id", lambda client: "UC-me")
+    asked = {}
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": asked.update(own=own_channel) or [
+        _comment("r1", "vid-a", "what capo?", parent_id="t1", context='Your reply: "thanks"')])
+    got = {}
+    monkeypatch.setattr(gui, "draft_comment_reply",
+                        lambda client, text, title, context="": got.update(context=context) or ("capo 2!", False))
+    LyricVideoGUI._check_youtube_comments_worker(_stub())
+    [reply] = load_pending_replies()
+    assert asked["own"] == "UC-me" and reply.parent_id == "t1" and "Your reply" in got["context"]
+
+
+def test_approve_posts_a_reply_to_its_thread_not_to_the_reply(monkeypatch):
+    sent = []
+    monkeypatch.setattr(gui, "post_reply", lambda client, parent, text: sent.append(parent))
+    reply = PendingReply(comment_id="r1", video_id="v", author="a", comment_text="t", draft_reply="d",
+                         is_error_report=False, parent_id="t1")
+    target = reply.parent_id or reply.comment_id
+    gui.post_reply("client", target, "d")
+    assert sent == ["t1"]
+
+
+def _auto_stub():
+    stub = _stub()
+    stub.settings = Settings(youtube_quota_retry_hours=6, youtube_auto_approve_replies=True)
+    return stub
+
+
+def test_auto_approve_posts_ordinary_drafts_and_leaves_error_reports_and_blanks(tmp_path, monkeypatch):
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 3)})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [
+        _comment("ok", "vid-a", "love it"), _comment("bug", "vid-a", "wrong chord"),
+        _comment("re", "vid-a", "and you?", parent_id="t9")])
+    drafts = {"love it": ("thanks!", False), "wrong chord": ("we'll check", True), "and you?": ("me too", False)}
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": drafts[text])
+    posted = []
+    monkeypatch.setattr(gui, "post_reply", lambda client, parent, text: posted.append((parent, text)))
+    stub = _auto_stub()
+    summary = gui._scan_youtube_comments(stub)
+    assert posted == [("ok", "thanks!"), ("t9", "me too")]                  # a reply goes to its thread
+    assert [r.comment_id for r in load_pending_replies()] == ["bug"]        # the error report waits for the owner
+    assert summary["posted"] == 2 and summary["new"] == 3
+
+
+def test_auto_approve_off_posts_nothing(tmp_path, monkeypatch):
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("ok", "vid-a")])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
+    monkeypatch.setattr(gui, "post_reply", lambda *a: (_ for _ in ()).throw(AssertionError("posted")))
+    assert gui._scan_youtube_comments(_stub())["posted"] == 0
+    assert [r.comment_id for r in load_pending_replies()] == ["ok"]
+
+
+def test_a_failed_auto_post_leaves_the_draft_for_approve(tmp_path, monkeypatch):
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("ok", "vid-a")])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
+    monkeypatch.setattr(gui, "post_reply", lambda *a: (_ for _ in ()).throw(RuntimeError("network down")))
+    stub = _auto_stub()
+    assert gui._scan_youtube_comments(stub)["posted"] == 0
+    assert [r.comment_id for r in load_pending_replies()] == ["ok"]
+    assert not gui._is_posting(stub, "reply:ok")                            # Approve still works for it
+
+
+def test_check_now_reports_what_it_did(tmp_path, monkeypatch):
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("c", "vid-a")])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
+    shown = []
+    monkeypatch.setattr(gui.messagebox, "showinfo", lambda title, text: shown.append(text))
+    LyricVideoGUI._check_youtube_comments_worker(_stub(), manual=True)
+    assert shown and "Checked comments on 1 of 1" in shown[0] and "New comments or replies found: 1" in shown[0]
+    shown.clear()
+    LyricVideoGUI._check_youtube_comments_worker(_stub())                    # the 20-minute tick stays silent
+    assert shown == []
+
+
+def test_check_now_says_when_not_connected(monkeypatch):
+    monkeypatch.setattr(gui.youtube_auth, "load_credentials", lambda: None)
+    shown = []
+    monkeypatch.setattr(gui.messagebox, "showinfo", lambda title, text: shown.append(text))
+    LyricVideoGUI._check_youtube_comments_worker(_stub(), manual=True)
+    assert "Not connected" in shown[0]

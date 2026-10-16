@@ -16,7 +16,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
 - **GUI** (`gui.py`, CustomTkinter; desktop icon or the launcher): pick an audio file -- title/artist/lyrics are
   identified and fetched, chords detected; the title field is an optional override (its live YouTube-title preview
   is not fed into it) -- then Generate. Picking another file always clears the identified artist and identifies the
-  new one (an identify-filled title is replaced, a typed one kept; a late result for another file is ignored). "New
+  new one (an identify-filled title is replaced, a typed one kept). "New
   Song" resets the form; the work dir falls back to the file name until identify finishes. Left column: form/Generate/Redo/log/progress; right: YouTube status/Connect, "⚙ Settings",
   comment panels. Main window 1600x1000.
   - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
@@ -157,7 +157,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    **Shared image library** (spec 9-25, decoupled HISTORY 9-30/10-1: saving unconditional; `use_image_library` controls
    only reuse; `image_library_min_score` provisional 0.34, see `scripts/preview_library_matches.py`'s contact
    sheets in `reports/`): before buying, look in
-   `~/PlayAlongVideoProductionImages/` (`image_library.py`: SQLite + deduped PNGs; env `PLAYALONG_IMAGE_LIBRARY`)
+   `~/PlayAlongVideoProductionImages/` (`image_library.py`)
    by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py` [`--dry-run`/`--limit N`] may
    download the ~605 MB weights). `LibrarySession` copies a hit into `images/`, files every purchase with its
    prompt regardless of the setting, disables itself on error. Reuse (`skip_lookup`) is off when the setting is
@@ -246,7 +246,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
 
 - **Song lists** (Redo / Upload / Pending / EASY CHORD / Flagged): each is ONE `ttk.Treeview` (`gui._SongListView`,
   dark via `_song_list_font`; Windows uses 'clam') in a section starting CLOSED
-  (`_make_collapsible_section`, `SONG_LIST_HEIGHT`; never nest a `CTkScrollableFrame`). One Watch / ✕ Remove pair per
+  (`_make_collapsible_section`; never nest a `CTkScrollableFrame`). One Watch / ✕ Remove pair per
   list acts on the highlighted row (double-click Watches); Remove hides it (`_drop_list_row`, no rescan), files
   untouched. Filled on first expand by one non-daemon scanner thread (`_refresh_song_list` -> `_start_list_load`;
   `_poll_list_results` applies on Tk; a generation counter drops stale results); `invalidate()` on an open section
@@ -302,7 +302,7 @@ top-level `*.py`/`*.sh`/`*.bat`; denies (always wins) `.env`, `songs/`, `work/`,
 same set (`tests/test_update_manifest.py` keeps them in step) plus `RELEASE_MANIFEST`; `copy_updatable_files` then
 removes allow-listed regular files the previous applied release shipped and this one does not (install-root
 `.release_manifest`, gitignored). `gui.py` checks once on launch (background thread); a banner opens a modal dialog
-(centered, `transient`+`grab_set`+`lift`+`focus_force`+brief `-topmost`) with the notes, Apply Update (its confirm is
+(centered, modal) with the notes, Apply Update (its confirm is
 parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused while a video is made or an
 upload runs, and runs one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply (the
 result or the banner brings it back); `_poll_update_queue` handles each message alone and always reschedules.
@@ -362,7 +362,7 @@ through `_upload_within_todays_cap` (`_UPLOAD_SLOT_LOCK`: re-check state, cap,
 live by `video_exists()`, failing CLOSED, so a deleted video re-uploads; flagged songs skipped) from `_run_worker`
 and each Batch item; failures only warn.
 A failed auto-retry waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
-**Comments** (`youtube_comment_state.py`, flat JSON; locked, atomic, idempotent adds): `_scan_youtube_comments` (Check
+**Comments** (`youtube_comment_state.py`): `_scan_youtube_comments` (Check
 Now or the 20-minute tick, never overlapping: `_COMMENT_CHECK_LOCK`) walks `uploaded_song_dirs` (EASY included); one
 `videos.list(part=status,statistics)` per 50 videos; a public video's comments are read only when its commentCount
 changed since its last complete check (`youtube_comment_counts.json`) plus a full read every 24 h; 0 or comments off
@@ -372,6 +372,8 @@ then after `MAX_DRAFT_FAILURES` (3) is queued blank. Nothing posts without Appro
 claimed (`_claim_posting`; its buttons off via `_DraftQueueView.set_busy`), released on failure; not connected says so
 and refreshes the label; Approve checks `is_video_public()`. An approved engagement comment's thread is marked seen;
 Dismissing one marks `engagement_comment_posted`.
+Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
+`parent_id`, drafted with `context`); Check Now shows a result; `youtube_auto_approve_replies` posts ordinary drafts.
 **Channel organization** (spec 9-17): after every `schedule_upload()` gui calls `youtube_playlists.organize_video()`
 (fails soft; idempotent): All, EASY/3/4 and artist playlists first, then genre (`classify_genre`). EASY/3/4 membership
 is reconciled both ways from the real key (owner key > confirmed decision > saved key; an easychords version uses its
@@ -387,7 +389,7 @@ paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` k
 ## deep_review
 
 `python -m deep_review` retries top-level songs flagged for lyrics or timing (`runner.list_songs_to_review`), cost-
-tracked (3 searches/attempt, 5-cent/song cap, skips 85%+ untouched; $0.01 per web search counted; 9-22). It never
+tracked (3 searches/attempt, 5-cent/song cap, skips 85%+ untouched). It never
 redoes an EASY variant (a fixed original re-renders its existing one), skips key-only songs (`waiting_for_key`, never a
 pass) and songs on verify_lyrics' unchecked hold (UNKNOWN). A lyric-text concern is never cleared by a timing pass
 (`diagnosis.is_lyric_text_concern`); all checks use `Settings.timing_pass_percent`. `--dry-run` writes nothing. A

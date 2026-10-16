@@ -1084,12 +1084,12 @@ def test_check_youtube_comments_proceeds_when_the_owner_confirms(monkeypatch):
     ran = []
     stub = _gui_stub(
         _confirm_quota_override_if_blocked=lambda: True,
-        _check_youtube_comments_worker=lambda: ran.append(True),
+        _check_youtube_comments_worker=lambda **k: ran.append(k),
     )
 
     LyricVideoGUI._on_check_youtube_comments(stub)
 
-    assert ran == [True]
+    assert ran == [{"manual": True}]          # Check Now asks for the result message
 
 
 def test_approve_reply_aborts_without_posting_when_the_owner_declines_the_prompt(monkeypatch):
@@ -1213,7 +1213,7 @@ def test_check_youtube_comments_worker_stops_at_the_first_comment_read_that_hits
                         lambda client, ids: {vid: (True, 2) for vid in ids})
     read = []
 
-    def quota_read(client, video_id, seen):
+    def quota_read(client, video_id, seen, own_channel=""):
         read.append(video_id)
         raise RuntimeError("quota exceeded")
 

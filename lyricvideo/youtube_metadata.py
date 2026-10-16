@@ -176,13 +176,17 @@ def generate_video_metadata(
 
 
 def draft_comment_reply(
-    anthropic_client, comment_text: str, song_title: str, model: str = "claude-sonnet-5",
+    anthropic_client, comment_text: str, song_title: str, model: str = "claude-sonnet-5", context: str = "",
 ) -> tuple[str, bool]:
     """(reply draft, looks like an error report). Thinking off and retried like generate_video_metadata (issue #7
     review, F084: with default thinking this returned no text 5 of 6 times for one song); raises MetadataGenError --
     never returns a blank draft -- when every attempt fails, so the caller can skip just this comment."""
+    opening = (
+        f'Someone replied in a comment thread on a "{song_title}" play-along video.\n{context}\n\nTheir new reply:\n\n'
+        if context else f'Someone left this comment on a "{song_title}" play-along video:\n\n'
+    )
     prompt = (
-        f'Someone left this comment on a "{song_title}" play-along video:\n\n'
+        opening +
         f'"{comment_text}"\n\n'
         "Reply with EXACTLY two lines, each prefixed with its label:\n"
         "IS_ERROR_REPORT: <YES or NO -- is this reporting a mistake in the video, "

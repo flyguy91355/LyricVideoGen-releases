@@ -394,18 +394,23 @@ def _own_channel_id(youtube_client) -> str:
         return ""
 
 
-def _scan_youtube_comments(gui) -> None:
+def _scan_youtube_comments(gui) -> dict:
     """One comment check (the caller holds _COMMENT_CHECK_LOCK): every video this app uploaded -- EASY CHORD versions in
     `<song>/easychords` included (they were never checked) -- whose comment count changed since its last complete check
     gets its new comments read, a reply drafted and queued for the owner. Each comment is marked seen right after its
     draft is queued, so a failure later in the scan never drafts it again; a comment whose draft keeps failing is queued
-    with an empty reply after MAX_DRAFT_FAILURES tries. A quota-exceeded error stops the scan and starts the cooldown."""
+    with an empty reply after MAX_DRAFT_FAILURES tries. A quota-exceeded error stops the scan and starts the cooldown. New replies in threads the channel already
+    answered are read too. With Settings.youtube_auto_approve_replies on, each ordinary draft is posted at once (error reports
+    and blank drafts still wait for Approve). Returns {"connected", "videos", "checked", "new", "posted", "stopped"}."""
+    summary = {"connected": False, "videos": 0, "checked": 0, "new": 0, "posted": 0, "stopped": False}
     credentials = youtube_auth.load_credentials()
     if credentials is None:
-        return
+        return summary
+    summary["connected"] = True
     uploaded = uploaded_song_dirs(PROJECT_ROOT / "work")
+    summary["videos"] = len(uploaded)
     if not uploaded:
-        return
+        return summary
     settings = gui.settings
     youtube_client = build("youtube", "v3", credentials=credentials)
 
@@ -423,7 +428,8 @@ def _scan_youtube_comments(gui) -> None:
             stop_for_quota("")
         else:
             print(f"WARNING: could not read the videos' comment counts: {type(e).__name__}: {e}", file=sys.stderr)
-        return
+        summary["stopped"] = True
+        return summary
     counts = _load_comment_counts()
     counts_before = dict(counts)
     now = datetime.now().astimezone()
@@ -442,8 +448,11 @@ def _scan_youtube_comments(gui) -> None:
             continue  # no comments at all, or comments are off for it
         if not full_check and comment_count is not None and counts.get(state.video_id) == comment_count:
             continue  # nothing new since its last complete check -- no call spent
+        if own_channel is None:
+            own_channel = _own_channel_id(youtube_client)       # once per check: to find replies to the channel's replies
         try:
-            comments = list_new_comments(youtube_client, state.video_id, seen_ids)
+            comments = list_new_comments(youtube_client, state.video_id, seen_ids, own_channel)
+            summary["checked"] += 1
         except Exception as e:
             # One video's failure (comments disabled, a 404...) never blocks the rest -- except quota, which would fail
             # identically for every remaining video right now.
@@ -469,7 +478,9 @@ def _scan_youtube_comments(gui) -> None:
             try:
                 if anthropic_client is None:
                     anthropic_client = anthropic.Anthropic()
-                draft, is_error_report = draft_comment_reply(anthropic_client, comment.text, state.title)
+                draft, is_error_report = draft_comment_reply(
+                    anthropic_client, comment.text, state.title, context=str(getattr(comment, "context", "") or ""),
+                )
             except Exception as e:
                 try:
                     failures = record_draft_failure(comment.comment_id)
@@ -487,15 +498,25 @@ def _scan_youtube_comments(gui) -> None:
                 if add_pending_reply(PendingReply(
                     comment_id=comment.comment_id, video_id=comment.video_id, author=comment.author,
                     comment_text=comment.text, draft_reply=draft, is_error_report=is_error_report,
-                    video_title=state.title,
+                    video_title=state.title, parent_id=str(getattr(comment, "parent_id", "") or ""),
                 )):
                     added = True
+                    summary["new"] += 1
                 mark_comment_seen(comment.comment_id)
                 seen_ids.add(comment.comment_id)
                 clear_draft_failures(comment.comment_id)
             except Exception as e:
                 print(f"WARNING: could not save a drafted reply for {slug}: {type(e).__name__}: {e}", file=sys.stderr)
                 complete = False
+                continue
+            if getattr(settings, "youtube_auto_approve_replies", False) and draft.strip() and not is_error_report:
+                if _auto_post_reply(gui, youtube_client, comment, draft, slug, stop_for_quota):
+                    summary["posted"] += 1
+                elif _quota_blocked_now():
+                    stopped = True
+                    break
+        if stopped:
+            break
         if complete and comment_count is not None:
             counts[state.video_id] = comment_count
     full_done = full_check and not stopped
@@ -505,6 +526,52 @@ def _scan_youtube_comments(gui) -> None:
         # Only when something new arrived, and only ADDING rows (issue #7 review): this used to rebuild every reply row
         # every 20 minutes, resetting whatever reply the owner was in the middle of editing.
         gui.root.after(0, gui._on_pending_replies_changed)
+    summary["stopped"] = stopped
+    return summary
+
+
+def _quota_blocked_now() -> bool:
+    until = load_quota_blocked_until()
+    return until is not None and until > datetime.now().astimezone()
+
+
+def _auto_post_reply(gui, youtube_client, comment, draft: str, slug: str, stop_for_quota) -> bool:
+    """Settings.youtube_auto_approve_replies: posts the draft as Approve would (a reply to its thread) and takes it off the
+    list. False -- and the draft stays for the owner -- when it is already being posted or the post fails; a quota error
+    starts the cooldown. Never raises."""
+    key = f"reply:{comment.comment_id}"
+    if not _claim_posting(gui, key):
+        return False
+    try:
+        post_reply(youtube_client, getattr(comment, "parent_id", "") or comment.comment_id, draft)
+    except Exception as e:
+        _release_posting(gui, key)
+        if is_quota_exceeded_error(e):
+            stop_for_quota(f" posting a reply on {slug}")
+        else:
+            print(f"WARNING: could not auto-post a reply on {slug} ({type(e).__name__}: {e}); it waits for Approve.",
+                  file=sys.stderr)
+        return False
+    try:
+        remove_pending_reply(comment.comment_id)
+    except Exception as e:
+        print(f"WARNING: auto-posted, but could not take the reply off the list: {type(e).__name__}: {e}", file=sys.stderr)
+    return True
+
+
+def _comment_check_message(summary: dict | None, error: str = "") -> str:
+    if error or summary is None:
+        return f"The comment check failed: {error or 'unknown error'}. See the log."
+    if not summary.get("connected"):
+        return "Not connected to YouTube -- click 'Connect to YouTube' first. Nothing was checked."
+    if summary.get("stopped"):
+        return "The check stopped early (YouTube quota or a connection problem) -- see the log. It continues later."
+    lines = [f"Checked comments on {summary.get('checked', 0)} of {summary.get('videos', 0)} uploaded videos "
+             "(only videos with new comments are read).",
+             f"New comments or replies found: {summary.get('new', 0)}."]
+    if summary.get("posted"):
+        lines.append(f"Replies posted automatically: {summary['posted']}.")
+    return "\n".join(lines)
 
 
 def _uploads_remaining_today(settings: Settings) -> int:
@@ -3160,7 +3227,7 @@ class LyricVideoGUI:
 
         def post(youtube_client) -> bool:
             try:
-                post_reply(youtube_client, reply.comment_id, text)
+                post_reply(youtube_client, reply.parent_id or reply.comment_id, text)     # a reply goes to its thread
             except Exception as e:
                 if is_quota_exceeded_error(e):
                     save_quota_blocked_until(
@@ -3891,9 +3958,9 @@ class LyricVideoGUI:
             return
         if not self._confirm_quota_override_if_blocked():
             return
-        threading.Thread(target=self._check_youtube_comments_worker, daemon=True).start()
+        threading.Thread(target=self._check_youtube_comments_worker, kwargs={"manual": True}, daemon=True).start()
 
-    def _check_youtube_comments_worker(self) -> None:
+    def _check_youtube_comments_worker(self, manual: bool = False) -> None:
         """Runs on a background thread, both on-demand (Check Now) and every
         20 minutes via _youtube_periodic_tick -- an unhandled exception here
         would otherwise recur forever on every future tick with no visible
@@ -3903,12 +3970,18 @@ class LyricVideoGUI:
         second one (Check Now during the tick's) returns at once."""
         if not _COMMENT_CHECK_LOCK.acquire(blocking=False):
             return
+        summary = None
+        error = ""
         try:
-            _scan_youtube_comments(self)
+            summary = _scan_youtube_comments(self)
         except Exception as e:
-            print(f"WARNING: YouTube comment check failed: {type(e).__name__}: {e}", file=sys.stderr)
+            error = f"{type(e).__name__}: {e}"
+            print(f"WARNING: YouTube comment check failed: {error}", file=sys.stderr)
         finally:
             _COMMENT_CHECK_LOCK.release()
+        if manual:   # Check Now says what it did (owner, 2026-10-16: it looked like the button did nothing)
+            message = _comment_check_message(summary, error)
+            self.root.after(0, lambda: messagebox.showinfo("Comment check", message))
 
     def _schedule_youtube_comment_check(self) -> None:
         threading.Thread(target=self._youtube_periodic_tick, daemon=True).start()

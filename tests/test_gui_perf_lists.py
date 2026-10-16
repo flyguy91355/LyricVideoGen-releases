@@ -481,8 +481,8 @@ def test_a_comment_check_that_finds_new_comments_only_adds_them(monkeypatch, tmp
     monkeypatch.setattr(gui, "load_seen_comment_ids", lambda: set())
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid": (True, 1)})    # public, 1 comment
     comment = SimpleNamespace(comment_id="c9", video_id="vid", author="fan", text="love it")
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen: [comment])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title: ("thanks!", False))
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [comment])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
     added, seen = [], []
     monkeypatch.setattr(gui, "add_pending_reply", lambda reply: added.append(reply.comment_id) or True)
     monkeypatch.setattr(gui, "mark_comment_seen", lambda comment_id: seen.append(comment_id))

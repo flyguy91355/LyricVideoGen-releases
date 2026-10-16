@@ -800,3 +800,67 @@ def test_update_playlist_description_sends_the_title_too():
     update_playlist_description(SimpleNamespace(playlists=lambda: _Playlists()), "PL1", "EASY CHORD Play Along Songs", "New text")
 
     assert sent == {"id": "PL1", "snippet": {"title": "EASY CHORD Play Along Songs", "description": "New text"}}
+
+
+# owner, 2026-10-16: replies to the channel's own replies were never read.
+
+def _reply(comment_id, channel, text, at):
+    return {"id": comment_id, "snippet": {"authorDisplayName": channel, "textDisplay": text, "publishedAt": at,
+                                          "authorChannelId": {"value": channel}}}
+
+
+class _ThreadsClient:
+    def __init__(self, items, all_replies=None):
+        self.items, self.all_replies, self.reply_calls = items, all_replies or {}, []
+
+    def commentThreads(self):
+        outer = self
+
+        class _T:
+            def list(self, **kw):
+                return _FakeExecutable({"items": outer.items})
+        return _T()
+
+    def comments(self):
+        outer = self
+
+        class _C:
+            def list(self, **kw):
+                outer.reply_calls.append(kw["parentId"])
+                return _FakeExecutable({"items": outer.all_replies.get(kw["parentId"], [])})
+        return _C()
+
+
+def _thread(thread_id, text, replies, total=None):
+    return {"snippet": {"topLevelComment": {"id": thread_id, "snippet": {"authorDisplayName": "fan", "textDisplay": text,
+                                                                           "publishedAt": "2026-10-01T00:00:00Z"}},
+                        "totalReplyCount": len(replies) if total is None else total},
+            "replies": {"comments": replies}}
+
+
+def test_a_reply_to_the_channels_reply_is_found_with_its_thread_and_context():
+    replies = [_reply("me1", "UC-me", "thanks!", "2026-10-02T00:00:00Z"), _reply("fan2", "UC-fan", "what capo?", "2026-10-03T00:00:00Z")]
+    client = _ThreadsClient([_thread("t1", "great video", replies)])
+    found = list_new_comments(client, "vid", seen_comment_ids={"t1"}, own_channel_id="UC-me")
+    assert [(c.comment_id, c.parent_id) for c in found] == [("fan2", "t1")]
+    assert "great video" in found[0].context and "thanks!" in found[0].context
+
+
+def test_replies_not_answering_the_channel_and_seen_ones_are_left_out():
+    before = [_reply("fan0", "UC-x", "agreed", "2026-10-01T01:00:00Z"), _reply("me1", "UC-me", "thanks", "2026-10-02T00:00:00Z"),
+              _reply("fan2", "UC-fan", "q", "2026-10-03T00:00:00Z")]
+    client = _ThreadsClient([_thread("t1", "hi", before), _thread("t2", "other", [_reply("x", "UC-x", "chat", "2026-10-02T00:00:00Z")])])
+    assert [c.comment_id for c in list_new_comments(client, "vid", {"t1", "t2", "fan2"}, own_channel_id="UC-me")] == []
+    assert [c.comment_id for c in list_new_comments(client, "vid", {"t1", "t2"}, own_channel_id="UC-me")] == ["fan2"]
+
+
+def test_a_thread_with_more_replies_than_included_fetches_them_all():
+    full = [_reply("me1", "UC-me", "thanks", "2026-10-02T00:00:00Z"), _reply("fan2", "UC-fan", "q", "2026-10-03T00:00:00Z")]
+    client = _ThreadsClient([_thread("t1", "hi", full[:1], total=2)], all_replies={"t1": full})
+    assert [c.comment_id for c in list_new_comments(client, "vid", {"t1"}, own_channel_id="UC-me")] == ["fan2"]
+    assert client.reply_calls == ["t1"]
+
+
+def test_without_the_channel_id_only_top_level_comments_are_read():
+    client = _ThreadsClient([_thread("t1", "hi", [_reply("me1", "UC-me", "thanks", "2026-10-02T00:00:00Z")], total=5)])
+    assert [c.comment_id for c in list_new_comments(client, "vid", set())] == ["t1"] and client.reply_calls == []

@@ -400,3 +400,19 @@ def test_generate_video_metadata_turns_thinking_off_and_tells_claude_not_to_comm
     assert call["thinking"] == {"type": "disabled"}      # default adaptive thinking can spend the whole token budget
     assert "do not comment" in call["messages"][0]["content"].lower()
     assert call["max_tokens"] >= 300
+
+
+def test_a_reply_in_a_thread_is_drafted_with_the_conversation():
+    seen = {}
+
+    class _Msgs:
+        def create(self, **kw):
+            seen["prompt"] = kw["messages"][0]["content"]
+            from types import SimpleNamespace as N
+            return N(content=[N(type="text", text="IS_ERROR_REPORT: NO\nREPLY: capo 2!")])
+
+    from types import SimpleNamespace as N
+    from lyricvideo.youtube_metadata import draft_comment_reply
+    reply, err = draft_comment_reply(N(messages=_Msgs()), "what capo?", "Song", context='Your reply: "thanks"')
+    assert reply == "capo 2!" and not err
+    assert "replied in a comment thread" in seen["prompt"] and 'Your reply: "thanks"' in seen["prompt"]

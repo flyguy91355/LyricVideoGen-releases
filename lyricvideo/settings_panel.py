@@ -562,6 +562,7 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._add("youtube_client_secrets_path", "Client secrets file",
                    ctk.CTkButton(self, text="Browse client secrets file...", command=self._browse_youtube_secrets))
         self._check("youtube_auto_upload", "Auto-upload finished videos to YouTube")
+        self._check("youtube_auto_approve_replies", "Auto-post comment replies (no Approve)")
         self._option("youtube_privacy", "Privacy", ["public", "unlisted", "private"])
         self._option("youtube_category_id", "Category", list(_YOUTUBE_CATEGORY_IDS.keys()))
         self._check("youtube_made_for_kids", "Made for kids")
