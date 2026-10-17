@@ -78,6 +78,7 @@ class PendingReply:
     # the uploaded video's own title (YoutubeState.title), so a reply drafted before this field existed just
     # shows blank rather than failing to load (_load_items' cls(**item) needs every field optional-or-present)
     parent_id: str = ""     # a reply's thread id: the reply to it is posted THERE ("" = a top-level comment, posted to itself)
+    post_after: str = ""    # auto-post: ISO time this draft goes out by itself (owner, 2026-10-16: never instantly); "" = Approve only
 
 
 def _load_items(path: Path, cls):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import random
 import re
 import subprocess
 import sys
@@ -431,6 +432,11 @@ def _scan_youtube_comments(gui) -> dict:
             f"{settings.youtube_quota_retry_hours}h.", file=sys.stderr,
         )
 
+    summary["posted"] = _post_due_auto_replies(gui, youtube_client, settings, stop_for_quota)
+    if _quota_blocked_now():
+        summary["stopped"] = True
+        return summary
+
     try:
         stats = _video_comment_stats(youtube_client, [state.video_id for _slug, _path, state in uploaded])
     except Exception as e:
@@ -509,6 +515,7 @@ def _scan_youtube_comments(gui) -> dict:
                     comment_id=comment.comment_id, video_id=comment.video_id, author=comment.author,
                     comment_text=comment.text, draft_reply=draft, is_error_report=is_error_report,
                     video_title=state.title, parent_id=str(getattr(comment, "parent_id", "") or ""),
+                    post_after=_auto_post_time(settings, comment, draft, is_error_report),
                 )):
                     added = True
                     summary["new"] += 1
@@ -519,14 +526,6 @@ def _scan_youtube_comments(gui) -> dict:
                 print(f"WARNING: could not save a drafted reply for {slug}: {type(e).__name__}: {e}", file=sys.stderr)
                 complete = False
                 continue
-            if getattr(settings, "youtube_auto_approve_replies", False) and draft.strip() and not is_error_report:
-                if _auto_post_reply(gui, youtube_client, comment, draft, slug, stop_for_quota):
-                    summary["posted"] += 1
-                elif _quota_blocked_now():
-                    stopped = True
-                    break
-        if stopped:
-            break
         if complete and comment_count is not None:
             counts[state.video_id] = comment_count
     full_done = full_check and not stopped
@@ -543,6 +542,47 @@ def _scan_youtube_comments(gui) -> dict:
 def _quota_blocked_now() -> bool:
     until = load_quota_blocked_until()
     return until is not None and until > datetime.now().astimezone()
+
+
+def _auto_post_time(settings, comment, draft: str, is_error_report: bool) -> str:
+    """When a new draft may go out by itself: "" (Approve only) unless auto-post is on and it is an ordinary, non-blank
+    draft; else the comment's own time plus a random wait of Settings.youtube_auto_reply_delay_hours to twice that
+    (owner, 2026-10-16: "wouldnt be natural to reply right away")."""
+    if not getattr(settings, "youtube_auto_approve_replies", False) or not draft.strip() or is_error_report:
+        return ""
+    hours = max(0.0, float(getattr(settings, "youtube_auto_reply_delay_hours", 2.0) or 0.0))
+    try:
+        posted = datetime.fromisoformat(str(getattr(comment, "published_at", "") or "").replace("Z", "+00:00"))
+    except ValueError:
+        posted = datetime.now().astimezone()
+    if posted.tzinfo is None:
+        posted = posted.astimezone()
+    return (posted + timedelta(hours=random.uniform(hours, 2 * hours))).isoformat()
+
+
+def _post_due_auto_replies(gui, youtube_client, settings, stop_for_quota) -> int:
+    """Posts every queued draft whose auto-post time has passed (auto-post still on, still ordinary and non-blank) and
+    returns how many went out. A draft the owner approved or dismissed is no longer queued; one still waiting stays."""
+    if not getattr(settings, "youtube_auto_approve_replies", False):
+        return 0
+    now = datetime.now().astimezone()
+    posted = 0
+    for reply in load_pending_replies():
+        if not reply.post_after or reply.is_error_report or not reply.draft_reply.strip():
+            continue
+        try:
+            due = datetime.fromisoformat(reply.post_after)
+        except ValueError:
+            continue
+        if due > now:
+            continue
+        if _auto_post_reply(gui, youtube_client, reply, reply.draft_reply, reply.video_title or reply.video_id, stop_for_quota):
+            posted += 1
+        elif _quota_blocked_now():
+            break
+    if posted:   # posted rows leave the list, as after Approve
+        gui.root.after(0, getattr(gui, "_render_pending_replies", None) or gui._on_pending_replies_changed)
+    return posted
 
 
 def _auto_post_reply(gui, youtube_client, comment, draft: str, slug: str, stop_for_quota) -> bool:
@@ -580,7 +620,7 @@ def _comment_check_message(summary: dict | None, error: str = "") -> str:
              "(only videos with new comments are read).",
              f"New comments or replies found: {summary.get('new', 0)}."]
     if summary.get("posted"):
-        lines.append(f"Replies posted automatically: {summary['posted']}.")
+        lines.append(f"Replies posted automatically (their wait was over): {summary['posted']}.")
     return "\n".join(lines)
 
 

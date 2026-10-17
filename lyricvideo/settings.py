@@ -123,6 +123,7 @@ class Settings:
                                               # upload (owner, 2026-09-20; raise it as the aligner improves)
 
     # --- YouTube (youtube_schedule.py / gui.py) --------------------------
+    youtube_auto_reply_delay_hours: float = 2.0   # an auto-posted reply waits this to 2x this long after the comment
     youtube_auto_approve_replies: bool = False   # owner, 2026-10-16: post drafted comment replies without Approve
                                                  # (error reports and blank drafts still wait for the owner)
     youtube_auto_upload: bool = False

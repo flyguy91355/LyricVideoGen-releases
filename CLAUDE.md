@@ -71,12 +71,12 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    (`_stems_are_complete`). A run starting at align or earlier refreshes work_dir's audio copy (atomically) when the
    source was replaced (other size, or other bytes with a new mtime), deleting old stems and transcript.json; a resume
    past align keeps its audio. Redo reads the copy, so Generate from a replaced file.
-3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`; HISTORY 9-18/19) --
+3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`) --
    `fetch_lyric_lines_verified()` tries each source (sidecar `.lrc`/`.txt` beside the audio copy; lrclib
    edition-consensus vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
    `lyric_lines.json`/`Song`. Pass = matching what faster-whisper HEARS in the vocal stem (medium, VAD off): >=70%
    in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing vocals ignored).
-   The tokenizer (`lyric_audio_match._tokens`, shared by timing_gate, anchors, lyric_reconcile, deep_review) folds
+   The tokenizer (`lyric_audio_match._tokens`, shared by every lyric check) folds
    curly apostrophes and accents. Section markers are not lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
    "Chorus:", "(x2)"/"Repeat chorus"; a leading "[..]" tag stripped). Unsung lead/tail credit lines are trimmed per
    candidate before the check (`trim=`, from `pipeline._build_unsung_trim`: line times, Whisper words, vocal
@@ -84,7 +84,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    least-bad match flagged (no auto-upload). Claude then JUDGES unmatched stretches (`lyric_arbiter.py`: recognizer
    failures -> accepted), confirming only if coverage with those ranges excused (`coverage_excusing`) is still >=70%;
    its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. Whisper unavailable -> a Claude text check
-   (thinking off; an unclear/blank reply or API error is a non-empty concern). LRC timestamps discarded.
+   (thinking off; unclear/blank/error = a concern). LRC timestamps discarded.
    `python -m lyricvideo.verify_lyrics -h` re-checks finished songs: owner-typed lyrics (source "owner") are never
    checked or held (`owner-lyrics`); `--flag` releases old holds a report-only run verified or marked owner-lyrics; a
    failing song whose only concern is the timing gate's gets the lyric reason put first. `replace_report` lists uploads.
@@ -101,7 +101,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    lyricvideo.timing_gate --hold` writes holds; `pipeline.review_concern()` gives the current reason. EASY variants are
    judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real,
    correctly-placed line also scores "out of sync" -- Whisper Text (Flagged) is editable per
-   row; Save Corrections (`owner_whisper.py`, `whisper_owner.json`, keyed by row + line text) synthesizes heard
+   row; Save Corrections (`owner_whisper.py`, `whisper_owner.json`) synthesizes heard
    words across its span, read by `corrected_heard_words()`/`_align_lyrics` (`add_corrections()`; a Redo
    recomputes it) -- never the placement itself. The anchor transcription is hinted (`lyric_hotwords()`,
    cache-keyed) with the accepted lyrics -- owner's text, or a fetched candidate once verified (the verifying
@@ -206,7 +206,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    - `render.draw_support_overlay()`: `Settings.support_overlay_text` (blank = off) in the last
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
      `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
-     -- never clickable. Order: description, key note, tip/thank-you (9-29).
+     (not clickable). Order: description, key note, tip/thank-you (9-29).
      `scripts/update_support_description.py` re-renders into this order (bodies under `READY_CHARS`, 200).
 
 ## EASY CHORD versions
@@ -373,7 +373,8 @@ claimed (`_claim_posting`; its buttons off via `_DraftQueueView.set_busy`), rele
 and refreshes the label; Approve checks `is_video_public()`. An approved engagement comment's thread is marked seen;
 Dismissing one marks `engagement_comment_posted`.
 Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
-`parent_id`, drafted with `context`); Check Now shows a result; pre-`_version` counts ignored once; `youtube_auto_approve_replies` posts ordinary drafts.
+`parent_id`, drafted with `context`); Check Now shows a result; old counts ignored once; `youtube_auto_approve_replies` posts ordinary drafts after
+`youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`).
 **Channel organization** (spec 9-17): after every `schedule_upload()` gui calls `youtube_playlists.organize_video()`
 (fails soft; idempotent): All, EASY/3/4 and artist playlists first, then genre (`classify_genre`). EASY/3/4 membership
 is reconciled both ways from the real key (owner key > confirmed decision > saved key; an easychords version uses its

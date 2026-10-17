@@ -433,43 +433,10 @@ def _auto_stub():
     return stub
 
 
-def test_auto_approve_posts_ordinary_drafts_and_leaves_error_reports_and_blanks(tmp_path, monkeypatch):
-    _uploaded(tmp_path, "song-a", "vid-a")
-    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 3)})
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [
-        _comment("ok", "vid-a", "love it"), _comment("bug", "vid-a", "wrong chord"),
-        _comment("re", "vid-a", "and you?", parent_id="t9")])
-    drafts = {"love it": ("thanks!", False), "wrong chord": ("we'll check", True), "and you?": ("me too", False)}
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": drafts[text])
-    posted = []
-    monkeypatch.setattr(gui, "post_reply", lambda client, parent, text: posted.append((parent, text)))
-    stub = _auto_stub()
-    summary = gui._scan_youtube_comments(stub)
-    assert posted == [("ok", "thanks!"), ("t9", "me too")]                  # a reply goes to its thread
-    assert [r.comment_id for r in load_pending_replies()] == ["bug"]        # the error report waits for the owner
-    assert summary["posted"] == 2 and summary["new"] == 3
 
 
-def test_auto_approve_off_posts_nothing(tmp_path, monkeypatch):
-    _uploaded(tmp_path, "song-a", "vid-a")
-    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("ok", "vid-a")])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
-    monkeypatch.setattr(gui, "post_reply", lambda *a: (_ for _ in ()).throw(AssertionError("posted")))
-    assert gui._scan_youtube_comments(_stub())["posted"] == 0
-    assert [r.comment_id for r in load_pending_replies()] == ["ok"]
 
 
-def test_a_failed_auto_post_leaves_the_draft_for_approve(tmp_path, monkeypatch):
-    _uploaded(tmp_path, "song-a", "vid-a")
-    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
-    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("ok", "vid-a")])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
-    monkeypatch.setattr(gui, "post_reply", lambda *a: (_ for _ in ()).throw(RuntimeError("network down")))
-    stub = _auto_stub()
-    assert gui._scan_youtube_comments(stub)["posted"] == 0
-    assert [r.comment_id for r in load_pending_replies()] == ["ok"]
-    assert not gui._is_posting(stub, "reply:ok")                            # Approve still works for it
 
 
 def test_check_now_reports_what_it_did(tmp_path, monkeypatch):
@@ -519,3 +486,77 @@ def test_an_old_counts_file_makes_the_next_check_read_every_video(tmp_path, monk
     read.clear()
     LyricVideoGUI._check_youtube_comments_worker(_stub())                    # now trusted: unchanged count, no read
     assert read == []
+
+
+
+def _scheduled(tmp_path, monkeypatch, settings_stub, comments, drafts):
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, len(comments))})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": comments)
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": drafts[text])
+    posted = []
+    monkeypatch.setattr(gui, "post_reply", lambda client, parent, text: posted.append((parent, text)))
+    summary = gui._scan_youtube_comments(settings_stub)
+    return posted, summary
+
+
+def test_auto_post_never_replies_at_once_it_schedules_a_natural_wait(tmp_path, monkeypatch):
+    """owner, 2026-10-16: "wouldnt be natural to reply right away"."""
+    from datetime import datetime, timedelta
+    just_now = datetime.now().astimezone().isoformat()
+    comments = [_comment("ok", "vid-a", "love it", published_at=just_now),
+                _comment("bug", "vid-a", "wrong chord", published_at=just_now)]
+    posted, summary = _scheduled(tmp_path, monkeypatch, _auto_stub(), comments,
+                                 {"love it": ("thanks!", False), "wrong chord": ("we'll check", True)})
+    assert posted == [] and summary["posted"] == 0                          # nothing goes out on the first check
+    by_id = {r.comment_id: r for r in load_pending_replies()}
+    wait = datetime.fromisoformat(by_id["ok"].post_after) - datetime.fromisoformat(just_now)
+    assert timedelta(hours=2) <= wait <= timedelta(hours=4)                  # default 2 h, randomly up to 2x
+    assert by_id["bug"].post_after == ""                                      # an error report waits for Approve
+
+
+def test_a_reply_whose_wait_is_over_is_posted_to_its_thread_and_leaves_the_list(tmp_path, monkeypatch):
+    from lyricvideo.youtube_comment_state import add_pending_reply
+    add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="a", comment_text="q", draft_reply="capo 2!",
+                                   is_error_report=False, parent_id="t1", post_after="2026-01-01T00:00:00+00:00"))
+    add_pending_reply(PendingReply(comment_id="later", video_id="vid-a", author="a", comment_text="q", draft_reply="hi",
+                                   is_error_report=False, post_after="2099-01-01T00:00:00+00:00"))
+    add_pending_reply(PendingReply(comment_id="manual", video_id="vid-a", author="a", comment_text="q", draft_reply="hi",
+                                   is_error_report=False))                    # queued while auto was off
+    posted, summary = _scheduled(tmp_path, monkeypatch, _auto_stub(), [], {})
+    assert posted == [("t1", "capo 2!")] and summary["posted"] == 1
+    assert sorted(r.comment_id for r in load_pending_replies()) == ["later", "manual"]
+
+
+def test_auto_post_off_posts_nothing_and_schedules_nothing(tmp_path, monkeypatch):
+    from lyricvideo.youtube_comment_state import add_pending_reply
+    add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="a", comment_text="q", draft_reply="x",
+                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00"))
+    posted, _ = _scheduled(tmp_path, monkeypatch, _stub(), [_comment("ok", "vid-a")], {"nice one": ("thanks!", False)})
+    assert posted == []
+    assert {r.comment_id: r.post_after for r in load_pending_replies()}["ok"] == ""
+
+
+def test_a_failed_auto_post_stays_for_approve(tmp_path, monkeypatch):
+    from lyricvideo.youtube_comment_state import add_pending_reply
+    add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="a", comment_text="q", draft_reply="x",
+                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00"))
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {})
+    monkeypatch.setattr(gui, "post_reply", lambda *a: (_ for _ in ()).throw(RuntimeError("network down")))
+    stub = _auto_stub()
+    assert gui._scan_youtube_comments(stub)["posted"] == 0
+    assert [r.comment_id for r in load_pending_replies()] == ["r1"] and not gui._is_posting(stub, "reply:r1")
+
+
+def test_the_wait_setting_is_used_and_zero_means_next_check(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    stub = _stub()
+    stub.settings = Settings(youtube_auto_approve_replies=True, youtube_auto_reply_delay_hours=6.0)
+    when = gui._auto_post_time(stub.settings, SimpleNamespace(published_at="2026-10-16T12:00:00Z"), "hi", False)
+    wait = datetime.fromisoformat(when) - datetime.fromisoformat("2026-10-16T12:00:00+00:00")
+    assert timedelta(hours=6) <= wait <= timedelta(hours=12)
+    stub.settings = Settings(youtube_auto_approve_replies=True, youtube_auto_reply_delay_hours=0.0)
+    assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="2026-10-16T12:00:00Z"), "hi", False) == \
+        "2026-10-16T12:00:00+00:00"
+    assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="x"), "  ", False) == ""          # blank draft
