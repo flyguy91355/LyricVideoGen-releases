@@ -334,15 +334,24 @@ _TICK_LOCK = threading.Lock()
 _COMMENT_COUNTS_FILE = Path.home() / ".playalongvideoproduction" / "youtube_comment_counts.json"
 _COMMENT_FULL_CHECK_EVERY = timedelta(hours=24)
 _FULL_CHECK_KEY = "_full_check_at"
+# The counts file's format. Counts saved before replies were read (owner, 2026-10-16) already included replies the scan
+# never looked at, so an old file is ignored once: every video is read again and its replies-to-the-channel are found.
+_COUNTS_VERSION_KEY = "_version"
+_COUNTS_VERSION = 2
 
 
 def _load_comment_counts() -> dict[str, int]:
     data = read_json_state(_COMMENT_COUNTS_FILE, {}, dict)
-    return {str(k): v for k, v in data.items() if isinstance(v, int) and not isinstance(v, bool)}
+    if data.get(_COUNTS_VERSION_KEY) != _COUNTS_VERSION:
+        return {}                         # saved by the code that never read replies: read every video once more
+    return {str(k): v for k, v in data.items() if not str(k).startswith("_") and isinstance(v, int) and not isinstance(v, bool)}
 
 
 def _last_full_comment_check() -> datetime | None:
-    value = read_json_state(_COMMENT_COUNTS_FILE, {}, dict).get(_FULL_CHECK_KEY)
+    data = read_json_state(_COMMENT_COUNTS_FILE, {}, dict)
+    if data.get(_COUNTS_VERSION_KEY) != _COUNTS_VERSION:
+        return None
+    value = data.get(_FULL_CHECK_KEY)
     try:
         return datetime.fromisoformat(value) if isinstance(value, str) else None
     except ValueError:
@@ -351,6 +360,7 @@ def _last_full_comment_check() -> datetime | None:
 
 def _save_comment_counts(counts: dict[str, int], full_check_at: datetime | None = None) -> None:
     data: dict = dict(counts)
+    data[_COUNTS_VERSION_KEY] = _COUNTS_VERSION
     if full_check_at is not None:
         data[_FULL_CHECK_KEY] = full_check_at.isoformat()
     try:

@@ -492,3 +492,30 @@ def test_check_now_says_when_not_connected(monkeypatch):
     monkeypatch.setattr(gui.messagebox, "showinfo", lambda title, text: shown.append(text))
     LyricVideoGUI._check_youtube_comments_worker(_stub(), manual=True)
     assert "Not connected" in shown[0]
+
+
+def test_counts_saved_before_replies_were_read_are_ignored_once(tmp_path, monkeypatch):
+    """owner, 2026-10-16: a reply to the channel's reply was already in the saved count, so the video was skipped forever."""
+    import json
+    counts_file = tmp_path / "counts.json"
+    monkeypatch.setattr(gui, "_COMMENT_COUNTS_FILE", counts_file)
+    counts_file.write_text(json.dumps({"vid-a": 3, "_full_check_at": "2026-10-16T16:00:00-04:00"}))   # old format
+    assert gui._load_comment_counts() == {} and gui._last_full_comment_check() is None
+    gui._save_comment_counts({"vid-a": 3})
+    assert gui._load_comment_counts() == {"vid-a": 3}                         # the new format is trusted
+
+
+def test_an_old_counts_file_makes_the_next_check_read_every_video(tmp_path, monkeypatch):
+    import json
+    counts_file = tmp_path / "counts.json"
+    monkeypatch.setattr(gui, "_COMMENT_COUNTS_FILE", counts_file)
+    counts_file.write_text(json.dumps({"vid-a": 3, "_full_check_at": "2099-01-01T00:00:00-04:00"}))
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 3)})
+    read = []
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": read.append(video_id) or [])
+    LyricVideoGUI._check_youtube_comments_worker(_stub())
+    assert read == ["vid-a"]
+    read.clear()
+    LyricVideoGUI._check_youtube_comments_worker(_stub())                    # now trusted: unchanged count, no read
+    assert read == []

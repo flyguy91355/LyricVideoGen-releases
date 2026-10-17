@@ -373,7 +373,7 @@ claimed (`_claim_posting`; its buttons off via `_DraftQueueView.set_busy`), rele
 and refreshes the label; Approve checks `is_video_public()`. An approved engagement comment's thread is marked seen;
 Dismissing one marks `engagement_comment_posted`.
 Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
-`parent_id`, drafted with `context`); Check Now shows a result; `youtube_auto_approve_replies` posts ordinary drafts.
+`parent_id`, drafted with `context`); Check Now shows a result; pre-`_version` counts ignored once; `youtube_auto_approve_replies` posts ordinary drafts.
 **Channel organization** (spec 9-17): after every `schedule_upload()` gui calls `youtube_playlists.organize_video()`
 (fails soft; idempotent): All, EASY/3/4 and artist playlists first, then genre (`classify_genre`). EASY/3/4 membership
 is reconciled both ways from the real key (owner key > confirmed decision > saved key; an easychords version uses its
