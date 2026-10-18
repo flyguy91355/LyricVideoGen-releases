@@ -211,3 +211,32 @@ def update_posted_reply_text(reply_id: str, text: str, edited_at: str, path: Pat
         if found:
             atomic_write_text(path, json.dumps([asdict(e) for e in entries]))
         return found
+
+
+POSTED_SEEN_FILE = CREDENTIALS_DIR / "youtube_posted_replies_seen.json"
+
+
+def load_posted_seen_at(path: Path = POSTED_SEEN_FILE) -> str:
+    """When the owner last opened Posted Replies (ISO), "" if never: replies sent after it are NEW."""
+    value = read_json_state(path, {}, dict).get("seen_at", "")
+    return value if isinstance(value, str) else ""
+
+
+def save_posted_seen_at(when: str, path: Path = POSTED_SEEN_FILE) -> None:
+    with _LOCK:
+        atomic_write_text(path, json.dumps({"seen_at": when}))
+
+
+def count_new_posted_replies(entries: list, seen_at: str) -> int:
+    return sum(1 for e in entries if _later(e.posted_at, seen_at))
+
+
+def _later(when: str, seen_at: str) -> bool:
+    """`when` is after `seen_at` (both ISO); everything is new when nothing was seen yet."""
+    if not seen_at:
+        return True
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(when) > datetime.fromisoformat(seen_at)
+    except ValueError:
+        return False

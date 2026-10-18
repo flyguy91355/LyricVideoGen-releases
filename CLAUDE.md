@@ -76,7 +76,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    edition-consensus vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
    `lyric_lines.json`/`Song`. Pass = matching what faster-whisper HEARS in the vocal stem (medium, VAD off): >=70%
    in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing vocals ignored).
-   The tokenizer (`lyric_audio_match._tokens`, shared by every lyric check) folds
+   The tokenizer (`lyric_audio_match._tokens`) folds
    curly apostrophes and accents. Section markers are not lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
    "Chorus:", "(x2)"/"Repeat chorus"; a leading "[..]" tag stripped). Unsung lead/tail credit lines are trimmed per
    candidate before the check (`trim=`, from `pipeline._build_unsung_trim`: line times, Whisper words, vocal
@@ -101,7 +101,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    lyricvideo.timing_gate --hold` writes holds; `pipeline.review_concern()` gives the current reason. EASY variants are
    judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real,
    correctly-placed line also scores "out of sync" -- Whisper Text (Flagged) is editable per
-   row; Save Corrections (`owner_whisper.py`, `whisper_owner.json`) synthesizes heard
+   row; Save Corrections (`owner_whisper.py`) synthesizes heard
    words across its span, read by `corrected_heard_words()`/`_align_lyrics` (`add_corrections()`; a Redo
    recomputes it) -- never the placement itself. The anchor transcription is hinted (`lyric_hotwords()`,
    cache-keyed) with the accepted lyrics -- owner's text, or a fetched candidate once verified (the verifying
@@ -246,7 +246,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
 
 - **Song lists** (Redo / Upload / Pending / EASY CHORD / Flagged): each is ONE `ttk.Treeview` (`gui._SongListView`,
   dark via `_song_list_font`; Windows uses 'clam') in a section starting CLOSED
-  (`_make_collapsible_section`; never nest a `CTkScrollableFrame`). One Watch / ✕ Remove pair per
+  (never nest a `CTkScrollableFrame`). One Watch / ✕ Remove pair per
   list acts on the highlighted row (double-click Watches); Remove hides it (`_drop_list_row`, no rescan), files
   untouched. Filled on first expand by one non-daemon scanner thread (`_refresh_song_list` -> `_start_list_load`;
   `_poll_list_results` applies on Tk; a generation counter drops stale results); `invalidate()` on an open section
@@ -375,7 +375,8 @@ Dismissing one marks `engagement_comment_posted`.
 Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
 `parent_id`, drafted with `context`); Check Now shows a result; old counts ignored once; `youtube_auto_approve_replies` posts ordinary drafts after
 `youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`). Every sent reply goes to Posted Replies (`youtube_posted_replies.json`,
-`record_posted_reply`, with `reply_id`); Save Edit there calls `update_comment` (50 units).
+`record_posted_reply`, with `reply_id`); Save Edit there calls `update_comment` (50 units);
+replies sent since it was last opened (`load_posted_seen_at`) show ● NEW + an 'N new' count.
 **Channel organization** (spec 9-17): after every `schedule_upload()` gui calls `youtube_playlists.organize_video()`
 (fails soft; idempotent): All, EASY/3/4 and artist playlists first, then genre (`classify_genre`). EASY/3/4 membership
 is reconciled both ways from the real key (owner key > confirmed decision > saved key; an easychords version uses its

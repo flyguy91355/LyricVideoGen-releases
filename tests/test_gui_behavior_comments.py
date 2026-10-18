@@ -602,7 +602,7 @@ def _history_stub(posted_view_rows):
     stub = _stub()
     stub._confirm_quota_override_if_blocked = lambda: True
     stub._refresh_youtube_status = lambda: None
-    stub._refresh_posted_replies = lambda: posted_view_rows.append("refreshed")
+    stub._on_posted_replies_changed = lambda: posted_view_rows.append("refreshed")
     stub.posted_replies_view = SimpleNamespace(set_busy=lambda *a: None)
     return stub
 
@@ -655,3 +655,40 @@ def test_save_edit_refuses_without_a_reply_id_or_a_change(monkeypatch):
     same = PostedReply("c2", "v", "Song", "@fan", "hi", "thanks!", "2026-10-01T10:00:00-04:00", "auto", reply_id="yt-2")
     LyricVideoGUI._on_save_reply_edit(_history_stub([]), same, _Box("thanks!"))
     assert shown == ["Edit on YouTube", "Nothing to save"]
+
+
+def test_replies_sent_since_the_history_was_last_opened_are_new(monkeypatch):
+    from lyricvideo.youtube_comment_state import (
+        PostedReply, count_new_posted_replies, load_posted_seen_at, record_posted_reply, save_posted_seen_at,
+    )
+    old = PostedReply("a", "v", "Song", "@x", "hi", "thanks", "2026-10-01T10:00:00-04:00", "approved", reply_id="r-old")
+    new = PostedReply("b", "v", "Song", "@y", "yo", "cheers", "2026-10-17T10:00:00-04:00", "auto", reply_id="r-new")
+    record_posted_reply(old)
+    record_posted_reply(new)
+    assert count_new_posted_replies([old, new], "") == 2                     # never opened: all new
+    save_posted_seen_at("2026-10-10T00:00:00-04:00")
+    assert count_new_posted_replies([old, new], load_posted_seen_at()) == 1
+
+    rows, count = [], SimpleNamespace(value=None)
+    stub = SimpleNamespace(posted_replies_view=SimpleNamespace(set_items=lambda r: rows.extend(r)),
+                           posted_new_var=SimpleNamespace(set=lambda v: setattr(count, "value", v)))
+    stub._update_posted_new_count = lambda: LyricVideoGUI._update_posted_new_count(stub)
+    LyricVideoGUI._refresh_posted_replies(stub)                              # the owner opens the history
+    whos = {row[0]: row[2] for row in rows}
+    assert whos["r-new"].startswith("● NEW") and not whos["r-old"].startswith("● NEW")
+    assert count.value == ""                                                  # opening it marks them seen
+    rows.clear()
+    LyricVideoGUI._refresh_posted_replies(stub)                              # opened again: nothing new any more
+    assert not any(row[2].startswith("● NEW") for row in rows)
+
+
+def test_a_newly_sent_reply_bumps_the_header_count(monkeypatch):
+    from lyricvideo.youtube_comment_state import PostedReply, record_posted_reply, save_posted_seen_at
+    save_posted_seen_at("2026-10-10T00:00:00-04:00")
+    record_posted_reply(PostedReply("b", "v", "Song", "@y", "yo", "cheers", "2026-10-17T10:00:00-04:00", "auto", reply_id="r"))
+    count, invalidated = SimpleNamespace(value=None), []
+    stub = SimpleNamespace(posted_new_var=SimpleNamespace(set=lambda v: setattr(count, "value", v)),
+                           _invalidate_posted_replies=lambda: invalidated.append(True))
+    stub._update_posted_new_count = lambda: LyricVideoGUI._update_posted_new_count(stub)
+    LyricVideoGUI._on_posted_replies_changed(stub)
+    assert count.value == "1 new" and invalidated == [True]

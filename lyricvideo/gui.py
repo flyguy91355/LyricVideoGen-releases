@@ -85,6 +85,9 @@ from .youtube_comment_state import (
     PostedReply,
     record_posted_reply,
     update_posted_reply_text,
+    load_posted_seen_at,
+    save_posted_seen_at,
+    count_new_posted_replies,
     load_seen_comment_ids,
     mark_comments_seen,
     remove_pending_comment,
@@ -587,9 +590,9 @@ def _post_due_auto_replies(gui, youtube_client, settings, stop_for_quota) -> int
             break
     if posted:   # posted rows leave the list, as after Approve; the history shows them
         gui.root.after(0, getattr(gui, "_render_pending_replies", None) or gui._on_pending_replies_changed)
-        refresh = getattr(gui, "_refresh_posted_replies", None)
-        if refresh is not None:
-            gui.root.after(0, refresh)
+        changed = getattr(gui, "_on_posted_replies_changed", None)
+        if changed is not None:
+            gui.root.after(0, changed)
     return posted
 
 
@@ -632,7 +635,7 @@ def _record_sent_reply(comment, text: str, how: str, reply_id="") -> None:
         print(f"WARNING: posted, but could not record it in the history: {type(e).__name__}: {e}", file=sys.stderr)
 
 
-def _posted_reply_row(e) -> tuple:
+def _posted_reply_row(e, new: bool = False) -> tuple:
     """(id, entry, who, preview, heading, text) for the Posted Replies list."""
     try:
         when = datetime.fromisoformat(e.posted_at).astimezone().strftime("%b %d %I:%M %p")
@@ -642,7 +645,8 @@ def _posted_reply_row(e) -> tuple:
     edited = " · edited" if getattr(e, "edited_at", "") else ""
     heading = (f"{when} · {how}{edited} · {e.video_title or e.video_id}\n{e.author or 'viewer'}: {e.comment_text}"
                + ("" if e.reply_id else "\n(sent before reply ids were kept: edit it on YouTube)"))
-    return (e.reply_id or f"{e.comment_id}@{e.posted_at}", e, f"{when}", e.reply_text, heading, e.reply_text)
+    who = f"● NEW  {when}" if new else when
+    return (e.reply_id or f"{e.comment_id}@{e.posted_at}", e, who, e.reply_text, heading, e.reply_text)
 
 
 def format_posted_replies(entries: list) -> str:
@@ -3350,9 +3354,9 @@ class LyricVideoGUI:
                       file=sys.stderr)
             _record_sent_reply(reply, text, "approved", reply_id)
             self.root.after(0, self._render_pending_replies)
-            refresh = getattr(self, "_refresh_posted_replies", None)
-            if refresh is not None:
-                self.root.after(0, refresh)
+            changed = getattr(self, "_on_posted_replies_changed", None)
+            if changed is not None:
+                self.root.after(0, changed)
             return True
 
         _post_draft_in_background(self, key, "replies_view", reply.comment_id, post)
@@ -3366,25 +3370,57 @@ class LyricVideoGUI:
     def _build_posted_replies_panel(self, parent) -> None:
         """Posted Replies: every reply the app sent -- auto-posted or approved -- with the comment it answered, newest first
         (owner, 2026-10-16). Read-only; filled when first opened and after every post."""
-        content, _invalidate = self._make_collapsible_section(
-            parent, "Posted Replies (history)", on_first_expand=self._refresh_posted_replies,
+        self.posted_new_var = tk.StringVar(value="")
+
+        def _header_extra(header) -> None:
+            ctk.CTkLabel(header, textvariable=self.posted_new_var, text_color="#f0a339").pack(side="right", padx=8)
+
+        content, self._invalidate_posted_replies = self._make_collapsible_section(
+            parent, "Posted Replies (history)", header_extra=_header_extra, on_first_expand=self._refresh_posted_replies,
         )
         self.posted_replies_view = _DraftQueueView(
             content, on_approve=lambda entry, box: self._on_save_reply_edit(entry, box), on_dismiss=None,
             empty_text="(no replies sent yet)", approve_text="Save Edit", count_text="{n} sent",
         )
         self.posted_replies_view.pack(fill="x", padx=8, pady=(0, 8))
+        self._update_posted_new_count()
 
     def _refresh_posted_replies(self) -> None:
+        """Fills the open history (owner, 2026-10-18: "how do i know theyre new from the last time i opened"): replies sent
+        since it was last opened are marked NEW, and opening it counts as having seen them."""
         view = getattr(self, "posted_replies_view", None)
         if view is None:
             return
         try:
             entries = sorted(load_posted_replies(), key=lambda e: e.posted_at, reverse=True)
+            seen_at = load_posted_seen_at()
         except Exception as e:
             print(f"WARNING: could not read the reply history: {type(e).__name__}: {e}", file=sys.stderr)
-            entries = []
-        view.set_items([_posted_reply_row(e) for e in entries])
+            entries, seen_at = [], ""
+        view.set_items([_posted_reply_row(e, new=count_new_posted_replies([e], seen_at) == 1) for e in entries])
+        try:
+            save_posted_seen_at(datetime.now().astimezone().isoformat(timespec="seconds"))
+        except Exception as e:
+            print(f"WARNING: could not save when the history was seen: {type(e).__name__}: {e}", file=sys.stderr)
+        self._update_posted_new_count()
+
+    def _update_posted_new_count(self) -> None:
+        var = getattr(self, "posted_new_var", None)
+        if var is None:
+            return
+        try:
+            n = count_new_posted_replies(load_posted_replies(), load_posted_seen_at())
+        except Exception:
+            n = 0
+        var.set(f"{n} new" if n else "")
+
+    def _on_posted_replies_changed(self) -> None:
+        """A reply was just sent or edited: the header's NEW count goes up; an open history refreshes at once, a closed one
+        when it is next opened."""
+        self._update_posted_new_count()
+        invalidate = getattr(self, "_invalidate_posted_replies", None)
+        if invalidate is not None:
+            invalidate()
 
     def _on_save_reply_edit(self, entry, text_box) -> None:
         """Changes a sent reply on YouTube to the edited text (comments.update, 50 quota units) and in the history."""
@@ -3414,7 +3450,7 @@ class LyricVideoGUI:
             except Exception as e:
                 print(f"WARNING: edited on YouTube, but could not update the history: {type(e).__name__}: {e}",
                       file=sys.stderr)
-            self.root.after(0, self._refresh_posted_replies)
+            self.root.after(0, self._on_posted_replies_changed)
             self.root.after(0, lambda: messagebox.showinfo("Reply edited", "The reply on YouTube now says the new text."))
             return False      # releases the claim: the same reply can be edited again later
 
