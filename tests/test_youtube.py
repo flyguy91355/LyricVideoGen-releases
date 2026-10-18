@@ -864,3 +864,25 @@ def test_a_thread_with_more_replies_than_included_fetches_them_all():
 def test_without_the_channel_id_only_top_level_comments_are_read():
     client = _ThreadsClient([_thread("t1", "hi", [_reply("me1", "UC-me", "thanks", "2026-10-02T00:00:00Z")], total=5)])
     assert [c.comment_id for c in list_new_comments(client, "vid", set())] == ["t1"] and client.reply_calls == []
+
+
+def test_post_reply_returns_the_new_replys_id_and_update_comment_changes_its_text():
+    from lyricvideo.youtube import update_comment
+    calls = {}
+
+    class _Comments:
+        def insert(self, **kw):
+            calls["insert"] = kw
+            return _FakeExecutable({"id": "new-reply-id"})
+
+        def update(self, **kw):
+            calls["update"] = kw
+            return _FakeExecutable({})
+
+    class _Client:
+        def comments(self):
+            return _Comments()
+
+    assert post_reply(_Client(), "thread-1", "thanks!") == "new-reply-id"
+    update_comment(_Client(), "new-reply-id", "thanks so much!")
+    assert calls["update"]["body"] == {"id": "new-reply-id", "snippet": {"textOriginal": "thanks so much!"}}

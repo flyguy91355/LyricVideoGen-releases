@@ -70,6 +70,7 @@ from .update.apply import (
 from .update.release_client import RELEASES_REPO, check_for_update
 from .update.version import read_local_version, write_local_version
 from . import youtube_auth
+from .youtube import update_comment
 from .youtube import (
     is_quota_exceeded_error, is_video_public, list_new_comments, post_reply, post_top_level_comment,
     video_exists,
@@ -80,6 +81,10 @@ from .youtube_comment_state import (
     add_pending_reply,
     load_pending_comments,
     load_pending_replies,
+    load_posted_replies,
+    PostedReply,
+    record_posted_reply,
+    update_posted_reply_text,
     load_seen_comment_ids,
     mark_comments_seen,
     remove_pending_comment,
@@ -580,8 +585,11 @@ def _post_due_auto_replies(gui, youtube_client, settings, stop_for_quota) -> int
             posted += 1
         elif _quota_blocked_now():
             break
-    if posted:   # posted rows leave the list, as after Approve
+    if posted:   # posted rows leave the list, as after Approve; the history shows them
         gui.root.after(0, getattr(gui, "_render_pending_replies", None) or gui._on_pending_replies_changed)
+        refresh = getattr(gui, "_refresh_posted_replies", None)
+        if refresh is not None:
+            gui.root.after(0, refresh)
     return posted
 
 
@@ -593,7 +601,7 @@ def _auto_post_reply(gui, youtube_client, comment, draft: str, slug: str, stop_f
     if not _claim_posting(gui, key):
         return False
     try:
-        post_reply(youtube_client, getattr(comment, "parent_id", "") or comment.comment_id, draft)
+        reply_id = post_reply(youtube_client, getattr(comment, "parent_id", "") or comment.comment_id, draft)
     except Exception as e:
         _release_posting(gui, key)
         if is_quota_exceeded_error(e):
@@ -606,7 +614,52 @@ def _auto_post_reply(gui, youtube_client, comment, draft: str, slug: str, stop_f
         remove_pending_reply(comment.comment_id)
     except Exception as e:
         print(f"WARNING: auto-posted, but could not take the reply off the list: {type(e).__name__}: {e}", file=sys.stderr)
+    _record_sent_reply(comment, draft, "auto", reply_id)
     return True
+
+
+def _record_sent_reply(comment, text: str, how: str, reply_id="") -> None:
+    """Keeps a record of a reply that was just posted (the Posted Replies history). Never raises: the post already happened."""
+    try:
+        record_posted_reply(PostedReply(
+            comment_id=str(getattr(comment, "comment_id", "")), video_id=str(getattr(comment, "video_id", "")),
+            video_title=str(getattr(comment, "video_title", "") or ""), author=str(getattr(comment, "author", "") or ""),
+            comment_text=str(getattr(comment, "comment_text", None) or getattr(comment, "text", "") or ""),
+            reply_text=text, posted_at=datetime.now().astimezone().isoformat(timespec="seconds"), how=how,
+            reply_id=reply_id if isinstance(reply_id, str) else "",
+        ))
+    except Exception as e:
+        print(f"WARNING: posted, but could not record it in the history: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def _posted_reply_row(e) -> tuple:
+    """(id, entry, who, preview, heading, text) for the Posted Replies list."""
+    try:
+        when = datetime.fromisoformat(e.posted_at).astimezone().strftime("%b %d %I:%M %p")
+    except ValueError:
+        when = e.posted_at
+    how = {"auto": "auto-posted", "approved": "approved", "earlier": "sent earlier"}.get(e.how, e.how)
+    edited = " · edited" if getattr(e, "edited_at", "") else ""
+    heading = (f"{when} · {how}{edited} · {e.video_title or e.video_id}\n{e.author or 'viewer'}: {e.comment_text}"
+               + ("" if e.reply_id else "\n(sent before reply ids were kept: edit it on YouTube)"))
+    return (e.reply_id or f"{e.comment_id}@{e.posted_at}", e, f"{when}", e.reply_text, heading, e.reply_text)
+
+
+def format_posted_replies(entries: list) -> str:
+    """The Posted Replies history as text, newest first."""
+    if not entries:
+        return "(no replies sent yet)"
+    blocks = []
+    for e in sorted(entries, key=lambda e: e.posted_at, reverse=True):
+        try:
+            when = datetime.fromisoformat(e.posted_at).astimezone().strftime("%b %d %I:%M %p")
+        except ValueError:
+            when = e.posted_at
+        how = {"auto": "auto-posted", "approved": "approved", "earlier": "sent earlier"}.get(e.how, e.how)
+        blocks.append(f"{when} · {how} · {e.video_title or e.video_id}\n"
+                      f"   {e.author or 'viewer'}: {e.comment_text}\n"
+                      f"   ↳ You: {e.reply_text}")
+    return "\n\n".join(blocks)
 
 
 def _comment_check_message(summary: dict | None, error: str = "") -> str:
@@ -1191,12 +1244,14 @@ class _DraftQueueView:
     whatever reply the owner was in the middle of editing. Here a refresh only adds or drops list rows, and every edit is
     kept per draft id (switching to another draft and back, a new comment arriving, approving a different one)."""
 
-    def __init__(self, parent, *, on_approve, on_dismiss, height_px: int = 140, empty_text: str = "(none)"):
+    def __init__(self, parent, *, on_approve, on_dismiss, height_px: int = 140, empty_text: str = "(none)",
+                 approve_text: str = "Approve", count_text: str = "{n} waiting"):
         self.frame = ctk.CTkFrame(parent, fg_color="transparent")
         font = _song_list_font(self.frame)
         row_px = font.metrics("linespace") + 8
         self._on_approve, self._on_dismiss = on_approve, on_dismiss
         self._empty_text = empty_text
+        self._count_text = count_text
         self._items: dict[str, object] = {}
         self._drafts: dict[str, str] = {}
         self._headings: dict[str, str] = {}
@@ -1224,13 +1279,14 @@ class _DraftQueueView:
         self.editor.pack(fill="x", padx=4, pady=(0, 4))
         buttons = ctk.CTkFrame(self.frame, fg_color="transparent")
         buttons.pack(fill="x", padx=4, pady=(0, 4))
-        self.approve_button = ctk.CTkButton(buttons, text="Approve", width=80, state="disabled", command=self._approve)
+        self.approve_button = ctk.CTkButton(buttons, text=approve_text, width=80, state="disabled", command=self._approve)
         self.approve_button.pack(side="left", padx=(0, 6))
         self.dismiss_button = ctk.CTkButton(
             buttons, text="Dismiss", width=80, fg_color="gray30", hover_color="gray20", state="disabled",
             command=self._dismiss,
         )
-        self.dismiss_button.pack(side="left")
+        if on_dismiss is not None:          # the Posted Replies history has nothing to dismiss
+            self.dismiss_button.pack(side="left")
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._show(self.selected()))
         self._show(None)
 
@@ -1268,7 +1324,7 @@ class _DraftQueueView:
         self._drafts = {row[0]: row[5] for row in rows}
         self._edits = {k: v for k, v in self._edits.items() if k in self._items}
         self._busy &= set(self._items)
-        self.status.configure(text=f"{len(ids)} waiting" if ids else self._empty_text)
+        self.status.configure(text=self._count_text.format(n=len(ids)) if ids else self._empty_text)
         if highlighted in self._items:
             if self.selected() != highlighted:
                 self.tree.selection_set(highlighted)
@@ -1320,7 +1376,7 @@ class _DraftQueueView:
 
     def _dismiss(self) -> None:
         item = self.current()
-        if item is not None:
+        if item is not None and self._on_dismiss is not None:
             self._on_dismiss(item)
 
 
@@ -1637,6 +1693,7 @@ class LyricVideoGUI:
 
         self._build_youtube_panel(right)
         self._build_pending_comments_panel(right)
+        self._build_posted_replies_panel(right)
         self._build_flagged_songs_panel(right)
 
     def _open_settings_window(self) -> None:
@@ -3277,7 +3334,7 @@ class LyricVideoGUI:
 
         def post(youtube_client) -> bool:
             try:
-                post_reply(youtube_client, reply.parent_id or reply.comment_id, text)     # a reply goes to its thread
+                reply_id = post_reply(youtube_client, reply.parent_id or reply.comment_id, text)   # a reply goes to its thread
             except Exception as e:
                 if is_quota_exceeded_error(e):
                     save_quota_blocked_until(
@@ -3291,7 +3348,11 @@ class LyricVideoGUI:
             except Exception as e:
                 print(f"WARNING: posted, but could not take the reply off the list: {type(e).__name__}: {e}",
                       file=sys.stderr)
+            _record_sent_reply(reply, text, "approved", reply_id)
             self.root.after(0, self._render_pending_replies)
+            refresh = getattr(self, "_refresh_posted_replies", None)
+            if refresh is not None:
+                self.root.after(0, refresh)
             return True
 
         _post_draft_in_background(self, key, "replies_view", reply.comment_id, post)
@@ -3301,6 +3362,63 @@ class LyricVideoGUI:
             return  # being posted right now
         remove_pending_reply(reply.comment_id)
         self._render_pending_replies()
+
+    def _build_posted_replies_panel(self, parent) -> None:
+        """Posted Replies: every reply the app sent -- auto-posted or approved -- with the comment it answered, newest first
+        (owner, 2026-10-16). Read-only; filled when first opened and after every post."""
+        content, _invalidate = self._make_collapsible_section(
+            parent, "Posted Replies (history)", on_first_expand=self._refresh_posted_replies,
+        )
+        self.posted_replies_view = _DraftQueueView(
+            content, on_approve=lambda entry, box: self._on_save_reply_edit(entry, box), on_dismiss=None,
+            empty_text="(no replies sent yet)", approve_text="Save Edit", count_text="{n} sent",
+        )
+        self.posted_replies_view.pack(fill="x", padx=8, pady=(0, 8))
+
+    def _refresh_posted_replies(self) -> None:
+        view = getattr(self, "posted_replies_view", None)
+        if view is None:
+            return
+        try:
+            entries = sorted(load_posted_replies(), key=lambda e: e.posted_at, reverse=True)
+        except Exception as e:
+            print(f"WARNING: could not read the reply history: {type(e).__name__}: {e}", file=sys.stderr)
+            entries = []
+        view.set_items([_posted_reply_row(e) for e in entries])
+
+    def _on_save_reply_edit(self, entry, text_box) -> None:
+        """Changes a sent reply on YouTube to the edited text (comments.update, 50 quota units) and in the history."""
+        text = text_box.get("1.0", "end").strip()
+        if not entry.reply_id:
+            messagebox.showinfo("Edit on YouTube", "This reply was sent before the app kept reply ids, so it can only be "
+                                "edited on YouTube itself (YouTube Studio > Comments).")
+            return
+        if not text or text == entry.reply_text.strip():
+            messagebox.showinfo("Nothing to save", "Change the reply text first, then Save Edit.")
+            return
+        if not self._confirm_quota_override_if_blocked():
+            return
+        key = f"edit:{entry.reply_id}"
+        if not _claim_posting(self, key):
+            return
+
+        def post(youtube_client) -> bool:
+            try:
+                update_comment(youtube_client, entry.reply_id, text)
+            except Exception as e:
+                message = f"{type(e).__name__}: {e}"
+                self.root.after(0, lambda: messagebox.showerror("Could not edit the reply", message))
+                return False
+            try:
+                update_posted_reply_text(entry.reply_id, text, datetime.now().astimezone().isoformat(timespec="seconds"))
+            except Exception as e:
+                print(f"WARNING: edited on YouTube, but could not update the history: {type(e).__name__}: {e}",
+                      file=sys.stderr)
+            self.root.after(0, self._refresh_posted_replies)
+            self.root.after(0, lambda: messagebox.showinfo("Reply edited", "The reply on YouTube now says the new text."))
+            return False      # releases the claim: the same reply can be edited again later
+
+        _post_draft_in_background(self, key, "posted_replies_view", _posted_reply_row(entry)[0], post)
 
     def _build_pending_comments_panel(self, parent) -> None:
         content, self._invalidate_pending_comments = self._make_collapsible_section(

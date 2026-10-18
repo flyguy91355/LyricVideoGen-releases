@@ -22,7 +22,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
   - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
     googleapiclient, tensorflow, crema -- gui's `_LazyAnthropic` and `build()`
     wrapper, pipeline's lazy `anthropic` proxy, align's in-function torch import, assemble's `_load_moviepy`.
-  - Quit: X (`WM_DELETE_WINDOW` -> `_on_close_window`) and
+  - Quit: X and
     Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
     Update runs (closing kills it; no resume). `_shut_down` withdraws the window at once, then destroys it; `_closing`
     stops new scans.
@@ -108,7 +108,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    check stays unhinted, 9-27). `revalidate_hotwords.py` checks for regression. `owner_verified.py` (Mark
    Verified, or an
    Upload Anyway the daily cap skips) overrides every check until the lyric words or their times change
-   (`timing_fingerprint`: a Redo usually lapses it, a key fix keeps it). A cleared song's real % is in cleared_log's
+   (`timing_fingerprint`). A cleared song's real % is in cleared_log's
    note. When new timing replaces a song that has a video, `<slug>.mp4` becomes `<slug>.previous.mp4` and
    `held_before_video.json` (`REDO_STOPPED_REASON`) holds it until a render: a Redo that dies mid-run shows in
    Flagged with Render Anyway, never in Pending/Upload. MMS_FA knows only a-z and `'`:
@@ -275,7 +275,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   `on_change` early; 9-11).
 - **SettingsPanel** (`settings_panel.py`; `~/.playalongvideoproduction/settings.json`): writes disk ONLY via Save
   Settings. A field differing from `self._baseline` gets a ● and a bold+orange label
-  (`_refresh_dirty_indicators`/`_dirty_fields`); Save shows an itemized `old → new`
+  ; Save shows an itemized `old → new`
   confirm, and a failed write (OSError) shows an error and stays unsaved; Discard reloads the baseline. gui's
   `self.settings` updates live, so this session's runs use the latest values. Each field shows its default
   (`_default_text`); each slider has a box (`_parse_clamped_float`: "%"/"s" suffix, ".5", "0,5"; unedited text is
@@ -349,7 +349,7 @@ marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.tr
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
 raises). Status label + Connect refresh on a
-background thread (never call YouTube from the Tk thread; also every 20-minute tick). Worker threads format an error's
+background thread (never from the Tk thread). Worker threads format an error's
 text BEFORE a deferred `root.after` lambda (`except ... as e` unbinds `e`; 9-14).
 **GUI uploads**: "Upload to YouTube" = a `list_rendered_songs()` list + Upload (the only path that re-sends a song,
 after "create a duplicate?"), and the "Pending YouTube Uploads" checklist (`list_pending_uploads()`: never-uploaded,
@@ -374,7 +374,8 @@ and refreshes the label; Approve checks `is_video_public()`. An approved engagem
 Dismissing one marks `engagement_comment_posted`.
 Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
 `parent_id`, drafted with `context`); Check Now shows a result; old counts ignored once; `youtube_auto_approve_replies` posts ordinary drafts after
-`youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`).
+`youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`). Every sent reply goes to Posted Replies (`youtube_posted_replies.json`,
+`record_posted_reply`, with `reply_id`); Save Edit there calls `update_comment` (50 units).
 **Channel organization** (spec 9-17): after every `schedule_upload()` gui calls `youtube_playlists.organize_video()`
 (fails soft; idempotent): All, EASY/3/4 and artist playlists first, then genre (`classify_genre`). EASY/3/4 membership
 is reconciled both ways from the real key (owner key > confirmed decision > saved key; an easychords version uses its

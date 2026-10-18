@@ -395,9 +395,19 @@ def list_new_comments(
     return comments
 
 
-def post_reply(youtube_client, comment_id: str, text: str) -> None:
-    youtube_client.comments().insert(
+def post_reply(youtube_client, comment_id: str, text: str) -> str:
+    """Posts `text` as a reply under `comment_id` (a top-level comment); returns the new reply's own id ("" if YouTube
+    gave none) -- kept so the reply can be edited later."""
+    response = youtube_client.comments().insert(
         part="snippet", body={"snippet": {"parentId": comment_id, "textOriginal": text}},
+    ).execute()
+    return str((response or {}).get("id", "")) if isinstance(response, dict) else ""
+
+
+def update_comment(youtube_client, comment_id: str, text: str) -> None:
+    """Replaces the text of one of the channel's OWN comments or replies (comments.update, 50 quota units)."""
+    youtube_client.comments().update(
+        part="snippet", body={"id": comment_id, "snippet": {"textOriginal": text}},
     ).execute()
 
 

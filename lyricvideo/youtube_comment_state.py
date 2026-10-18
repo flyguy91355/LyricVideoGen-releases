@@ -160,3 +160,54 @@ def remove_pending_comment(video_id: str, path: Path = PENDING_COMMENTS_FILE) ->
         kept = [c for c in comments if c.video_id != video_id]
         if len(kept) != len(comments):
             save_pending_comments(kept, path)
+
+
+# --- Posted replies: a history of every reply the app sent (owner, 2026-10-16: an auto-posted reply left "no record of it
+# even happening or what the response actually said"). Newest last on disk; the GUI shows newest first.
+POSTED_REPLIES_FILE = CREDENTIALS_DIR / "youtube_posted_replies.json"
+POSTED_REPLIES_KEEP = 500
+
+
+@dataclass(frozen=True)
+class PostedReply:
+    comment_id: str          # the comment that was answered
+    video_id: str
+    video_title: str
+    author: str              # who wrote that comment
+    comment_text: str
+    reply_text: str          # exactly what was posted
+    posted_at: str           # ISO time
+    how: str = "approved"    # "auto" | "approved" | "earlier" (found on YouTube, sent before this history existed)
+    reply_id: str = ""       # the posted reply's own YouTube id -- needed to edit it ("" = cannot be edited from the app)
+    edited_at: str = ""      # set when the owner edited it from the history
+
+
+def load_posted_replies(path: Path = POSTED_REPLIES_FILE) -> list[PostedReply]:
+    return _load_items(path, PostedReply)
+
+
+def record_posted_reply(entry: PostedReply, path: Path = POSTED_REPLIES_FILE) -> None:
+    """Appends one sent reply (the oldest are dropped past POSTED_REPLIES_KEEP). A reply already recorded for the same
+    comment with the same text is not added twice."""
+    with _LOCK:
+        entries = load_posted_replies(path)
+        if any(e.comment_id == entry.comment_id and e.reply_text == entry.reply_text for e in entries):
+            return
+        entries.append(entry)
+        entries.sort(key=lambda e: e.posted_at)
+        atomic_write_text(path, json.dumps([asdict(e) for e in entries[-POSTED_REPLIES_KEEP:]]))
+
+
+def update_posted_reply_text(reply_id: str, text: str, edited_at: str, path: Path = POSTED_REPLIES_FILE) -> bool:
+    """Records an edit of a sent reply; False when the history has no entry with that reply id."""
+    from dataclasses import replace
+    with _LOCK:
+        entries = load_posted_replies(path)
+        found = False
+        for i, entry in enumerate(entries):
+            if entry.reply_id and entry.reply_id == reply_id:
+                entries[i] = replace(entry, reply_text=text, edited_at=edited_at)
+                found = True
+        if found:
+            atomic_write_text(path, json.dumps([asdict(e) for e in entries]))
+        return found

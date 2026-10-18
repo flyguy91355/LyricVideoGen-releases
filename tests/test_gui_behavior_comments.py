@@ -560,3 +560,98 @@ def test_the_wait_setting_is_used_and_zero_means_next_check(tmp_path, monkeypatc
     assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="2026-10-16T12:00:00Z"), "hi", False) == \
         "2026-10-16T12:00:00+00:00"
     assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="x"), "  ", False) == ""          # blank draft
+
+
+def test_an_auto_posted_reply_is_recorded_in_the_history(tmp_path, monkeypatch):
+    from lyricvideo.youtube_comment_state import add_pending_reply, load_posted_replies
+    add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="@fan", comment_text="great!", draft_reply="thanks!",
+                                   is_error_report=False, parent_id="t1", video_title="Song A",
+                                   post_after="2026-01-01T00:00:00+00:00"))
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {})
+    monkeypatch.setattr(gui, "post_reply", lambda *a: None)
+    gui._scan_youtube_comments(_auto_stub())
+    [entry] = load_posted_replies()
+    assert (entry.how, entry.video_title, entry.author, entry.comment_text, entry.reply_text) == \
+        ("auto", "Song A", "@fan", "great!", "thanks!")
+
+
+def test_the_history_text_lists_newest_first_with_both_sides():
+    from lyricvideo.youtube_comment_state import PostedReply
+    entries = [PostedReply("a", "v", "Old Song", "@x", "first", "thanks", "2026-10-01T10:00:00-04:00", "approved"),
+               PostedReply("b", "v", "New Song", "@y", "second", "cheers", "2026-10-16T20:49:00-04:00", "auto")]
+    text = gui.format_posted_replies(entries)
+    assert text.index("New Song") < text.index("Old Song")
+    assert "auto-posted" in text and "@y: second" in text and "↳ You: cheers" in text
+    assert gui.format_posted_replies([]) == "(no replies sent yet)"
+
+
+def test_the_history_keeps_one_entry_per_reply_and_caps_its_size(tmp_path):
+    from lyricvideo import youtube_comment_state as st
+    path = tmp_path / "posted.json"
+    entry = st.PostedReply("a", "v", "S", "@x", "c", "thanks", "2026-10-01T10:00:00-04:00", "auto")
+    st.record_posted_reply(entry, path)
+    st.record_posted_reply(entry, path)
+    assert len(st.load_posted_replies(path)) == 1
+    for i in range(st.POSTED_REPLIES_KEEP + 5):
+        st.record_posted_reply(st.PostedReply(f"c{i}", "v", "S", "@x", "c", f"r{i}", f"2026-10-02T10:{i % 60:02d}:{i // 60:02d}", "auto"), path)
+    assert len(st.load_posted_replies(path)) == st.POSTED_REPLIES_KEEP
+
+
+def _history_stub(posted_view_rows):
+    stub = _stub()
+    stub._confirm_quota_override_if_blocked = lambda: True
+    stub._refresh_youtube_status = lambda: None
+    stub._refresh_posted_replies = lambda: posted_view_rows.append("refreshed")
+    stub.posted_replies_view = SimpleNamespace(set_busy=lambda *a: None)
+    return stub
+
+
+class _Box:
+    def __init__(self, text):
+        self.text = text
+
+    def get(self, *_a):
+        return self.text
+
+
+def test_an_auto_posted_reply_keeps_its_youtube_id_for_editing(tmp_path, monkeypatch):
+    from lyricvideo.youtube_comment_state import add_pending_reply, load_posted_replies
+    add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="@fan", comment_text="hi", draft_reply="thanks!",
+                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00"))
+    _uploaded(tmp_path, "song-a", "vid-a")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {})
+    monkeypatch.setattr(gui, "post_reply", lambda *a: "yt-reply-9")
+    gui._scan_youtube_comments(_auto_stub())
+    assert load_posted_replies()[0].reply_id == "yt-reply-9"
+
+
+def test_save_edit_changes_the_reply_on_youtube_and_in_the_history(monkeypatch):
+    from lyricvideo.youtube_comment_state import PostedReply, load_posted_replies, record_posted_reply
+    monkeypatch.setattr(gui.threading, "Thread", lambda target, daemon=None: SimpleNamespace(start=target))
+    entry = PostedReply("c1", "v", "Song", "@fan", "hi", "thanks!", "2026-10-16T20:49:00-04:00", "auto", reply_id="yt-1")
+    record_posted_reply(entry)
+    updated = []
+    monkeypatch.setattr(gui, "update_comment", lambda client, rid, text: updated.append((rid, text)))
+    shown = []
+    monkeypatch.setattr(gui.messagebox, "showinfo", lambda *a: shown.append(a[0]))
+    rows = []
+    stub = _history_stub(rows)
+    LyricVideoGUI._on_save_reply_edit(stub, entry, _Box("thanks so much!"))
+    assert updated == [("yt-1", "thanks so much!")]
+    [saved] = load_posted_replies()
+    assert saved.reply_text == "thanks so much!" and saved.edited_at
+    assert "Reply edited" in shown and rows == ["refreshed"]
+    assert not gui._is_posting(stub, "edit:yt-1")                           # can be edited again
+
+
+def test_save_edit_refuses_without_a_reply_id_or_a_change(monkeypatch):
+    from lyricvideo.youtube_comment_state import PostedReply
+    monkeypatch.setattr(gui, "update_comment", lambda *a: (_ for _ in ()).throw(AssertionError("called YouTube")))
+    shown = []
+    monkeypatch.setattr(gui.messagebox, "showinfo", lambda title, text: shown.append(title))
+    old = PostedReply("c1", "v", "Song", "@fan", "hi", "thanks!", "2026-10-01T10:00:00-04:00", "earlier")
+    LyricVideoGUI._on_save_reply_edit(_history_stub([]), old, _Box("new text"))
+    same = PostedReply("c2", "v", "Song", "@fan", "hi", "thanks!", "2026-10-01T10:00:00-04:00", "auto", reply_id="yt-2")
+    LyricVideoGUI._on_save_reply_edit(_history_stub([]), same, _Box("thanks!"))
+    assert shown == ["Edit on YouTube", "Nothing to save"]
