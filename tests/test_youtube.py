@@ -88,6 +88,16 @@ def test_upload_video_returns_the_new_video_id(tmp_path):
     assert "publishAt" not in body["status"]
 
 
+def test_upload_video_discloses_ai_music_only_when_asked(tmp_path):
+    video_path = tmp_path / "song.mp4"
+    video_path.write_bytes(b"fake video bytes")
+    for synthetic, expected in ((True, True), (False, None)):
+        client = _FakeYoutubeClient(video_id="abc123")
+        upload_video(client, video_path, "T", "D", ["t"], privacy="private", publish_at=None, category_id="27",
+                     made_for_kids=False, synthetic_media=synthetic)
+        assert client._videos.insert_kwargs["body"]["status"].get("containsSyntheticMedia") is expected
+
+
 def test_upload_video_sets_publish_at_as_utc_when_given(tmp_path):
     video_path = tmp_path / "song.mp4"
     video_path.write_bytes(b"fake video bytes")

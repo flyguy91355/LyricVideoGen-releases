@@ -72,7 +72,7 @@ def test_a_retry_never_resends_a_song_whose_upload_record_is_empty(tmp_path):
 
 def _upload_ready(monkeypatch, sent):
     monkeypatch.setattr(youtube_schedule, "check_video_complete", lambda path, label="": (30.0, 30.0))
-    monkeypatch.setattr(youtube_schedule, "generate_video_metadata", lambda *a: ("t", "a description", ["tag"]))
+    monkeypatch.setattr(youtube_schedule, "generate_video_metadata", lambda *a, **k: ("t", "a description", ["tag"]))
 
     def fake_upload(client, path, title, *a, **k):
         sent.append(title)
@@ -94,6 +94,27 @@ def test_an_upload_that_cannot_be_recorded_names_the_new_video_id(tmp_path, monk
     assert sent                                         # it WAS sent: the error must say so, with its id
 
 
+def test_an_ai_generated_song_is_uploaded_with_the_ai_disclosure_and_an_honest_description(tmp_path, monkeypatch):
+    from lyricvideo.ai_generated import mark_ai_generated
+    plain, ai_song = _make_song(tmp_path / "a"), _make_song(tmp_path / "b")
+    mark_ai_generated(ai_song)
+    monkeypatch.setattr(youtube_schedule, "check_video_complete", lambda path, label="": (30.0, 30.0))
+    originals, synthetic = [], []
+    monkeypatch.setattr(youtube_schedule, "generate_video_metadata",
+                        lambda *a, original=False, **k: (originals.append(original), ("t", "d", ["tag"]))[1])
+
+    def fake_upload(*a, synthetic_media=False, **k):
+        synthetic.append(synthetic_media)
+        return "vid"
+    monkeypatch.setattr(youtube_schedule, "upload_video", fake_upload)
+
+    for song_dir in (plain, ai_song):
+        youtube_schedule.schedule_upload(None, None, song_dir, Settings(youtube_privacy="private"))
+
+    assert originals == [False, True]
+    assert synthetic == [False, True]
+
+
 def test_an_easy_version_made_before_its_songs_lyrics_changed_is_refused_before_any_paid_call(tmp_path, monkeypatch, renders):
     song_dir = _make_song(tmp_path / "work")
     pipeline.build_capo_variant(song_dir, settings=Settings())
@@ -102,7 +123,7 @@ def test_an_easy_version_made_before_its_songs_lyrics_changed_is_refused_before_
     save_song(song, song_dir / "lyrics_timed.json")
     sent = []
     _upload_ready(monkeypatch, sent)
-    monkeypatch.setattr(youtube_schedule, "generate_video_metadata", lambda *a: pytest.fail("no paid call"))
+    monkeypatch.setattr(youtube_schedule, "generate_video_metadata", lambda *a, **k: pytest.fail("no paid call"))
 
     with pytest.raises(youtube_schedule.EasyChordVersionStale, match="lyrics"):
         youtube_schedule.schedule_upload(None, None, song_dir / "easychords", Settings(youtube_privacy="unlisted"))

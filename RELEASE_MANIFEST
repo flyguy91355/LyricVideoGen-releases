@@ -30,6 +30,7 @@ docs/superpowers/specs/2026-09-23-capo-easy-chord-videos-design.md
 docs/superpowers/specs/2026-09-25-shared-image-library-design.md
 docs/superpowers/specs/2026-09-27-whisper-hotwords-anchoring-design.md
 lyricvideo/__init__.py
+lyricvideo/ai_generated.py
 lyricvideo/align.py
 lyricvideo/anchors.py
 lyricvideo/assemble.py
@@ -124,6 +125,7 @@ tests/deep_review/test_main.py
 tests/deep_review/test_needs_human.py
 tests/deep_review/test_research.py
 tests/deep_review/test_runner.py
+tests/test_ai_generated.py
 tests/test_align.py
 tests/test_align_anchored.py
 tests/test_align_chunked.py

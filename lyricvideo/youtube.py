@@ -73,6 +73,7 @@ def upload_video(
     category_id: str,
     made_for_kids: bool,
     *,
+    synthetic_media: bool = False,
     max_retries: int = _UPLOAD_MAX_RETRIES,
     sleep=time.sleep,
 ) -> str:
@@ -87,6 +88,8 @@ def upload_video(
     status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": made_for_kids}
     if publish_at is not None:
         status["publishAt"] = _publish_at_string(publish_at)
+    if synthetic_media:
+        status["containsSyntheticMedia"] = True   # AI-generated music must be disclosed (ai_generated.py)
     body = {
         "snippet": {"title": title, "description": description, "tags": tags, "categoryId": category_id},
         "status": status,

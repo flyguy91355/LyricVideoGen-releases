@@ -103,6 +103,16 @@ def test_generate_video_metadata_states_the_real_artist_in_the_prompt_when_known
     assert "Pink Floyd" in client.messages._prompt_text()
 
 
+def test_generate_video_metadata_never_invents_a_history_for_the_channels_own_ai_band():
+    client = _FakeAnthropicClient("DESCRIPTION: d\nTAGS: a")
+
+    generate_video_metadata(client, "Lantern in the Window", artist="Copperleaf", full_lyrics="lyrics", original=True)
+
+    prompt = client.messages._prompt_text()
+    assert "original song made for this channel by its band Copperleaf" in prompt
+    assert "Do not invent any history" in prompt
+
+
 def test_generate_video_metadata_never_invents_an_artist_when_unknown():
     client = _FakeAnthropicClient("DESCRIPTION: d\nTAGS: a")
 

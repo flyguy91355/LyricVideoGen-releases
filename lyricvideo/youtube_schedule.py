@@ -425,6 +425,7 @@ def schedule_upload(
 
 
 def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, settings, now: datetime | None) -> str:
+    from .ai_generated import is_ai_generated
     from .banned import SongBanned, is_banned
     if is_banned(work_dir):
         raise SongBanned(f"{Path(work_dir).name} is tagged BANNED ON YOUTUBE, so it is never uploaded.")
@@ -464,7 +465,8 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
     song_label = f"{work_dir.parent.name}/easychords" if work_dir.name == "easychords" else work_dir.name
     check_video_complete(video_path, song_label)
     metadata_title = capo_info["original_title"] if capo_info else song.title
-    title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics)
+    ai_song = is_ai_generated(work_dir)
+    title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics, original=ai_song)
     if capo_info is not None:
         title = planned_title
         # The settled key's own spelling (an older marker may say "D# major" for the same key as "Eb major"). Owner,
@@ -491,6 +493,7 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
             youtube_client, video_path, title, description, tags,
             privacy="private", publish_at=slot,
             category_id=settings.youtube_category_id, made_for_kids=settings.youtube_made_for_kids,
+            synthetic_media=ai_song,
         )
     else:
         # Unlisted/Private have no "publish later" concept on YouTube -- upload
@@ -499,6 +502,7 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
             youtube_client, video_path, title, description, tags,
             privacy=settings.youtube_privacy, publish_at=None,
             category_id=settings.youtube_category_id, made_for_kids=settings.youtube_made_for_kids,
+            synthetic_media=ai_song,
         )
 
     try:

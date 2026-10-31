@@ -49,8 +49,8 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
       [--stage identify|separate|fetch_lyrics|align|detect_chords|images|render]
   ```
   `--stage` resumes from artifacts already in `--work-dir`; `run_pipeline()`'s `end_stage` stops early.
-- Needs `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` (template `.env.example`). No trading credentials --
-  unrelated to AITrading beside it.
+- Needs `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` (template `.env.example`); unrelated to
+  AITrading beside it.
 
 ## Pipeline stages (`lyricvideo/pipeline.py`, `STAGES`)
 
@@ -296,7 +296,7 @@ its Tk lacks Xft and breaks the GUI font.
 
 Spec `docs/superpowers/specs/2026-09-08-update-available-design.md`. `VERSION` is the last release applied to this
 checkout (never hand-edited or bumped per commit). `lyricvideo/update/`: `version.py`, `release_client.py` (httpx)
-against the public, unlisted `flyguy91355/LyricVideoGen-releases` (pre-rename name, deliberately kept), and `apply.py`
+against the public, unlisted `flyguy91355/LyricVideoGen-releases` (pre-rename name, kept), and `apply.py`
 -- allows `lyricvideo/`, `deep_review/`, `scripts/`, `tests/`, `docs/`, `requirements.txt`, `CLAUDE.md`, a bare
 top-level `*.py`/`*.sh`/`*.bat`; denies (always wins) `.env`, `songs/`, `work/`, `.venv/`. `cut_release.sh` ships that
 same set (`tests/test_update_manifest.py` keeps them in step) plus `RELEASE_MANIFEST`; `copy_updatable_files` then
@@ -324,7 +324,7 @@ the network); `Comment.author_channel_id`. `upload_video` retries a dropped conn
 resumable request (`bytes */N` recovers what YouTube stored); 4xx (quota, uploadLimitExceeded, invalidTitle) raise at
 once; `is_quota_exceeded_error` also knows HTTP 403 `quotaExceeded`.
 `youtube_metadata.py`: every Claude call has thinking off and is retried; `generate_video_metadata` (description/tags)
-and `draft_comment_reply`/`draft_engagement_comment` RAISE rather than return blank (never a bare video, 9-26);
+and `draft_comment_reply`/`draft_engagement_comment` RAISE rather than return blank;
 `classify_genre` returns '' rather than a fragment; replies use labeled lines robust to reordering. The TITLE is never
 Claude's: `build_play_along_title()` `"{title} - {artist} - (Play Along Lyrics & Chords)"` (artist omitted when
 unknown) / `build_easy_chord_title`, fitted to 100 chars with no '<'/'>' (the suffix stays; artist dropped first, then
@@ -340,16 +340,17 @@ schedule (`reserved_publish_datetimes()`, one claim per video), localizing each 
 `tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
 Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
-Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most striking, uncropped; a new picture only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
+Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most striking; a new one only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
 word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
 soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
-A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo.
+A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
+(`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts.
 `scripts/find_truncated_videos.py` (dry run; `--only`) lists cut-short mp4s in every song and easychords folder,
 marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo remakes them); key_rollout and `_set_aside_videos` skip that name.
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
-raises). Status label + Connect refresh on a
-background thread (never from the Tk thread). Worker threads format an error's
+raises). Status label + Connect refresh off the
+Tk thread. Worker threads format an error's
 text BEFORE a deferred `root.after` lambda (`except ... as e` unbinds `e`; 9-14).
 **GUI uploads**: "Upload to YouTube" = a `list_rendered_songs()` list + Upload (the only path that re-sends a song,
 after "create a duplicate?"), and the "Pending YouTube Uploads" checklist (`list_pending_uploads()`: never-uploaded,

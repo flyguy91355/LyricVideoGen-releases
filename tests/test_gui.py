@@ -1407,6 +1407,7 @@ def test_retry_upload_proceeds_after_confirming_an_already_uploaded_song(monkeyp
 
 def test_retry_upload_skips_confirmation_for_a_never_uploaded_song(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.load_youtube_state", lambda work_dir: None)
+    monkeypatch.setattr("lyricvideo.gui._state_file_exists", lambda work_dir: False)   # never the real work/angie
     monkeypatch.setattr("lyricvideo.gui.messagebox.askyesno", _must_not_run)
     started = []
 

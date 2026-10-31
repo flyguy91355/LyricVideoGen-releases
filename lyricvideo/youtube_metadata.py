@@ -120,7 +120,8 @@ def build_easy_chord_title(song_title: str, artist: str, capo_fret: int) -> str:
 
 
 def generate_video_metadata(
-    anthropic_client, song_title: str, artist: str, full_lyrics: str, model: str = "claude-sonnet-5",
+    anthropic_client, song_title: str, artist: str, full_lyrics: str, model: str = "claude-sonnet-5", *,
+    original: bool = False,
 ) -> tuple[str, str, list[str]]:
     # The artist is a known, already-resolved fact (identify.py), never
     # something Claude should have to guess -- stated explicitly when known,
@@ -128,6 +129,9 @@ def generate_video_metadata(
     # itself couldn't resolve one.
     known_artist = artist.strip()
     artist_line = f'It is performed by "{known_artist}".\n' if known_artist else ""
+    if original:   # the channel's own AI-made song (ai_generated.py): no real band history exists to describe
+        artist_line = (f'It is an original song made for this channel{f" by its band {known_artist}" if known_artist else ""}. '
+                       "Do not invent any history, albums, members or facts about the band.\n")
     prompt = (
         f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
         f"{artist_line}"
