@@ -23,6 +23,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .ai_generated import is_ai_generated
 from .anchors import HeardWord
 from .cleared_log import record_cleared, record_removed
 from .lyric_audio_match import _content, _tokens, _words_match
@@ -99,7 +100,8 @@ class SyncReport:
         """Why the song is set aside, in the words the review panel shows ("" when it passes)."""
         if self.passes:
             return ""
-        tail = "The video is made but not uploaded; watch it and correct the lyrics or timing."
+        # Owner, 2026-10-31: it said "the video is made" for a song held BEFORE its video.
+        tail = "It is not uploaded until you check it: watch it (Render Anyway first if no video was made), then fix the lyrics or timing."
         if self.share is None:
             return (
                 f"SET ASIDE FOR REVIEW -- the lyric timing could not be checked: too little of the singing was recognized "
@@ -133,11 +135,15 @@ _IN, _OUT, _UNJUDGED = "in", "out", "unjudged"
 
 
 def _line_verdicts(
-    line_words: list[list[str]], times: list[tuple[float, float]], heard: list[HeardWord],
+    line_words: list[list[str]], times: list[tuple[float, float]], heard: list[HeardWord], lyrics_certain: bool = False,
 ) -> list[str | None]:
     """One verdict per line, in line order: "in" (its words start within TOLERANCE_SECONDS of where they are sung), "out"
     (they don't, or other words are sung where it is placed), "unjudged" (the recognizer heard too little there to say), or
-    None for a line with no words. check_sync counts these; pick_by_sync compares candidates line by line with them."""
+    None for a line with no words. check_sync counts these; pick_by_sync compares candidates line by line with them.
+
+    `lyrics_certain` (our own AI songs, owner 2026-10-31): the words ARE what was sung, so other words heard where a line
+    is placed mean the recognizer misheard (fast bluegrass: "eyes... I'm singing through" over a whole verse), not that the
+    line is misplaced -- unjudged, not out. A misplaced line still shows: the lines whose words were heard elsewhere are out."""
     sung = sorted((hw.start, token) for hw in heard for token in _content(_tokens(hw.word)))
     starts = [start for start, _ in sung]
 
@@ -166,7 +172,7 @@ def _line_verdicts(
         elif offsets:
             verdicts.append(_IN if abs(statistics.median(offsets)) <= TOLERANCE_SECONDS + _EPSILON else _OUT)
         elif len(sung_between(placed[0][0] - SEARCH_SECONDS, placed[-1][1] + SEARCH_SECONDS)) >= MIN_HEARD_NEARBY:
-            verdicts.append(_OUT)                           # other words are sung right here, none of this line's
+            verdicts.append(_UNJUDGED if lyrics_certain else _OUT)   # other words heard right here, none of this line's
         else:
             verdicts.append(_UNJUDGED)                      # the recognizer heard (almost) nothing here: cannot say
     return verdicts
@@ -183,16 +189,17 @@ def _report_from(verdicts: list[str | None], total_lines: int, needed: float) ->
 
 def check_sync(
     line_words: list[list[str]], times: list[tuple[float, float]], heard: list[HeardWord], needed: float | None = None,
+    lyrics_certain: bool = False,
 ) -> SyncReport:
     """line_words: each line's words; times: one (start, end) per word, flat in line order; heard: what was sung;
     needed: the share of lines that must be in sync (default: the bar in force, see pass_share)."""
     needed = pass_share() if needed is None else needed
-    return _report_from(_line_verdicts(line_words, times, heard), len(line_words), needed)
+    return _report_from(_line_verdicts(line_words, times, heard, lyrics_certain), len(line_words), needed)
 
 
 def pick_by_sync(
     candidates: dict[str, list[tuple[float, float]]], line_words: list[list[str]], heard: list[HeardWord],
-    preferred: str | None = None, needed: float | None = None,
+    preferred: str | None = None, needed: float | None = None, lyrics_certain: bool = False,
 ) -> tuple[str, list[tuple[float, float]], SyncReport]:
     """The candidate alignment with the most lines in sync, counted over the SAME lines for every candidate: every line at
     least one candidate places where it can be judged. A line one candidate moves into silence (unjudged there) while another
@@ -201,7 +208,7 @@ def pick_by_sync(
     failure). A tie goes to the candidate that leaves fewer such lines in silence, then to `preferred`, then to the earlier
     one. The report returned is the chosen candidate's own (check_sync), so the gate's percentage is unchanged."""
     needed = pass_share() if needed is None else needed
-    verdicts = {name: _line_verdicts(line_words, times, heard) for name, times in candidates.items()}
+    verdicts = {name: _line_verdicts(line_words, times, heard, lyrics_certain) for name, times in candidates.items()}
     judgeable = {i for line_verdicts in verdicts.values() for i, v in enumerate(line_verdicts) if v in (_IN, _OUT)}
     scored = []
     for order, (name, times) in enumerate(candidates.items()):
@@ -224,12 +231,12 @@ class Settled:
 
 def settle_alignment(
     candidates: dict[str, list[tuple[float, float]]], line_words: list[list[str]], heard: list[HeardWord],
-    preferred: str | None = None, earlier_concern: str = "", needed: float | None = None,
+    preferred: str | None = None, earlier_concern: str = "", needed: float | None = None, lyrics_certain: bool = False,
 ) -> Settled:
     """The final say on a fresh render: take the alignment with the most lines in sync, and set the song aside ONLY when that
     one is below the pass mark (owner, 2026-09-21). A concern the older precision/sync checks raised (`earlier_concern`, e.g. a
     line timed where nobody sings) no longer holds a song the gate passes: it once set aside a 96% song."""
-    method, times, report = pick_by_sync(candidates, line_words, heard, preferred, needed)
+    method, times, report = pick_by_sync(candidates, line_words, heard, preferred, needed, lyrics_certain)
     return Settled(method, times, report, report.concern)
 
 
@@ -276,7 +283,7 @@ def _judge_saved(song_dir: Path, song: Song | None, source: Path) -> SyncReport 
         return None
     line_words = [[w.word for w in line.words] for line in song.lines]
     times = [(w.start_time, w.end_time) for line in song.lines for w in line.words]
-    return check_sync(line_words, times, heard, PASS_SHARE)
+    return check_sync(line_words, times, heard, PASS_SHARE, lyrics_certain=is_ai_generated(song_dir))
 
 
 def check_saved_song(

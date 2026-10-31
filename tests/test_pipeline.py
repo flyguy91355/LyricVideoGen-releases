@@ -55,7 +55,7 @@ def _patch_common(monkeypatch, tmp_path):
     from lyricvideo.timing_gate import Settled, SyncReport
     monkeypatch.setattr(
         "lyricvideo.pipeline.settle_alignment",
-        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None: Settled(
+        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None, lyrics_certain=False: Settled(
             preferred, candidates[preferred], SyncReport(1.0, 0, 0, 0), earlier_concern,
         ),
     )
@@ -1843,7 +1843,7 @@ def test_a_finished_run_records_the_real_achieved_percentage_not_just_a_flat_pas
     _patch_common(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "lyricvideo.pipeline.settle_alignment",
-        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None: Settled(
+        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None, lyrics_certain=False: Settled(
             preferred, candidates[preferred], SyncReport(0.923, 0, 0, 0), earlier_concern,
         ),
     )
@@ -1875,7 +1875,7 @@ def _failing_gate(monkeypatch, share=0.6):
     report = SyncReport(share, 20, 0, 20, (1, 2, 3), 0.9)
     monkeypatch.setattr(
         "lyricvideo.pipeline.settle_alignment",
-        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None: Settled(
+        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None, lyrics_certain=False: Settled(
             preferred, candidates[preferred], report, report.concern,
         ),
     )

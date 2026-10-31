@@ -93,14 +93,14 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    no lyrics -> clear RuntimeError). Whisper word times (`anchors.py`; words in silence dropped)
    checked against lrclib's line times (`combine_anchors`) bound each line to its own window
    (`align_words_anchored`, pad capped at half the neighbour gap so repeated back-to-back lines never overlap,
-   9-29; whole-song CTC pass drifted 20-50 s; blend() weighs duration). `precision.py`/`sync.py` suggest;
+   9-29; blend() weighs duration). `precision.py`/`sync.py` suggest;
    `timing_gate.py` alone decides (`Settings.timing_pass_percent`, default 90: % of lines within 0.5 s of Whisper's
    singing): best of whole-song/anchored/blended (`pick_by_sync`, ranked over judgeable lines; ties favor fewer
    silent lines), else the song is HELD before chords/images/render (Flagged: Render Anyway; Remove = hide only).
    Lists judge older songs READ-ONLY at the current bar (`timing_verdict`); only `python -m
    lyricvideo.timing_gate --hold` writes holds; `pipeline.review_concern()` gives the current reason. EASY variants are
    judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real,
-   correctly-placed line also scores "out of sync" -- Whisper Text (Flagged) is editable per
+   correctly-placed line also scores "out of sync" (not in AI songs: `lyrics_certain`) -- Whisper Text (Flagged) is editable per
    row; Save Corrections (`owner_whisper.py`) synthesizes heard
    words across its span, read by `corrected_heard_words()`/`_align_lyrics` (`add_corrections()`; a Redo
    recomputes it) -- never the placement itself. The anchor transcription is hinted (`lyric_hotwords()`,

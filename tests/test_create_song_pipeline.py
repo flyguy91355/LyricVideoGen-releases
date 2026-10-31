@@ -63,3 +63,20 @@ def test_a_created_song_waits_in_flagged_until_the_owner_approves_it(tmp_path):
     assert list_pending_uploads(root) == ["new-one", "other-song"]
     assert list_flagged_songs(root) == [] and not waits_to_be_watched(song)
     assert not waits_to_be_watched(root / "other-song")
+
+
+def test_an_ai_songs_timing_is_judged_with_its_lyrics_as_certain(tmp_path, monkeypatch):
+    import lyricvideo.pipeline as pipeline
+
+    _patch_common(monkeypatch, tmp_path)
+    _fills(monkeypatch)
+    seen = []
+    real = pipeline.settle_alignment
+    monkeypatch.setattr(pipeline, "settle_alignment", lambda *a, **k: seen.append(k.get("lyrics_certain")) or real(*a, **k))
+
+    run_pipeline(Path("audio.mp3"), tmp_path / "plain")
+    (tmp_path / "ours").mkdir()
+    mark_ai_generated(tmp_path / "ours")
+    run_pipeline(Path("audio.mp3"), tmp_path / "ours")
+
+    assert seen == [False, True]

@@ -20,7 +20,7 @@ def _passing_gate(monkeypatch):
 
     monkeypatch.setattr(
         "lyricvideo.pipeline.settle_alignment",
-        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None: Settled(
+        lambda candidates, line_words, heard, preferred=None, earlier_concern="", needed=None, lyrics_certain=False: Settled(
             preferred, candidates[preferred], SyncReport(1.0, 0, 0, 0), earlier_concern,
         ),
     )

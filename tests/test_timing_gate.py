@@ -2,6 +2,7 @@
 of its judged lines are. Owner's standard, 2026-09-20, after 'Like a Prayer' (second half 20-85 s out of sync) was cleared
 by a check that let a repeated chorus excuse a misplaced line. Song text is invented."""
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -895,3 +896,54 @@ def test_a_score_that_rounds_up_to_the_bar_is_shown_with_a_decimal_so_a_fail_nev
     assert report.passes and not almost.passes
     assert "89.7%" in almost.concern and "(90% are needed)" in almost.concern
     assert "only 80% of the lines" in check_sync(WORDS, placed({1: 1.0, 6: -1.0}), HEARD).concern     # whole numbers stay plain
+
+
+# --- our own AI songs: the lyrics ARE what was sung (owner, 2026-10-31) -------------------------------------------------
+
+def _misheard(lines):
+    """HEARD with the given lines' words replaced by other words at the same moments (the recognizer misheard them)."""
+    out, n = [], 0
+    for k, words in enumerate(WORDS):
+        for i in range(len(words)):
+            hw = HEARD[n]
+            out.append(HeardWord(f"garble{n}", hw.start, hw.end) if k in lines else hw)
+            n += 1
+    return out
+
+
+def test_misheard_lines_of_an_ai_song_are_not_counted_as_off():
+    heard = _misheard({1, 2})
+
+    assert check_sync(WORDS, placed(), heard).out_of_sync_lines == (2, 3)             # a real song: other words sung there
+    certain = check_sync(WORDS, placed(), heard, lyrics_certain=True)
+    assert certain.out_of_sync_lines == () and certain.share == 1.0 and certain.judged_lines == 8
+
+
+def test_a_misplaced_line_of_an_ai_song_is_still_off():
+    report = check_sync(WORDS, placed({4: 1.5}), HEARD, lyrics_certain=True)          # its own words are sung elsewhere
+
+    assert report.out_of_sync_lines == (5,)
+
+
+def test_a_saved_ai_song_is_judged_with_its_lyrics_as_certain(tmp_path):
+    from lyricvideo.ai_generated import mark_ai_generated
+
+    song_dir = tmp_path / "ai-song"
+    song_dir.mkdir()
+    times = iter(placed())
+    lines = [LyricLine(words=[Word(w, *next(times)) for w in words]) for words in WORDS]
+    for line in lines:
+        line.start_time, line.end_time = line.words[0].start_time, line.words[-1].end_time
+    save_song(Song(title="AI Song", audio_path="a.mp3", lines=lines), song_dir / "lyrics_timed.json")
+    heard = _misheard({1, 2})
+    (song_dir / "transcript.json").write_text(json.dumps({
+        "model": "medium", "words": [{"word": h.word, "start": h.start, "end": h.end} for h in heard],
+    }), encoding="utf-8")
+
+    plain = check_saved_song(song_dir)
+    mark_ai_generated(song_dir)
+    (song_dir / "lyrics_timed.json").touch()                                         # a new file version: judged again
+    save_song(load_song(song_dir / "lyrics_timed.json"), song_dir / "lyrics_timed.json")
+
+    assert plain is not None and plain.out_of_sync_lines == (2, 3)
+    assert check_saved_song(song_dir).out_of_sync_lines == ()

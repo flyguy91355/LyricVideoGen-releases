@@ -85,5 +85,5 @@ def decide_alignment(
         best_method, best, False,
         f"SET ASIDE FOR REVIEW -- the lyric timing could not be fixed automatically: only {best.agreement:.0%} of the "
         f"{best.anchored} lines that could be checked start where the recording says (best of both alignment "
-        "methods). The video is made but not uploaded; watch it and correct the lyrics or timing.",
+        "methods). It is not uploaded until you check it: watch it (Render Anyway first if no video was made), then fix the lyrics or timing.",
     )

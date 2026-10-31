@@ -791,7 +791,8 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
     def settled(candidates, preferred, earlier_concern=""):
         """The timing_gate verdict (owner, 2026-09-20: at least 90% of lines within half a second of the singing) has the
         final say on which alignment is used and whether the song is set aside."""
-        result = settle_alignment(candidates, line_words, sung, preferred, earlier_concern, needed)
+        result = settle_alignment(candidates, line_words, sung, preferred, earlier_concern, needed,
+                                  lyrics_certain=is_ai_generated(work_dir))
         # NOT result.report.concern: Settled.concern can differ from its own report's (e.g. an earlier concern that
         # survives even though the sync gate itself accepts the alignment) -- start from exactly what settle_alignment
         # decided, and only override it below when a correction genuinely improves the picture.
@@ -803,7 +804,8 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
         # owner saved a correction, since only a READ-ONLY re-judge of an already-rendered song ever consulted one.
         corrected_sung = add_corrections(work_dir, sung, line_words, result.times)
         if len(corrected_sung) != len(sung):  # a still-valid correction actually added something
-            corrected_report = check_sync(line_words, result.times, corrected_sung, needed)
+            corrected_report = check_sync(line_words, result.times, corrected_sung, needed,
+                                          lyrics_certain=is_ai_generated(work_dir))
             if corrected_report.share is not None and (share is None or corrected_report.share >= share):
                 concern, share, judged_lines = corrected_report.concern, corrected_report.share, corrected_report.judged_lines
         if share is None:

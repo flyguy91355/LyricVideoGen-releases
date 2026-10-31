@@ -261,6 +261,6 @@ def choose_alignment(
         f"SET ASIDE FOR REVIEW -- the lyric timing is not precise enough: only {precision.share:.0%} of the words start "
         f"within half a second of where they are sung, and {precision.off_lines} of the {precision.lines} lines are "
         f"clearly off (by more than a second){which}. A line the singer never sings, or sings elsewhere, cannot be timed."
-        f"{silent} The video is made but not uploaded; watch it and correct the lyrics or timing.",
+        f"{silent} It is not uploaded until you check it: watch it (Render Anyway first if no video was made), then fix the lyrics or timing.",
         options[best],
     )
