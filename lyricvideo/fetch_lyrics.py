@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import math
 import re
+import sqlite3
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -28,6 +30,7 @@ import requests
 from .lyric_accuracy import UNCLEAR_REPLY_CONCERN, check_lyric_accuracy
 from .lyric_audio_match import AudioMatch, audio_match_badness, audio_match_passes, describe_mismatch
 from .lyric_arbiter import Arbitration, describe_arbitration
+from .lrclib_local import find_records, local_db
 from .lyric_reconcile import SUGGESTION_FILENAME
 from .text_clean import artist_key, normalize
 from .vocal_onset import vocal_onset_rise
@@ -42,6 +45,13 @@ LRCLIB_BASE = "https://lrclib.net/api"
 LRCLIB_PARALLELISM = 6
 DURATION_TOLERANCE = 8.0
 HTTP_HEADERS = {"User-Agent": "PlayAlongVideoProduction/1.0"}
+LRCLIB_RETRY_WAITS = (2.0, 5.0)    # seconds before each retry of a busy or failing lrclib request
+LRCLIB_BUSY = {429, 500, 502, 503, 504}
+
+
+class LyricsSourceDown(RuntimeError):
+    """lrclib.net did not answer, so the song's lyrics were not looked up at all (owner, 2026-10-31: its outage sent a
+    whole Batch to NetEase, which gave Nebraska the words of Hungry Heart and two songs those of The River)."""
 
 # A provider hit: (lyrics text, synced?, reference duration in seconds or 0).
 # Empty text with synced=True means "the provider says this track is instrumental".
@@ -303,8 +313,25 @@ def artist_matches(record_artist: str, wanted: str) -> bool:
     return a == b or f" {a} " in f" {b} " or f" {b} " in f" {a} "
 
 
+def _lrclib_request(endpoint: str, params: dict) -> requests.Response:
+    """GET one lrclib endpoint, retrying a busy server (lrclib drops requests under load, its owner 2026-10-30) or a
+    dropped connection. Still failing after the retries raises requests.RequestException; a plain "not found" returns."""
+    waits = list(LRCLIB_RETRY_WAITS)
+    while True:
+        try:
+            r = requests.get(f"{LRCLIB_BASE}/{endpoint}", params=params, headers=HTTP_HEADERS, timeout=15)
+            if r.status_code not in LRCLIB_BUSY:
+                return r
+            failure: requests.RequestException = requests.HTTPError(f"HTTP {r.status_code}", response=r)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            failure = exc
+        if not waits:
+            raise failure
+        time.sleep(waits.pop(0))
+
+
 def _lrclib_get(params: dict) -> dict | None:
-    r = requests.get(f"{LRCLIB_BASE}/get", params=params, headers=HTTP_HEADERS, timeout=15)
+    r = _lrclib_request("get", params)
     if r.status_code != 200:
         return None
     data = r.json()
@@ -312,7 +339,7 @@ def _lrclib_get(params: dict) -> dict | None:
 
 
 def _lrclib_search(params: dict) -> list[dict]:
-    r = requests.get(f"{LRCLIB_BASE}/search", params=params, headers=HTTP_HEADERS, timeout=15)
+    r = _lrclib_request("search", params)
     if r.status_code != 200:
         return []
     data = r.json()
@@ -321,11 +348,61 @@ def _lrclib_search(params: dict) -> list[dict]:
 
 def _fetch_lrclib_hit(audio_path: Path, title: str, artist: str, duration: float,
                       alt_titles: list[str]) -> Hit | None:
-    """Query lrclib.net and choose among all records by edition consensus."""
+    """lrclib's records for the song -- from our own copy of its database (lrclib_local.py) when that has any, else from
+    lrclib.net -- chosen among by edition consensus. Raises LyricsSourceDown when lrclib.net failed and found no record
+    and there is no copy: "not on lrclib" cannot be told from "lrclib is down"."""
     titles = [t for t in [title, *alt_titles] if t.strip()]
     if not titles:
         return None
 
+    candidates: dict[object, dict] = {}
+    failures: list[Exception] = []
+    db = local_db()
+    if db is not None:
+        try:
+            records = find_records(db, [v for t in titles for v in title_variants(t)], artist)
+        except sqlite3.Error as exc:
+            log.warning("Could not read the local lrclib copy %s (%s); asking lrclib.net.", db, exc)
+            db = None
+        else:
+            candidates = {r["id"]: r for r in records}
+            if candidates:
+                log.info("lrclib: %d record(s) from the local copy", len(candidates))
+    if not candidates:
+        candidates, failures = _lrclib_online_records(titles, artist, duration)
+
+    if artist:
+        by_artist = {k: v for k, v in candidates.items()
+                     if artist_matches(str(v.get("artistName") or ""), artist)}
+        if by_artist:
+            candidates = by_artist
+    if not candidates and failures:
+        if db is not None:   # the copy holds nearly every lrclib record: a song it lacks is almost surely not on lrclib
+            log.warning("Not in the local lrclib copy, and lrclib.net is not answering (%s).", failures[0])
+            return None
+        raise LyricsSourceDown(
+            f"lrclib.net, the main lyrics site, is not answering ({failures[0]}), so nothing was made for this song: the "
+            "other lyric sites gave wrong songs while it was down. Make it again when lrclib is back."
+        )
+    if not candidates:
+        return None
+
+    scorer: OnsetScorer | None = None
+    if audio_path.is_file():
+        scorer = lambda times: vocal_onset_rise(audio_path, times)  # noqa: E731
+    chosen, note = choose_lyrics_candidate(list(candidates.values()), duration, onset_scorer=scorer)
+    if chosen is not None:
+        log.info("lrclib: record #%s chosen (%s)", chosen.get("id", "?"), note)
+        return _pick_lrclib(chosen)
+    for item in candidates.values():
+        ref = _num(item.get("duration"))
+        if item.get("instrumental") and (not duration or abs(ref - duration) <= DURATION_TOLERANCE):
+            return "", True, ref
+    return None
+
+
+def _lrclib_online_records(titles: list[str], artist: str, duration: float) -> tuple[dict[object, dict], list[Exception]]:
+    """Every record lrclib.net's get and search find for the song, and the requests that failed."""
     jobs: list[tuple[Callable[[dict], object], dict]] = []
     if artist and duration > 0:
         for t in titles:
@@ -355,35 +432,17 @@ def _fetch_lrclib_hit(audio_path: Path, title: str, artist: str, duration: float
             return params, None, exc
 
     candidates: dict[object, dict] = {}
+    failures: list[Exception] = []
     with ThreadPoolExecutor(max_workers=LRCLIB_PARALLELISM) as pool:
         for params, result, exc in pool.map(run, jobs):
             if exc is not None:
                 log.warning("lrclib request failed (%s): %s", params, exc)
+                failures.append(exc)
                 continue
             for item in (result if isinstance(result, list) else [result] if result else []):
                 if isinstance(item, dict):
                     candidates.setdefault(item.get("id", id(item)), item)
-
-    if artist:
-        by_artist = {k: v for k, v in candidates.items()
-                     if artist_matches(str(v.get("artistName") or ""), artist)}
-        if by_artist:
-            candidates = by_artist
-    if not candidates:
-        return None
-
-    scorer: OnsetScorer | None = None
-    if audio_path.is_file():
-        scorer = lambda times: vocal_onset_rise(audio_path, times)  # noqa: E731
-    chosen, note = choose_lyrics_candidate(list(candidates.values()), duration, onset_scorer=scorer)
-    if chosen is not None:
-        log.info("lrclib: record #%s chosen (%s)", chosen.get("id", "?"), note)
-        return _pick_lrclib(chosen)
-    for item in candidates.values():
-        ref = _num(item.get("duration"))
-        if item.get("instrumental") and (not duration or abs(ref - duration) <= DURATION_TOLERANCE):
-            return "", True, ref
-    return None
+    return candidates, failures
 
 
 def _fetch_syncedlyrics_hit(title: str, artist: str, providers: list[str] | None = None) -> Hit | None:
@@ -590,11 +649,19 @@ def fetch_lyric_lines_verified(
     best_concern = "No lyrics found from any source."
     best_badness = float("inf")
     best_match: AudioMatch | None = None
+    own_lyrics = False
     for source in _ACCURACY_CHECK_SOURCES:
         if source == "sidecar":
             hit = _sidecar(audio_path)
+            own_lyrics = hit is not None
         elif source == "lrclib":
-            hit = _fetch_lrclib_hit(audio_path, title, artist, duration, alt_titles or [])
+            try:
+                hit = _fetch_lrclib_hit(audio_path, title, artist, duration, alt_titles or [])
+            except LyricsSourceDown:
+                if not own_lyrics:
+                    raise
+                hit = None      # the song's own lyrics file (our AI songs have one) needs no lrclib
+                log.warning("lrclib.net is not answering; going on with this song's own lyrics file.")
         else:
             hit = _fetch_syncedlyrics_hit(title, artist, providers=[source])
         if hit is None:

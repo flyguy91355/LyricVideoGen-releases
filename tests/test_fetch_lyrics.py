@@ -1,5 +1,11 @@
 
+import pytest
+import requests
+
 from lyricvideo.fetch_lyrics import (
+    LyricsSourceDown,
+    _fetch_lrclib_hit,
+    _lrclib_request,
     artist_matches,
     choose_lyrics_candidate,
     fetch_lyric_lines,
@@ -747,3 +753,91 @@ def test_a_missing_space_after_a_comma_or_bang_is_restored():
         "Oh, when the working day is done", "Oh, girls,", "Wow! Really? Yes",
         "It costs 1,000 dollars, ok", "Hello, world",
     ]
+
+
+# --- lrclib down (2026-10-31: a 502 outage sent a whole Batch to NetEase, which gave Nebraska Hungry Heart's words) --------
+
+class _Reply:
+    def __init__(self, status, body=None):
+        self.status_code, self._body = status, body
+
+    def json(self):
+        return self._body
+
+
+def _lrclib_answers(monkeypatch, replies):
+    """requests.get answers with `replies` in turn (the last one repeats); no real waiting between retries."""
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        reply = replies[min(len(calls) - 1, len(replies) - 1)]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.requests.get", fake_get)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.time.sleep", lambda seconds: None)
+    return calls
+
+
+def test_a_busy_lrclib_request_is_retried_until_it_answers(monkeypatch):
+    calls = _lrclib_answers(monkeypatch, [_Reply(502), requests.ConnectionError("reset"), _Reply(200, [])])
+
+    assert _lrclib_request("search", {"q": "x"}).status_code == 200 and len(calls) == 3
+
+
+def test_lrclib_failing_every_retry_raises(monkeypatch):
+    _lrclib_answers(monkeypatch, [_Reply(502)])
+
+    with pytest.raises(requests.HTTPError, match="502"):
+        _lrclib_request("search", {"q": "x"})
+
+
+def test_lrclib_down_is_not_taken_for_no_lyrics(tmp_path, monkeypatch):
+    _lrclib_answers(monkeypatch, [_Reply(502)])
+
+    with pytest.raises(LyricsSourceDown, match="lrclib.net"):
+        _fetch_lrclib_hit(tmp_path / "song.mp3", "Nebraska", "Bruce Springsteen", 272.0, [])
+
+
+def test_a_song_lrclib_does_not_have_is_still_just_not_found(tmp_path, monkeypatch):
+    _lrclib_answers(monkeypatch, [_Reply(404, {"message": "not found"})])
+
+    assert _fetch_lrclib_hit(tmp_path / "song.mp3", "Nebraska", "Bruce Springsteen", 272.0, []) is None
+
+
+def test_with_lrclib_down_no_other_lyric_site_is_used(tmp_path, monkeypatch):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+
+    def lrclib_down(*a, **k):
+        raise LyricsSourceDown("lrclib.net is not answering")
+
+    def must_not_run(*a, **k):
+        raise AssertionError("NetEase and the rest gave wrong songs while lrclib was down")
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lrclib_down)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", must_not_run)
+
+    with pytest.raises(LyricsSourceDown):
+        fetch_lyric_lines_verified(audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+                                   audio_check=_audio_check_for(_SUNG))
+
+
+def test_a_song_with_its_own_lyrics_file_goes_on_while_lrclib_is_down(tmp_path, monkeypatch):
+    """Our own AI songs have a sidecar .txt: lrclib never had them."""
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    (tmp_path / "song.txt").write_text("\n".join(_WRONG_EDITION), encoding="utf-8")
+
+    def lrclib_down(*a, **k):
+        raise LyricsSourceDown("lrclib.net is not answering")
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lrclib_down)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", lambda *a, **k: None)
+
+    lines, source, concern = fetch_lyric_lines_verified(audio_path, "T", "A", 10.0, [], _FakeAnthropicClient(),
+                                                        audio_check=_audio_check_for(_SUNG))
+
+    assert (lines, source) == (_WRONG_EDITION, "sidecar") and concern

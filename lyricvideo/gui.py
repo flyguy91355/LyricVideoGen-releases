@@ -104,6 +104,7 @@ import json
 from .batch import holds_other_recording, stored_song_identity, work_dir_for
 from .pipeline import review_concern, waits_to_be_watched
 from .ai_generated import WATCH_FIRST_REASON, is_ai_generated
+from .fetch_lyrics import LyricsSourceDown
 from .youtube_comment_state import MAX_DRAFT_FAILURES, clear_draft_failures, mark_comment_seen, record_draft_failure
 from .youtube_schedule import AlreadyUploaded, IncompleteVideo, upload_in_progress
 from .youtube_state import (
@@ -2734,6 +2735,12 @@ class LyricVideoGUI:
                     results.setdefault("held", []).append(item.title)
                     print(f"Batch item {item.title!r} held for review before its video: {e.concern}")
                     self._queue.put(("batch_item_done", None))
+                except LyricsSourceDown as e:
+                    # Every later song would fail the same way (2026-10-31): stop. Nothing was saved for this song, so a
+                    # Batch of the same folder ("skip done songs") picks it and the rest up again.
+                    results["stopped"] = (item.title, str(e), len(items) - index)
+                    print(f"Batch stopped at {item.title!r}: {e}")
+                    break
                 except Exception as e:
                     results["failed"].append((item.title, f"{type(e).__name__}: {e}"))
                     print(f"Batch item {item.title!r} failed: {type(e).__name__}: {e}")
@@ -2808,6 +2815,15 @@ class LyricVideoGUI:
         )
         if results.get("held"):
             summary += f"\nHeld for review (no video made): {len(results['held'])}"
+        if results.get("stopped"):
+            title, reason, left = results["stopped"]
+            self.status_var.set("Batch stopped")
+            messagebox.showwarning(
+                "Batch stopped",
+                f"{summary}\n\nStopped at \"{title}\" ({left} more not started):\n{reason}\n\nWhen lrclib is back, run "
+                "Batch on the same folder and answer Yes (skip done songs): it picks up from here.",
+            )
+            return
         if results["failed"]:
             failed_names = "\n".join(f"  - {title}: {err}" for title, err in results["failed"])
             messagebox.showwarning("Batch finished with failures", f"{summary}\n\n{failed_names}")

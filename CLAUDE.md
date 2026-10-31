@@ -18,10 +18,9 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
   is not fed into it) -- then Generate. Picking another file always clears the identified artist and identifies the
   new one (an identify-filled title is replaced, a typed one kept). "New
   Song" resets the form; the work dir falls back to the file name until identify finishes. Left column: form/Generate/Redo/log/progress; right: YouTube status/Connect, "⚙ Settings",
-  comment panels. Main window 1600x1000.
+  comment panels.
   - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
-    googleapiclient, tensorflow, crema -- gui's `_LazyAnthropic` and `build()`
-    wrapper, pipeline's lazy `anthropic` proxy, align's in-function torch import, assemble's `_load_moviepy`.
+    googleapiclient, tensorflow, crema (e.g. gui's `_LazyAnthropic`, assemble's `_load_moviepy`).
   - Quit: X and
     Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
     Update runs (closing kills it; no resume). `_shut_down` withdraws the window at once, then destroys it; `_closing`
@@ -74,10 +73,12 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
 3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`) --
    `fetch_lyric_lines_verified()` tries each source (sidecar `.lrc`/`.txt` beside the audio copy; lrclib
    edition-consensus vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
-   `lyric_lines.json`/`Song`. Pass = matching what faster-whisper HEARS in the vocal stem (medium, VAD off): >=70%
+   `lyric_lines.json`/`Song`. lrclib = our copy of its DB dump first (`lrclib_local.py`,
+   `~/PlayAlongVideoProductionLyrics/lrclib.sqlite3`), else lrclib.net; that busy/down (5xx/429/no connection; retried 2 s,
+   5 s), no copy, no record -> `LyricsSourceDown`: no other site (10-31: NetEase gave wrong songs) unless a sidecar
+   exists; Batch stops. Pass = matching what faster-whisper HEARS in the vocal stem (medium, VAD off): >=70%
    in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing vocals ignored).
-   The tokenizer (`lyric_audio_match._tokens`) folds
-   curly apostrophes and accents. Section markers are not lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
+   Section markers are not lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
    "Chorus:", "(x2)"/"Repeat chorus"; a leading "[..]" tag stripped). Unsung lead/tail credit lines are trimmed per
    candidate before the check (`trim=`, from `pipeline._build_unsung_trim`: line times, Whisper words, vocal
    loudness) only when none of their words were heard. `artist_matches` compares whole words. None passing keeps the
@@ -138,7 +139,6 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `--apply`) asks only songs with no decision or one in review (else 'already-settled', no Claude call); a corrected
    song's video becomes `*.previous.mp4`, `easychords/` moves to `easychords_prior_<time>/` unless on YouTube; `--apply`
    then remakes it from images (`--no-render` or a failed remake holds for Render Anyway).
-   `scripts/add_key_note.py` adds `📌 Song key: X` notes to live descriptions.
 6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
    line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
    renders; a sliver adopts its neighbour's caption; `[Instrumental]` only for a chordless song), cached by content
@@ -349,8 +349,7 @@ soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
 A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
 (`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts; N.C. over music
 filled (`chord_gaps.py`, AI songs only for now).
-`scripts/find_truncated_videos.py` (dry run) lists cut-short mp4s, marking ones on YouTube; `--set-aside` ->
-`*.truncated.mp4` (key_rollout and `_set_aside_videos` skip that name).
+`scripts/find_truncated_videos.py` (dry run) lists cut-short mp4s; `--set-aside` -> `*.truncated.mp4` (skipped by name).
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
 raises). Status label + Connect refresh off the

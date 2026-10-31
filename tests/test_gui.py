@@ -1828,6 +1828,35 @@ def test_run_batch_worker_releases_memory_after_every_item_success_or_failure(mo
     assert released == [True, True]
 
 
+def test_the_batch_stops_when_lrclib_is_down(monkeypatch):
+    """2026-10-31: lrclib's outage sent every song of a Batch to NetEase (wrong songs). Every later song would fail the
+    same way, so the Batch stops and says how to pick up again."""
+    from lyricvideo.fetch_lyrics import LyricsSourceDown
+    monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    ran = []
+
+    def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
+        ran.append(title)
+        if title == "Nebraska":
+            raise LyricsSourceDown("lrclib.net is not answering (HTTP 502)")
+
+    monkeypatch.setattr("lyricvideo.gui.run_pipeline", fake_run_pipeline)
+    items = [BatchItem(audio_path=Path(f"{t}.mp3"), title=t, work_dir=Path(f"work/{t}"), already_done=False)
+             for t in ("Hungry Heart", "Nebraska", "Independence Day", "The River")]
+    stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
+
+    LyricVideoGUI._run_batch_worker(stub, items)
+
+    assert ran == ["Hungry Heart", "Nebraska"]
+    messages = []
+    while not stub._queue.empty():
+        messages.append(stub._queue.get_nowait())
+    results = [payload for kind, payload in messages if kind == "batch_done"][0]
+    assert results["succeeded"] == ["Hungry Heart"] and results["failed"] == []
+    assert results["stopped"] == ("Nebraska", "lrclib.net is not answering (HTTP 502)", 2)
+
+
 def test_run_batch_worker_resumes_an_interrupted_item_at_its_own_resume_stage(monkeypatch):
     """resolve_batch_items() computes resume_stage="fetch_lyrics" for an item
     whose Demucs stems already exist on disk (interrupted after separate()
@@ -2102,6 +2131,23 @@ def test_the_batch_summary_counts_the_songs_held_before_their_video(monkeypatch)
     LyricVideoGUI._on_batch_done(stub, {"succeeded": ["a"], "failed": [], "held": ["b", "c"]})
 
     assert "Held for review (no video made): 2" in shown[0]
+
+
+def test_a_stopped_batch_says_where_it_stopped_and_how_to_pick_up_again(monkeypatch):
+    shown = []
+    monkeypatch.setattr("lyricvideo.gui.messagebox.showwarning", lambda title, message, **kw: shown.append((title, message)))
+    button = SimpleNamespace(configure=lambda **kw: None)
+    stub = _gui_stub(
+        _batch_items=[1], _batch_index=1, status_var=SimpleNamespace(set=lambda v: None),
+        progress_bar=SimpleNamespace(set=lambda v: None), generate_button=button, redo_button=button, batch_button=button,
+        _refresh_retry_upload_options=lambda: None,
+    )
+
+    LyricVideoGUI._on_batch_done(stub, {"succeeded": ["a"], "failed": [],
+                                        "stopped": ("Nebraska", "lrclib.net is not answering (HTTP 502)", 7)})
+
+    title, message = shown[0]
+    assert title == "Batch stopped" and '"Nebraska" (7 more not started)' in message and "skip done songs" in message
 
 
 def test_render_anyway_asks_first_then_resumes_at_the_chords_stage_with_the_saved_timing(tmp_path, monkeypatch):

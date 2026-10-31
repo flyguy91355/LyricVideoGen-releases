@@ -5215,3 +5215,13 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   band auto-picked from the roster for voice + style but changeable ("Auto-pick, can change"), and a finished song waits for the owner to
   watch it ("Wait for me"). New songs have no published key, so the key Claude asked MiniMax for must match the chords (both Wrong Heart's
   requested and detected key were E minor); otherwise Set Key. Cost about $0.35 a song (music $0.15-0.20, pictures, checks).
+
+## HISTORY 10-31: lrclib outage -> a Batch of wrong lyrics; My AI Songs to Review
+
+- Owner: "5 out of 18 passed" on round-4 songs pre-vetted at 90-100%. lrclib.net's API answered 502 to every request all afternoon
+  (its GitHub #136-138; its owner on #130, 10-30: overloaded at 3000+ req/s). `_lrclib_get`/`_lrclib_search` took any non-200 as "no
+  record", so every song went on to NetEase: Nebraska got Hungry Heart's words, Independence Day and Racing in the Street both got The
+  River's (0-4% timing); others got a different edition and missed by a few points. The audio check held them; nothing bad uploaded. Now
+  retried, then `LyricsSourceDown` stops the song (a sidecar song goes on) and the Batch. lrclib also publishes full SQLite dumps
+  (db-dumps.lrclib.net, 49 GB gz on 10-30) -- offered as a local copy so an outage cannot stop a Batch.
+- Owner: AI songs "hard to find with all the other held for review songs" -> their own list, My AI Songs to Review (v2.0.106).

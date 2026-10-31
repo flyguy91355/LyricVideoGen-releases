@@ -27,7 +27,8 @@ for _var in ("HOME", "USERPROFILE"):
 
 _PROJECT_MODULE_PREFIXES = ("lyricvideo", "deep_review", "scripts")
 # The owner's real per-user folders, in case a module was somehow imported before the home moved.
-_REAL_HOME_APP_DIRS = (".playalongvideoproduction", "PlayAlongVideoProductionImages", "PlayAlongVideoProductionArtists")
+_REAL_HOME_APP_DIRS = (".playalongvideoproduction", "PlayAlongVideoProductionImages", "PlayAlongVideoProductionArtists",
+                       "PlayAlongVideoProductionLyrics")
 
 
 @pytest.hookimpl(trylast=True)
