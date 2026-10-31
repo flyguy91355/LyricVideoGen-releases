@@ -61,6 +61,7 @@ lyricvideo/key_rollout.py
 lyricvideo/layout.py
 lyricvideo/library_preview.py
 lyricvideo/library_session.py
+lyricvideo/line_onsets.py
 lyricvideo/lyric_accuracy.py
 lyricvideo/lyric_arbiter.py
 lyricvideo/lyric_audio_match.py
@@ -172,6 +173,7 @@ tests/test_layout.py
 tests/test_library_preview.py
 tests/test_library_session.py
 tests/test_like_subscribe.py
+tests/test_line_onsets.py
 tests/test_lyric_accuracy.py
 tests/test_lyric_arbiter.py
 tests/test_lyric_audio_match.py

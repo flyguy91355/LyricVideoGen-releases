@@ -66,7 +66,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `LYRICVIDEO_DEVICE=cpu|cuda` overrides; an auto-picked GPU failure retries once on CPU. Output
    `work_dir/htdemucs/<audio_stem>/{vocals,no_vocals}.wav` is what `--stage` resumes from; missing stems re-run
    Demucs; its output relays through `sys.stdout` (`_run_demucs`). Stems >3% shorter than song_info's duration are
-   truncated -- except that for an MP3 with no Xing/VBRI/LAME header (`_length_may_be_a_header_guess`) a
+   truncated -- except that for an MP3 with no Xing/VBRI/LAME header a
    `decoded_duration` agreeing with the stems within max(3 s, 3%) accepts them and corrects song_info
    (`_stems_are_complete`). A run starting at align or earlier refreshes work_dir's audio copy (atomically) when the
    source was replaced (other size, or other bytes with a new mtime), deleting old stems and transcript.json; a resume
@@ -102,8 +102,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    judged against their song's transcript (`models.original_song_dir`). Whisper mishearing/skipping a real,
    correctly-placed line also scores "out of sync" (not in AI songs: `lyrics_certain`) -- Whisper Text (Flagged) is editable per
    row; Save Corrections (`owner_whisper.py`) synthesizes heard
-   words across its span, read by `corrected_heard_words()`/`_align_lyrics` (`add_corrections()`; a Redo
-   recomputes it) -- never the placement itself. The anchor transcription is hinted (`lyric_hotwords()`,
+   words across its span, read by `corrected_heard_words()`/`_align_lyrics` (`add_corrections()`) -- never the placement itself. The anchor transcription is hinted (`lyric_hotwords()`,
    cache-keyed) with the accepted lyrics -- owner's text, or a fetched candidate once verified (the verifying
    check stays unhinted, 9-27). `revalidate_hotwords.py` checks for regression. `owner_verified.py` (Mark
    Verified, or an
@@ -114,6 +113,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    Flagged with Render Anyway, never in Pending/Upload. MMS_FA knows only a-z and `'`:
    `_normalize_word_for_alignment` spells numbers out ("31" -> "thirtyone", "10,000" -> "tenthousand"), folds
    accents, reads `&` as "and", else gives the `*` token. Display text never changes.
+   `line_onsets.snap_to_vocals` (10-31): a line's first word moves up to 0.6 s EARLIER to the voice's rise out of a dip.
 5. **detect_chords** (`detect_chords.py`, `chord_theory.py`) -- `crema` (CNN/CRNN, ISC) on `no_vocals.wav`, collapsed
    to 5 qualities by `_simplify_chord_label()` (every pumpp `3567s` quality mapped explicitly; `minmaj7` -> minor
    triad); returns sharp labels and key "". Needs old TF/Keras/sklearn -- **`.venv` is Python 3.11**; see
@@ -148,7 +148,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `images_backup_*/` (decodable, not placeholders) are counted first; none missing -> no Claude client and no
    `REPLICATE_API_TOKEN` needed (else a missing token is a clear RuntimeError). A cached placeholder or undecodable
    file is a cache miss; cache writes are temp file + `os.replace`. Replicate polling rides out network errors,
-   cancels on timeout, honours Retry-After; a retry reuses Claude's prompt unless the prediction failed.
+   cancels on timeout, honours Retry-After.
    `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image
    falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
    solid colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.

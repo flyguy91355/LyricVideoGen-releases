@@ -26,6 +26,7 @@ from .assemble import assemble_video
 from .combine import combine_alignment
 from .ai_generated import WATCH_FIRST_REASON, created_song, is_ai_generated
 from .chord_gaps import fill_gaps_from_audio
+from .line_onsets import snap_to_vocals
 from .detect_chords import detect_chords
 from .key_decision import apply_saved_owner_key, key_needs_attention, load_decision, load_owner_key, settle_song_key
 from .fetch_lyrics import fetch_lyric_lines_verified
@@ -1523,6 +1524,12 @@ def run_pipeline(
         if timing_concern:
             lyrics_concern = f"{lyrics_concern} {timing_concern}".strip()
         timed_lines = combine_alignment(parsed_lines, word_times, audio_duration)
+        try:    # a line's first word lit late after a line sung straight on (owner, 2026-10-31: "looked perfect to me")
+            timed_lines, moved = snap_to_vocals(timed_lines, vocals_path)
+            if moved:
+                print(f"Lyric timing: {moved} line start(s) moved to where the voice starts.")
+        except Exception as e:      # the timing as aligned is kept
+            print(f"WARNING: line starts not checked against the vocals ({type(e).__name__}: {e}).", file=sys.stderr)
         song = Song(
             title=resolved_title,
             audio_path=str(audio_path),
