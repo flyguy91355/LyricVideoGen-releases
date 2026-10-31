@@ -75,6 +75,31 @@ def parse_upload_times(text: str) -> list[time]:
     return sorted(seen) if seen else [_DEFAULT_UPLOAD_TIME]
 
 
+def publish_lane(
+    claimed: list[datetime], settings, ai_song: bool, tz=None,
+) -> tuple[list[datetime], list[time]]:
+    """(the claims, the daily times) a new upload is scheduled against. With Settings.youtube_ai_upload_times set (owner,
+    2026-10-31: "2 real band songs to 1 of my creation songs"), our own AI songs (ai_generated.py) publish only at those
+    times and every other song at youtube_upload_times, each judged only by the channel's claims at its own times -- told
+    apart by the time of day, read live from the channel like every claim. A song already scheduled at another time keeps
+    counting where it is. Blank (or nothing readable): one shared schedule, as before."""
+    regular = parse_upload_times(settings.youtube_upload_times)
+    ai_text = getattr(settings, "youtube_ai_upload_times", "") or ""
+    readable = [part for part in ai_text.split(",") if (m := _TIME_RE.match(part)) and int(m[1]) <= 23 and int(m[2]) <= 59]
+    if not readable:
+        return list(claimed), regular
+    ai_times = parse_upload_times(",".join(readable))
+    lane = {(t.hour, t.minute) for t in ai_times}
+
+    def in_lane(d: datetime) -> bool:
+        local = d.astimezone(tz) if d.tzinfo is not None else d
+        return (local.hour, local.minute) in lane
+
+    if ai_song:
+        return [d for d in claimed if in_lane(d)], ai_times
+    return [d for d in claimed if not in_lane(d)], [t for t in regular if (t.hour, t.minute) not in lane] or regular
+
+
 def format_upload_times(times: list[time]) -> str:
     return ",".join(f"{t.hour:02d}:{t.minute:02d}" for t in sorted(times))
 
@@ -485,10 +510,8 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
         description = render_description(support_text, description)
 
     if settings.youtube_privacy == "public":
-        slot = compute_next_publish_slot(
-            now, reserved_publish_datetimes(youtube_client),
-            parse_upload_times(settings.youtube_upload_times),
-        )
+        claims, times = publish_lane(reserved_publish_datetimes(youtube_client), settings, ai_song)
+        slot = compute_next_publish_slot(now, claims, times)
         video_id = upload_video(
             youtube_client, video_path, title, description, tags,
             privacy="private", publish_at=slot,

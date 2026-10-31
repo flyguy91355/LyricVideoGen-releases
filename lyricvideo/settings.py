@@ -141,6 +141,8 @@ class Settings:
                                               # panel label "Scheduled publish times" -- its own length IS
                                               # the videos-published-per-day count actually used at schedule
                                               # time; must match the default above (test_settings.py)
+    youtube_ai_upload_times: str = "12:30"   # owner, 2026-10-31: our own AI songs publish at these times only, real songs
+                                              # keep youtube_upload_times (2 real + 1 AI a day); blank = AI songs share them
     youtube_max_uploads_per_day: int = 7     # panel label "Maximum uploads per day" -- (2026-09-18) a real enforced ceiling on raw
                                               # upload_video() calls per calendar day, to protect against
                                               # exhausting YouTube's daily quota -- see gui.py's

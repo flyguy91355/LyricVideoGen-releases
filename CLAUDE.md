@@ -188,7 +188,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      (scene at 0 on a real image, `_first_available_image_key()`; chord bar/chart at the first non-N chord) with
      `render.draw_countdown()`. `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`).
    - Like/Subscribe (`render.draw_like_subscribe`, 10-4; `like_subscribe_state`): a cursor clicks Subscribe, bell
-     rings; in the count-in and the last `like_subscribe_lead_seconds` (10). Settings `show_like_subscribe`/etc.
+     rings; in the count-in and the last `like_subscribe_lead_seconds` (10).
    - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
      (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()`: past a line's plausible end "current" advances to the next line as an unsung preview (9-15),
      blank after the last; previews show only `Settings.lyric_preview_lead_seconds` (3.0) ahead. `scroll_progress`
@@ -284,7 +284,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   (`_default_text`); each slider has a box (`_parse_clamped_float`; unedited text is
   ignored; opacity boxes are percent) driven off a trace on its Tk variable, not `CTkSlider`'s `command`;
   `on_value_change` fires only on a real change. Labels must stay short (one long label broke the panel; `_add()`).
-  Font row: file name + 'Auto' (clears it). The Category dropdown shows labels; `youtube_category_id` stores the id. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
+  Font row: file name + 'Auto' (clears it). Category shows labels, stores `youtube_category_id`. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
   and raises OSError; `load()`/`from_dict()` default a non-object file and any wrong-typed value (with a warning).
 
 ## Notable pinned dependency
@@ -337,9 +337,10 @@ call and any YouTube call; the GUI logs it as 'the video must be made again' and
 at a time (`_UPLOAD_LOCK`, `upload_in_progress()`); `only_if_not_uploaded=True` raises `AlreadyUploaded` when a
 `youtube_state.json` EXISTS (even empty/cut off); a state write failing after the upload raises naming the video_id.
 Public target -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the channel's live
-schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe;
-`tz=` for tests), at `Settings.youtube_upload_times`, capped by `youtube_max_uploads_per_day`; quota/
-`uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once. Category default "27".
+schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe),
+at `Settings.youtube_upload_times` (AI songs: `youtube_ai_upload_times`, own claims by time of day,
+`publish_lane`; blank = shared), capped by `youtube_max_uploads_per_day`; quota/
+`uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once.
 Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
 Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most striking; a new one only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
 word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,

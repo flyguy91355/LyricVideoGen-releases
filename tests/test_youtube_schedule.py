@@ -1121,3 +1121,58 @@ def test_no_thumbnail_made_means_nothing_is_set(tmp_path, monkeypatch):
     monkeypatch.setattr(thumbnail_job, "ensure_thumbnail", lambda *a, **k: None)
     monkeypatch.setattr(youtube_schedule, "set_thumbnail", lambda *a: (_ for _ in ()).throw(AssertionError("set")))
     assert schedule_upload(_FakeYoutubeClient(video_id="v3"), _FakeAnthropicClient(), work_dir, _upload_settings()) == "v3"
+
+
+# --- 2 real songs + 1 of our own AI songs a day (owner, 2026-10-31) ----------------------------------------------------
+
+from lyricvideo.youtube_schedule import publish_lane  # noqa: E402
+
+
+def _local(day, hour, minute=0):
+    return datetime(2026, 9, day, hour, minute).astimezone()
+
+
+def test_an_ai_song_takes_the_first_day_whose_ai_time_is_free_whatever_the_real_songs_hold():
+    settings = SimpleNamespace(youtube_upload_times="09:00,16:00", youtube_ai_upload_times="12:30")
+    claims = [_local(10, 9), _local(10, 16), _local(10, 12, 30), _local(11, 9), _local(11, 16), _local(12, 9)]
+
+    ai_claims, ai_times = publish_lane(claims, settings, ai_song=True)
+    real_claims, real_times = publish_lane(claims, settings, ai_song=False)
+
+    assert ai_claims == [_local(10, 12, 30)] and ai_times == [time(12, 30)]
+    assert compute_next_publish_slot(_local(10, 8), ai_claims, ai_times) == _local(11, 12, 30)
+    assert _local(10, 12, 30) not in real_claims and real_times == [time(9), time(16)]
+    assert compute_next_publish_slot(_local(10, 8), real_claims, real_times) == _local(12, 16)
+
+
+def test_with_no_ai_times_every_song_shares_the_one_schedule():
+    claims = [_local(10, 9)]
+    for ai_times in ("", "  ", "nonsense", "25:99"):
+        settings = SimpleNamespace(youtube_upload_times="09:00,16:00", youtube_ai_upload_times=ai_times)
+        assert publish_lane(claims, settings, ai_song=True) == (claims, [time(9), time(16)])
+    assert publish_lane(claims, SimpleNamespace(youtube_upload_times="09:00"), ai_song=True) == (claims, [time(9)])
+
+
+def test_an_ai_time_that_is_also_a_real_time_is_left_to_the_ai_songs():
+    settings = SimpleNamespace(youtube_upload_times="09:00,12:30,16:00", youtube_ai_upload_times="12:30")
+    assert publish_lane([], settings, ai_song=False)[1] == [time(9), time(16)]
+
+
+def test_schedule_upload_puts_our_own_ai_song_at_the_ai_time_beside_two_real_songs(tmp_path):
+    from lyricvideo.ai_generated import mark_ai_generated
+
+    work_dir = _make_song_work_dir(tmp_path)
+    mark_ai_generated(work_dir)
+    settings = SimpleNamespace(
+        youtube_privacy="public", youtube_category_id="10", youtube_made_for_kids=False,
+        youtube_upload_times="09:00,16:00", youtube_ai_upload_times="12:30",
+    )
+    utc = lambda d: d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    client = _FakeYoutubeClient(video_id="vid123", existing_videos=[
+        {"id": f"real-{h}", "status": {"publishAt": utc(_local(10, h))}, "snippet": {}} for h in (9, 16)
+    ])
+
+    schedule_upload(client, _FakeAnthropicClient(), work_dir, settings, now=_local(10, 8).astimezone(timezone.utc))
+
+    publish_at = datetime.fromisoformat(client._videos.insert_kwargs["body"]["status"]["publishAt"].replace("Z", "+00:00"))
+    assert publish_at == _local(10, 12, 30)
