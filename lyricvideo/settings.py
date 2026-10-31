@@ -134,16 +134,16 @@ class Settings:
                                               # video -- that field only appears under Education, and
                                               # isn't reachable through the Data API at all)
     youtube_made_for_kids: bool = False      # COPPA declaration, required on every upload
-    youtube_uploads_per_day: int = 5         # panel label "Maximum publish per day" -- drives the Settings
+    youtube_uploads_per_day: int = 5         # panel label "Real-band videos published per day" -- drives the Settings
                                               # panel's auto-generated default times (see
                                               # youtube_schedule.evenly_spaced_upload_times)
     youtube_upload_times: str = "09:00,12:00,15:00,18:00,21:00"  # comma-separated 24h HH:MM local times,
-                                              # panel label "Scheduled publish times" -- its own length IS
+                                              # panel label "Real-band publish times" -- its own length IS
                                               # the videos-published-per-day count actually used at schedule
                                               # time; must match the default above (test_settings.py)
     youtube_ai_upload_times: str = "12:30"   # owner, 2026-10-31: our own AI songs publish at these times only, real songs
                                               # keep youtube_upload_times (2 real + 1 AI a day); blank = AI songs share them
-    youtube_max_uploads_per_day: int = 7     # panel label "Maximum uploads per day" -- (2026-09-18) a real enforced ceiling on raw
+    youtube_max_uploads_per_day: int = 7     # panel label "Upload limit per day (all videos)" -- (2026-09-18) a real enforced ceiling on raw
                                               # upload_video() calls per calendar day, to protect against
                                               # exhausting YouTube's daily quota -- see gui.py's
                                               # _uploads_remaining_today / youtube_upload_count_state.py.

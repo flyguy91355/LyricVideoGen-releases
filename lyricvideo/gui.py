@@ -1503,7 +1503,7 @@ class LyricVideoGUI:
         self._check_api_keys()
         self._start_update_check()
         self._refresh_youtube_status()
-        self.root.after(5 * 60 * 1000, self._schedule_song_check)     # Settings "New AI songs per day"
+        self.root.after(5 * 60 * 1000, self._schedule_song_check)     # Settings "New AI songs to make per day"
 
     def _build_widgets(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -2005,7 +2005,7 @@ class LyricVideoGUI:
             client = anthropic.Anthropic()
             if scheduled:
                 voice, style, band, about = plan_scheduled_song(client, load_roster())
-                print(f"Scheduled song (Settings: New AI songs per day): {voice} {style}, band: {band}.\nAbout: {about}")
+                print(f"Scheduled song (Settings: New AI songs to make per day): {voice} {style}, band: {band}.\nAbout: {about}")
             created = create_song(
                 PROJECT_ROOT / "work", voice, style, about, band, client, os.environ.get("REPLICATE_API_TOKEN", ""),
                 scheduled=scheduled,

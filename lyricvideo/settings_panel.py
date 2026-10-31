@@ -519,7 +519,8 @@ class SettingsPanel(ctk.CTkScrollableFrame):
                      lambda v: f"{int(v / 255 * 100)}%", parse=_parse_percent_of_255)
 
         self._section("AI songs")
-        self._slider("scheduled_songs_per_day", "New AI songs per day", 0, 3, 3,
+        # Owner, 2026-10-31: "confusing, probably needs a wording change" -- every label says what it controls.
+        self._slider("scheduled_songs_per_day", "New AI songs to make per day", 0, 3, 3,
                      lambda v: f"{int(v)}/day" if int(v) else "off")
 
         self._section("EASY CHORD (capo) videos")
@@ -572,13 +573,13 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._option("youtube_privacy", "Privacy", ["public", "unlisted", "private"])
         self._option("youtube_category_id", "Category", list(_YOUTUBE_CATEGORY_IDS.keys()))
         self._check("youtube_made_for_kids", "Made for kids")
-        self._text("youtube_upload_times", "Scheduled publish times (HH:MM,...)")
-        self._text("youtube_ai_upload_times", "AI song publish times (blank = same)")
+        self._text("youtube_upload_times", "Real-band publish times (HH:MM,...)")
+        self._text("youtube_ai_upload_times", "My AI song publish times (HH:MM)")
         self._slider(
-            "youtube_uploads_per_day", "Maximum publish per day", 1, 10, 9, lambda v: f"{int(v)}/day",
+            "youtube_uploads_per_day", "Real-band videos published per day", 1, 10, 9, lambda v: f"{int(v)}/day",
             on_value_change=self._regenerate_upload_times,
         )
-        self._slider("youtube_max_uploads_per_day", "Maximum uploads per day", 1, 10, 9, lambda v: f"{int(v)}/day")
+        self._slider("youtube_max_uploads_per_day", "Upload limit per day (all videos)", 1, 10, 9, lambda v: f"{int(v)}/day")
         self._slider("youtube_quota_retry_hours", "Retry wait after quota exceeded", 1, 48, 47,
                      lambda v: f"{int(v)}h")
 

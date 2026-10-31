@@ -183,8 +183,8 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      hand-picked Em7 022030. `chord_diagram._legend_layout()` sizes from the chord count: <=2 rows, <=0.35h including
      its top margin, never past `Settings.chord_legend_size`; panel opacity `chord_diagram_panel_alpha` (235); "Nfr"
      sits left of the low-E string. `Settings.show_chord_legend` toggles it.
-   - Count-in: `Settings.countdown_beats` (4; 0 off) beats of `60/bpm` (120 if undetected), AT LEAST `countdown_seconds` (4 s:
-     `countdown_beat_count`, 4-16 beats, 129 BPM -> 9) over the song's FIRST FRAME
+   - Count-in: `Settings.countdown_beats` (4; 0 off) beats of `60/bpm` (120 if none), AT LEAST `countdown_seconds` (4 s:
+     `countdown_beat_count`, 4-16 beats) over the song's FIRST FRAME
      (scene at 0 on a real image, `_first_available_image_key()`; chord bar/chart at the first non-N chord) with
      `render.draw_countdown()`. `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`).
    - Like/Subscribe (`render.draw_like_subscribe`, 10-4; `like_subscribe_state`): a cursor clicks Subscribe, bell
@@ -234,7 +234,7 @@ as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's
 Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3, sidecar `.txt`, `AI_GENERATED.txt`,
 `ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
 typed name (asks if on MusicBrainz) or Claude's. `ai_song.json` = Flagged until Mark Verified/Upload Anyway
-(`waits_to_be_watched`); key settles if the requested key matches the chords (no Claude/search).
+(`waits_to_be_watched`); key settles if the asked-for key matches the chords (no Claude/search).
 `Settings.scheduled_songs_per_day` (0 off): every 20 min if idle; a random style/voice, a roster band or a new
 one (equal odds), Claude's About (`plan_scheduled_song`); `scheduled_songs.json` counts the day (3 fails stop it).
 
@@ -283,7 +283,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   `self.settings` updates live. Each field shows its default
   (`_default_text`); each slider has a box (`_parse_clamped_float`; unedited text is
   ignored; opacity boxes are percent) driven off a trace on its Tk variable, not `CTkSlider`'s `command`;
-  `on_value_change` fires only on a real change. Labels must stay short (one long label broke the panel; `_add()`).
+  `on_value_change` fires only on a real change. Labels must stay short (one long label broke the panel; `_add()`) and say what they set.
   Font row: file name + 'Auto' (clears it). Category shows labels, stores `youtube_category_id`. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
   and raises OSError; `load()`/`from_dict()` default a non-object file and any wrong-typed value (with a warning).
 
@@ -340,7 +340,7 @@ Public target -> uploaded Private with a future `publishAt`: `compute_next_publi
 schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe),
 at `Settings.youtube_upload_times` (AI songs: `youtube_ai_upload_times`, own claims by time of day,
 `publish_lane`; blank = shared), capped by `youtube_max_uploads_per_day`; quota/
-`uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private upload at once.
+`uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private: at once.
 Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
 Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most striking; a new one only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
 word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
