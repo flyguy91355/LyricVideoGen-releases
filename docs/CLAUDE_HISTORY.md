@@ -5202,3 +5202,16 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   Blackbird/Free Bird/Stairway cost about 1.1 cents total; fixes after review: a dark pick is lifted, two candidates scored and the better kept,
   prompt keeps the guitar right and off the bottom edge. `thumbnails.set` is 50 quota units (official docs); the upload sets it soft-fail and
   `scripts/backfill_thumbnails.py` covers videos already live. Same day: render-only redo of all 105 pending videos for the Like/Subscribe look.
+
+## HISTORY 10-30/10-31: our own AI songs, chord gap fill, Create a Song
+
+- Original AI songs under invented BAND names (MiniMax Music 2.6 cannot repeat a voice; a band makes another singer sound like another member).
+  Copperleaf "Lantern in the Window" was auto-uploaded by the running app before its name was settled and with no AI flag; fixed live, and
+  v2.0.98 added `AI_GENERATED.txt` -> `containsSyntheticMedia` + an honest description. Burning Ember "Wrong Heart to Break" (hard rock):
+  crema read about 65 s of loud distorted guitar on the music stem as N.C. (it has no power-chord quality). `chord_gaps.py` fills N over
+  audible music from crema on the full mix, then a root+fifth reading of the stem; on that song N.C. dropped to the last 1.5 s ring-out.
+  Kept to AI songs until checked on songs the owner already judged (Ain't Talkin' 'Bout Love's 41% N.C. is the obvious next test).
+- Owner, 10-31: "create a song thru the program ... female-male, country, rock, and a short sentence of what the song is about". Choices:
+  band auto-picked from the roster for voice + style but changeable ("Auto-pick, can change"), and a finished song waits for the owner to
+  watch it ("Wait for me"). New songs have no published key, so the key Claude asked MiniMax for must match the chords (both Wrong Heart's
+  requested and detected key were E minor); otherwise Set Key. Cost about $0.35 a song (music $0.15-0.20, pictures, checks).

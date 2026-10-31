@@ -154,7 +154,8 @@ def _retry_after_seconds(response) -> float:
     return min(max(seconds, 1.0), _MAX_RETRY_AFTER_SECONDS)
 
 
-def _create_prediction(http_client, token: str, model: str, prompt: str) -> dict:
+def _create_prediction(http_client, token: str, model: str, prompt: str, inputs: dict | None = None) -> dict:
+    """`inputs` replaces the image input (song_maker.py's music model takes its own)."""
     owner, name = model.split("/", 1)
     for attempt in range(_RATE_LIMIT_RETRIES + 1):
         response = http_client.post(
@@ -163,7 +164,7 @@ def _create_prediction(http_client, token: str, model: str, prompt: str) -> dict
             # aspect_ratio matches the video's own 1920x1080 (16:9) frame -- flux-schnell
             # defaults to a square 1:1 image otherwise, which would need stretching/
             # distortion to fill a widescreen frame.
-            json={"input": {"prompt": prompt, "aspect_ratio": "16:9"}},
+            json={"input": inputs if inputs is not None else {"prompt": prompt, "aspect_ratio": "16:9"}},
             timeout=30.0,
         )
         if getattr(response, "status_code", 200) != 429 or attempt == _RATE_LIMIT_RETRIES:
@@ -185,13 +186,14 @@ def _cancel_prediction(http_client, token: str, cancel_url: str | None) -> None:
 
 def _poll_prediction(
     http_client, token: str, get_url: str, status: str, output, cancel_url: str | None = None,
+    timeout_seconds: float = REPLICATE_POLL_TIMEOUT_SECONDS,
 ) -> tuple[str, object]:
-    deadline = time.monotonic() + REPLICATE_POLL_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout_seconds
     while status not in _TERMINAL_STATUSES:
         if time.monotonic() > deadline:
             _cancel_prediction(http_client, token, cancel_url)
             raise ReplicateUnreachable(
-                f"Replicate prediction timed out after {REPLICATE_POLL_TIMEOUT_SECONDS}s (cancelled)"
+                f"Replicate prediction timed out after {timeout_seconds:g}s (cancelled)"
             )
         time.sleep(REPLICATE_POLL_INTERVAL_SECONDS)
         try:
@@ -210,7 +212,7 @@ def _poll_prediction(
     return status, output
 
 
-def _download_output(http_client, url: str) -> bytes:
+def _download_output(http_client, url: str, what: str = "image") -> bytes:
     last_error: Exception | None = None
     for attempt in range(_DOWNLOAD_ATTEMPTS):
         if attempt:
@@ -222,7 +224,7 @@ def _download_output(http_client, url: str) -> bytes:
         except (httpx.HTTPStatusError, httpx.TransportError) as e:
             last_error = e
     raise ReplicateUnreachable(
-        f"the generated image could not be downloaded after {_DOWNLOAD_ATTEMPTS} tries: "
+        f"the generated {what} could not be downloaded after {_DOWNLOAD_ATTEMPTS} tries: "
         f"{type(last_error).__name__}: {last_error}"
     )
 

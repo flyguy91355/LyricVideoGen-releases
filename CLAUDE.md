@@ -125,12 +125,10 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    ~4 cents) settles it only on high confidence + 2 cited sources (`source` "researched"; a Render Anyway resume of
    an unresearched hold searches too); else the song is HELD before images and Flagged with **Set Key** (`key_owner.json`, wins, survives Redo). A Set Key the saved chords already carry confirms at once
    (`confirm_owner_key`; the video needs no remaking); otherwise Render Anyway's resume runs `apply_saved_owner_key`
-   (respells, records the decision regardless). During a job Set Key shows a message; a
-   non-key says 'Not a key'. On an uploaded song (listed only while its EASY version waits on the key,
+   (respells, records the decision regardless). On an uploaded song (listed only while its EASY version waits on the key,
    `easy_version_waits_on_key`, reason 'key (EASY waits)') `_settle_key_of_uploaded_song` respells and confirms without
    re-rendering, then offers Rebuild EASY version. `key_decision.json` records it. `parse_key` accepts every real
-   spelling (Cb/Fb/E#/B#, ♯/♭, sharp/flat, any case, m/min/minor/maj/major), refuses double accidentals and a
-   capital 'M', never raises. `chord_theory.spell_in_key` spells by function: the key's own chords in its letters and
+   spelling, refuses double accidentals and a capital 'M', never raises. `chord_theory.spell_in_key` spells by function: the key's own chords in its letters and
    flats/sharps, a borrowed chord by the step it alters (D major's bVI is Bb); Cb/E# etc. become B/F, so only
    `CHORD_SHAPES` names result (`respell_chord_track`, `transpose_chord_track`). `Settings.prefer_flats` ('Use flats
    in flat keys') off -> chords and the Key label use sharps ('A# major'); `key_decision.json`/`key_owner.json` always
@@ -171,11 +169,9 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    - **Atomic output**: renders to `<name>.mp4.rendering` (temp audio `.rendering-audio.m4a` beside it, never the
      CWD), reads the picture length back (`_check_rendered_video`, ffmpeg stream copy), then `os.replace`s. A failed
      or killed render keeps the previous video and never leaves a cut-short mp4; `.rendering*` leftovers
-     are never listed and are replaced next render. `rendered_stream_seconds(path)` -> (picture s, audio s), backed
-     by `_frame_count_from_report()`: prefers ffmpeg's own `frame=` count, falling back to `time=` x the report's own
-     `fps` when a build prints no `frame=` for a stream-copy-to-null pass -- else that
-     build refuses every video, cut short or not. libx265 gets `-pix_fmt yuv420p -tag:v
-     hvc1`. `AudioFileClip` is closed in a `finally`.
+     are never listed and are replaced next render. `rendered_stream_seconds(path)` -> (picture s, audio s)
+     via `_frame_count_from_report()` (`frame=`, else `time=` x `fps`: some builds print no `frame=`). libx265 gets
+     `-pix_fmt yuv420p -tag:v hvc1`. `AudioFileClip` is closed in a `finally`.
    - Backgrounds: `_BackgroundCache` (LRU of 4 keyed by the real file, pre-scaled). A missing key shows the nearest
      existing picture in timeline order (previous first), else any of the song's; an undecodable one warns once and
      does the same, else the fallback colour. Swaps crossfade over `Settings.image_transition_seconds` (0.25 s, <=40%
@@ -191,9 +187,8 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      `countdown_beat_count`, 4-16 beats, 129 BPM -> 9) over the song's FIRST FRAME
      (scene at 0 on a real image, `_first_available_image_key()`; chord bar/chart at the first non-N chord) with
      `render.draw_countdown()`. `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`).
-   - Like/Subscribe (`render.draw_like_subscribe`, 10-4): Like pill, red Subscribe, bell; a cursor clicks it -> SUBSCRIBED,
-     bell rings (`like_subscribe_state`, 4 s) + benefit line; in the count-in (donate
-     spot) and the last `like_subscribe_lead_seconds` (10, under the donate label). Settings `show_like_subscribe`/etc.
+   - Like/Subscribe (`render.draw_like_subscribe`, 10-4; `like_subscribe_state`): a cursor clicks Subscribe, bell
+     rings; in the count-in and the last `like_subscribe_lead_seconds` (10). Settings `show_like_subscribe`/etc.
    - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
      (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()`: past a line's plausible end "current" advances to the next line as an unsung preview (9-15),
      blank after the last; previews show only `Settings.lyric_preview_lead_seconds` (3.0) ahead. `scroll_progress`
@@ -233,6 +228,14 @@ variant stays out of Pending even when verified, shows in Flagged while not uplo
 video'/'out of date'), notes hard-key songs waiting for a key, renders with a Settings snapshot, reports a None build
 as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's EASY rebuild passes its settings.
 
+## Create a Song
+
+`song_maker.py` (GUI, 10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/tagged lyrics -> MiniMax
+Music 2.6 (Replicate; ~$0.35/song all in) -> `work/<slug>/` (tagged mp3, sidecar `.txt`, `AI_GENERATED.txt`,
+`ai_song.json`) -> pipeline. Bands from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), else Claude
+names one MusicBrainz lacks. `ai_song.json` = Flagged until Mark Verified/Upload Anyway (`waits_to_be_watched`); key
+settles if the requested key matches the chords (no Claude/search).
+
 ## Redo an Existing Song
 
 Re-runs a finished song through current code from `"fetch_lyrics"` (lyrics/chords fresh), reusing its stems and
@@ -266,8 +269,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   (`_DraftQueueView`); each reply names its video too (10-3, `PendingReply.video_title`); edits are kept per draft
   id across refreshes, Approve posts the edited text, the header shows "N waiting".
 - **Settings popup** (`_open_settings_window`): built once, then hidden/shown (`_show_settings_dialog`/
-  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set every 50 ms up to 20x -- X11 refuses a grab until
-  the window is mapped); transient/grab_set/lift/focus_force/brief-topmost like the Update dialog; its confirms are
+  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set, 50 ms x20: X11 needs it mapped); transient/grab_set/lift/focus_force/brief-topmost like the Update dialog; its confirms are
   parented to it (`_ask_over`, `SettingsPanel._confirm`). Closing with unsaved changes asks like Discard and reverts
   `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`: synthetic frame via `render_kwargs()`
   and `resolve_font`) is debounced 150 ms. A moved timing pass mark refreshes the lists once, on close
@@ -304,8 +306,7 @@ removes allow-listed regular files the previous applied release shipped and this
 `.release_manifest`, gitignored). `gui.py` checks once on launch (background thread); a banner opens a modal dialog
 (centered, modal) with the notes, Apply Update (its confirm is
 parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused while a video is made or an
-upload runs, and runs one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply (the
-result or the banner brings it back); `_poll_update_queue` handles each message alone and always reschedules.
+upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply; `_poll_update_queue` handles each message alone and always reschedules.
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
 `scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, never the working tree),
 re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits
@@ -344,9 +345,10 @@ Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most strikin
 word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
 soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
 A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
-(`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts.
-`scripts/find_truncated_videos.py` (dry run; `--only`) lists cut-short mp4s in every song and easychords folder,
-marking ones on YouTube (delete/replace there); `--set-aside` renames them `*.truncated.mp4` (never deletes; Redo remakes them); key_rollout and `_set_aside_videos` skip that name.
+(`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts; N.C. over music
+filled (`chord_gaps.py`, AI songs only for now).
+`scripts/find_truncated_videos.py` (dry run) lists cut-short mp4s, marking ones on YouTube; `--set-aside` ->
+`*.truncated.mp4` (key_rollout and `_set_aside_videos` skip that name).
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
 raises). Status label + Connect refresh off the

@@ -239,3 +239,19 @@ def test_owner_and_decision_files_are_written_whole(tmp_path):
     save_owner_key(tmp_path, "D major")
     save_decision(tmp_path, KeyDecision(status="confirmed", key="D major", source="owner"))
     assert sorted(p.name for p in tmp_path.iterdir()) == [KEY_DECISION_FILE, KEY_OWNER_FILE]   # no temp files left
+
+
+def test_a_created_song_settles_on_the_key_it_was_asked_for_when_the_chords_agree_without_asking_claude(tmp_path):
+    (tmp_path / "ai_song.json").write_text(json.dumps({"key": "D major"}), encoding="utf-8")
+    client = FakeClient("KEY: G major")
+    decision, out = settle_song_key(tmp_path, D_SONG, "x", "y", client)
+    assert decision.confirmed and decision.source == "requested" and decision.key == "D major" and out.key == "D major"
+    assert client.calls == []                                   # nothing is published about our own song: no opinion, no search
+
+
+def test_a_created_song_whose_chords_are_not_in_its_asked_for_key_waits_for_the_owner(tmp_path):
+    (tmp_path / "ai_song.json").write_text(json.dumps({"key": "F minor"}), encoding="utf-8")
+    client = FakeClient("KEY: D major")
+    decision, _out = settle_song_key(tmp_path, D_SONG, "x", "y", client)
+    assert decision.status == "review" and "it was made to be in F minor" in decision.concern()
+    assert client.calls == []

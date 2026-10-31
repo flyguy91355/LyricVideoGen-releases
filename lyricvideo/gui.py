@@ -102,7 +102,8 @@ from .youtube_upload_count_state import load_uploads_today, record_upload
 # gui-behavior (issue #7 review): one upload run at a time, one comment scan at a time, EASY CHORD folders included.
 import json
 from .batch import holds_other_recording, stored_song_identity, work_dir_for
-from .pipeline import review_concern
+from .pipeline import review_concern, waits_to_be_watched
+from .ai_generated import WATCH_FIRST_REASON
 from .youtube_comment_state import MAX_DRAFT_FAILURES, clear_draft_failures, mark_comment_seen, record_draft_failure
 from .youtube_schedule import AlreadyUploaded, IncompleteVideo, upload_in_progress
 from .youtube_state import (
@@ -782,6 +783,8 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
             return  # flagged -- see the "Flagged for Lyrics Review" panel
     except Exception:
         pass  # missing/corrupt file must never block an otherwise-normal upload
+    if waits_to_be_watched(work_dir):
+        return  # a new AI song (Create a Song): the owner watches it first
     if key_state(work_dir) != "confirmed":
         return  # its key is unchecked or waiting for the owner -- never uploaded (see Set Key in the review panel)
     state = load_youtube_state(work_dir)
@@ -1578,6 +1581,11 @@ class LyricVideoGUI:
         self.progress_bar.set(0.0)
         self.progress_bar.pack(fill="x", padx=10, pady=(0, 10))
 
+        # Create a Song (song_maker.py): built the first time it is opened.
+        create_content, _ = self._make_collapsible_section(
+            left, "Create a Song", on_first_expand=lambda: self._build_create_song_section(create_content),
+        )
+
         # The song lists (issue #7): each is ONE Treeview (a constant handful of widgets whatever the song count) whose rows
         # are scanned from work/ on a background thread the first time the section is opened -- never at launch -- and
         # re-scanned (again off the Tk thread, old rows staying up meanwhile) when invalidate() says the data changed.
@@ -1834,6 +1842,100 @@ class LyricVideoGUI:
                     window.attributes("-topmost", False)
                 except tk.TclError:
                     pass
+
+    def _build_create_song_section(self, content) -> None:
+        """Voice, style, band (the roster's pick for that voice and style, changeable) and one sentence about the song."""
+        from .song_maker import STYLES, VOICES
+
+        self.create_voice_var = tk.StringVar(value=VOICES[0])
+        self.create_style_var = tk.StringVar(value=next(iter(STYLES)))
+        self.create_band_var = tk.StringVar()
+        row = ctk.CTkFrame(content, fg_color="transparent")
+        row.pack(fill="x", padx=8, pady=(4, 4))
+        ctk.CTkLabel(row, text="Voice:").pack(side="left", padx=(0, 4))
+        ctk.CTkOptionMenu(row, values=list(VOICES), variable=self.create_voice_var, width=90,
+                          command=lambda _v: self._refresh_band_choices()).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(row, text="Style:").pack(side="left", padx=(0, 4))
+        ctk.CTkOptionMenu(row, values=list(STYLES), variable=self.create_style_var, width=150,
+                          command=lambda _v: self._refresh_band_choices()).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(row, text="Band:").pack(side="left", padx=(0, 4))
+        self.create_band_menu = ctk.CTkOptionMenu(row, values=[""], variable=self.create_band_var, width=220)
+        self.create_band_menu.pack(side="left")
+        about_row = ctk.CTkFrame(content, fg_color="transparent")
+        about_row.pack(fill="x", padx=8, pady=4)
+        ctk.CTkLabel(about_row, text="About:").pack(side="left", padx=(0, 4))
+        # No textvariable: CTkEntry shows its placeholder only without one.
+        self.create_about_entry = ctk.CTkEntry(about_row, placeholder_text="One sentence: what the song is about")
+        self.create_about_entry.pack(side="left", fill="x", expand=True)
+        button_row = ctk.CTkFrame(content, fg_color="transparent")
+        button_row.pack(fill="x", padx=8, pady=(4, 8))
+        ctk.CTkButton(button_row, text="Create Song", command=self._on_create_song, width=110).pack(side="left")
+        ctk.CTkLabel(
+            button_row, text="About $0.35. Claude writes it, MiniMax sings it, then the video is made.\n"
+            "It waits in Flagged for Lyrics Review until you watch it.",
+            text_color="gray60", justify="left", anchor="w",
+        ).pack(side="left", padx=10)
+        self._refresh_band_choices()
+
+    def _refresh_band_choices(self) -> None:
+        """The Band menu for the chosen voice and style: the fitting roster bands (the first one picked), a new band, then
+        the rest."""
+        from .song_maker import band_choices, load_roster
+
+        try:
+            roster = load_roster()
+        except (OSError, ValueError) as e:
+            print(f"WARNING: could not read the band roster: {type(e).__name__}: {e}", file=sys.stderr)
+            roster = {"artists": []}
+        choices = band_choices(roster, self.create_voice_var.get(), self.create_style_var.get())
+        self.create_band_menu.configure(values=choices)
+        self.create_band_var.set(choices[0])
+
+    def _on_create_song(self) -> None:
+        if self._running:
+            messagebox.showinfo("Busy", "A video is being made right now. Create the song when it has finished.")
+            return
+        about = self.create_about_entry.get().strip()
+        if not about:
+            messagebox.showerror("Missing input", "Say in one sentence what the song is about.")
+            return
+        self._running = True
+        self.generate_button.configure(state="disabled")
+        self.redo_button.configure(state="disabled")
+        self.batch_button.configure(state="disabled")
+        self.status_var.set("Writing the song...")
+        self.progress_bar.set(0.0)
+        self._clear_log()
+        thread = threading.Thread(
+            target=self._run_create_song,
+            args=(self.create_voice_var.get(), self.create_style_var.get(), self.create_band_var.get(), about),
+            daemon=True,
+        )
+        thread.start()
+        self.root.after(100, self._poll_queue)
+
+    def _run_create_song(self, voice: str, style: str, band: str, about: str) -> None:
+        """Makes the song (song_maker.create_song), then runs it through the pipeline exactly like Generate."""
+        from .song_maker import create_song
+
+        writer = _QueueWriter(self._queue)
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = writer, writer
+        try:
+            created = create_song(
+                PROJECT_ROOT / "work", voice, style, about, band, anthropic.Anthropic(),
+                os.environ.get("REPLICATE_API_TOKEN", ""),
+            )
+            print("Making the video. It then waits in Flagged for Lyrics Review: watch it, then Mark Verified or Upload "
+                  "Anyway.")
+        except Exception as e:
+            self._queue.put(("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
+            return
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+        self.root.after(0, self._refresh_band_choices)      # a new band is on the roster now
+        self._last_work_dir = created.work_dir
+        self._run_worker(created.audio_path, created.work_dir, created.title)
 
     def _make_collapsible_section(
         self, parent, title: str, header_extra=None, on_first_expand=None,
@@ -3708,7 +3810,8 @@ class LyricVideoGUI:
             concern = review_concern(song_dir)
         except Exception:
             pass
-        lyrics_concern = bool(concern)
+        watch_first = concern == WATCH_FIRST_REASON
+        lyrics_concern = bool(concern) and not watch_first
         easy = _is_easy_variant(slug)
         parent = _easy_variant_parent(slug)
         uploaded = _state_file_exists(song_dir)       # an unreadable youtube_state.json still means uploaded (F106)
@@ -3743,6 +3846,8 @@ class LyricVideoGUI:
             reasons.append("key")
         if lyrics_concern:
             reasons.append("lyrics/timing")
+        if watch_first:
+            reasons.append("new AI song: watch")
         if uploaded:
             reasons.append("on YouTube")
         if easy:

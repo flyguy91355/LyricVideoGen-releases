@@ -24,6 +24,8 @@ from .align import align_words, align_words_anchored, prepare_alignment, vocal_l
 from .anchors import HeardWord, combine_anchors, drop_words_in_silence, line_anchors
 from .assemble import assemble_video
 from .combine import combine_alignment
+from .ai_generated import WATCH_FIRST_REASON, created_song, is_ai_generated
+from .chord_gaps import fill_gaps_from_audio
 from .detect_chords import detect_chords
 from .key_decision import apply_saved_owner_key, key_needs_attention, load_decision, load_owner_key, settle_song_key
 from .fetch_lyrics import fetch_lyric_lines_verified
@@ -459,6 +461,8 @@ def _passes_for_upload(song_dir: Path) -> bool:
         return False
     if facts.verified:
         return True                                 # "if i decide its a good video its a good video"
+    if created_song(song_dir):
+        return False                                # a new AI song waits for the owner to watch it
     if facts.concern and not is_gate_concern(facts.concern):
         return False
     report = check_saved_song(song_dir)
@@ -496,6 +500,8 @@ def review_concern(song_dir: Path) -> str:
     if (facts.concern and not is_gate_concern(facts.concern)) or facts.verified:
         return facts.concern
     now = _timing_concern_now(Path(song_dir), facts)
+    if not now and created_song(song_dir) and not held_before_video(song_dir):
+        return WATCH_FIRST_REASON
     if now or not held_before_video(song_dir):
         return now
     if facts.concern:
@@ -547,9 +553,19 @@ def _held_for_review(song_dir: Path) -> bool:
         return True                                 # an EASY CHORD version its song has outgrown: Rebuild EASY version
     if facts.verified:
         return False                                # the owner watched this version and approved it
+    if created_song(song_dir):
+        return True                                 # a new AI song: the owner watches it first (Mark Verified / Upload Anyway)
     if facts.concern and not is_gate_concern(facts.concern):
         return True
     return bool(_timing_concern_now(song_dir, facts))   # the timing hold follows the bar (holds, or releases)
+
+
+def waits_to_be_watched(song_dir: Path) -> bool:
+    """A song Create a Song made that the owner has not approved yet: never uploaded on its own."""
+    if not created_song(song_dir):
+        return False
+    facts = _song_facts(Path(song_dir))
+    return facts is None or not facts.verified
 
 
 def easy_version_waits_on_key(song_dir: Path) -> bool:
@@ -592,6 +608,8 @@ def list_flagged_songs(work_root: Path, include_uploaded: bool = False) -> list[
             return True                               # a video whose key is unchecked or waiting for the owner: Set Key
         if facts.verified:
             return False                              # approved by the owner: not up for review any more
+        if created_song(entry):
+            return True                               # a new AI song: watch it first
         if facts.concern and not is_gate_concern(facts.concern):
             return True
         return bool(_timing_concern_now(entry, facts))
@@ -1545,6 +1563,10 @@ def run_pipeline(
     if detect_now:
         report("detect_chords")
         song.chord_track = detect_chords(instrumental_stem_path, **detect_kwargs)
+        if is_ai_generated(work_dir):
+            # Our own AI songs: crema left loud distorted guitar as N.C. (owner, 2026-10-31: "shouldnt have NC when there
+            # is music playing"); chord_gaps fills it from the full mix and power chords.
+            song.chord_track = fill_gaps_from_audio(song.chord_track, instrumental_stem_path, audio_copy_path, **detect_kwargs)
         # The key comes from the chords AND a second opinion that must agree, else the owner's own answer (key_decision.py);
         # a song whose key is in doubt stops here, before the images are bought and the video is made.
         key_decision, song.chord_track = settle_song_key(

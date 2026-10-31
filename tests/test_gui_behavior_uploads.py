@@ -161,6 +161,14 @@ def test_auto_upload_of_a_never_uploaded_song_asks_schedule_upload_to_refuse_a_d
     assert seen == [{"only_if_not_uploaded": True}]
 
 
+def test_auto_upload_never_sends_a_new_ai_song_the_owner_has_not_watched(tmp_path, monkeypatch):
+    """Create a Song (owner, 2026-10-31: "Wait for me"): the same song as above, but made by Create a Song."""
+    (tmp_path / "ai_song.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(gui, "schedule_upload", lambda *a, **k: pytest.fail("must not upload"))
+
+    _maybe_upload_to_youtube(tmp_path, Settings(youtube_auto_upload=True))
+
+
 def test_auto_upload_skips_quietly_when_another_run_uploaded_it_first(tmp_path, monkeypatch, _connected_without_limits):
     monkeypatch.setattr(gui, "schedule_upload", lambda *a, **k: (_ for _ in ()).throw(AlreadyUploaded("x")))
     monkeypatch.setattr(gui, "organize_video", lambda *a, **k: pytest.fail("the other run organizes it"))
