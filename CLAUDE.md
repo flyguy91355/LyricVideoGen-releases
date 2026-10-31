@@ -233,7 +233,7 @@ as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's
 `song_maker.py` (10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/lyrics -> MiniMax
 Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3, sidecar `.txt`, `AI_GENERATED.txt`,
 `ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
-typed name (asks if on MusicBrainz) or Claude's. `ai_song.json` = Flagged until Mark Verified/Upload Anyway
+typed name (asks if on MusicBrainz) or Claude's. `ai_song.json` = held until Mark Verified/Upload Anyway
 (`waits_to_be_watched`); key settles if the asked-for key matches the chords (no Claude/search).
 `Settings.scheduled_songs_per_day` (0 off): every 20 min if idle; a random style/voice, a roster band or a new
 one (equal odds), Claude's About (`plan_scheduled_song`); `scheduled_songs.json` counts the day (3 fails stop it).
@@ -257,12 +257,13 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   `_poll_list_results` applies on Tk; a generation counter drops stale results); `invalidate()` on an open section
   rescans in the background; `_refresh_retry_upload_options` invalidates all six lists;
   Batch's `"batch_item_done"` refreshes them live. Pending and EASY CHORD are checklists (☑ column: click or Space;
-  all start ticked; ticks survive refreshes; `_TickFlag`s in `_pending_upload_vars`/`_easy_chord_backfill_vars`).
+  all start ticked; ticks survive refreshes).
 - **Scans** (`pipeline.list_*`) parse each `lyrics_timed.json` once per file version (keyed by folder + (inode,
   mtime_ns, size) of it and `owner_verified.json`); the sync verdict is cached in `timing_gate.check_saved_song`
   (bar applied after). Lock-guarded, safe off the Tk thread, never write. An unreadable song is skipped with one
   warning and counts as held (fail closed).
-- **Flagged for Lyrics Review**: a list with a short reason column plus ONE detail pane (`_show_flagged_details`;
+- **Flagged for Lyrics Review** (AI songs: **My AI Songs to Review**, `_review_list_of`): each a list with a reason
+  column plus ONE detail pane (`_review_panes`, `_show_flagged_details`;
   reason = `pipeline.review_concern`, else `held_before_video.json`'s own) whose buttons enable per song: Watch (else
   Play MP3), Whisper Text, Edit Lyrics (`lyrics_owner.txt`, reused by Redo), Redo, Render Anyway, Mark Verified, Upload
   Anyway, Remove, Set Key (plain text, no emoji). A `<song>/easychords` row gets only Watch/Remove and Rebuild EASY
@@ -303,8 +304,8 @@ against the public, unlisted `flyguy91355/LyricVideoGen-releases` (pre-rename na
 top-level `*.py`/`*.sh`/`*.bat`; denies (always wins) `.env`, `songs/`, `work/`, `.venv/`. `cut_release.sh` ships that
 same set (`tests/test_update_manifest.py` keeps them in step) plus `RELEASE_MANIFEST`; `copy_updatable_files` then
 removes allow-listed regular files the previous applied release shipped and this one does not (install-root
-`.release_manifest`, gitignored). `gui.py` checks once on launch (background thread); a banner opens a modal dialog
-(centered, modal) with the notes, Apply Update (its confirm is
+`.release_manifest`, gitignored). `gui.py` checks once on launch (background thread); a banner opens a centered
+modal dialog with the notes, Apply Update (its confirm is
 parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused while a video is made or an
 upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply; `_poll_update_queue` handles each message alone and always reschedules.
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with

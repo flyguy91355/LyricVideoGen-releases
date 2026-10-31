@@ -2278,15 +2278,15 @@ def test_no_row_of_review_buttons_is_wider_than_a_narrow_window_can_show(tmp_pat
             save_youtube_state(song_dir, YoutubeState(video_id="abc", uploaded_at="2026-09-01T00:00:00+00:00", title="t"))
         frame = ctk.CTkFrame(root)
         frame.pack()
-        stub = SimpleNamespace(_flagged_rows={}, _song_views={})
+        stub = SimpleNamespace(_review_panes={}, _song_views={})
 
         LyricVideoGUI._build_flagged_details(stub, frame)
-        stub._flagged_rows["hard-song"] = LyricVideoGUI._flagged_row_data(stub, "hard-song")
+        stub._review_panes["flagged"].rows["hard-song"] = LyricVideoGUI._flagged_row_data(stub, "hard-song")
         LyricVideoGUI._show_flagged_details(stub, "hard-song")
         root.update_idletasks()
 
         assert 0 < _widest_button_row(frame) <= 480
-        states = {key: button.cget("state") for key, button in stub._flagged_buttons.items()}
+        states = {key: button.cget("state") for key, button in stub._review_panes["flagged"].buttons.items()}
         assert states["mark_verified"] == states["upload_anyway"] == ("normal" if has_video and not on_youtube else "disabled")
         assert states["render_anyway"] == ("disabled" if has_video else "normal")
         assert states["rebuild_easy"] == "disabled"                          # only for an EASY CHORD version

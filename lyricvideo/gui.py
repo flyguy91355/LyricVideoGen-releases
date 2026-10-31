@@ -11,7 +11,7 @@ import threading
 import tkinter as tk
 import traceback
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
@@ -103,7 +103,7 @@ from .youtube_upload_count_state import load_uploads_today, record_upload
 import json
 from .batch import holds_other_recording, stored_song_identity, work_dir_for
 from .pipeline import review_concern, waits_to_be_watched
-from .ai_generated import WATCH_FIRST_REASON
+from .ai_generated import WATCH_FIRST_REASON, is_ai_generated
 from .youtube_comment_state import MAX_DRAFT_FAILURES, clear_draft_failures, mark_comment_seen, record_draft_failure
 from .youtube_schedule import AlreadyUploaded, IncompleteVideo, upload_in_progress
 from .youtube_state import (
@@ -226,14 +226,15 @@ def _upload_within_todays_cap(youtube_client, anthropic_client, work_dir: Path, 
 
 
 def _set_upload_buttons(gui, state: str) -> None:
-    """Upload / Upload Selected / the Flagged pane's Upload Anyway, together: all off while an upload run is going."""
+    """Upload / Upload Selected / the review panes' Upload Anyway, together: all off while an upload run is going."""
     for name in ("retry_upload_button", "upload_selected_button"):
         button = getattr(gui, name, None)
         if button is not None:
             button.configure(state=state)
-    upload_anyway = (getattr(gui, "_flagged_buttons", None) or {}).get("upload_anyway")
-    if upload_anyway is not None and state == "disabled":
-        upload_anyway.configure(state="disabled")   # the detail pane turns it back on per song (_show_flagged_details)
+    for pane in (getattr(gui, "_review_panes", None) or {}).values():
+        upload_anyway = pane.buttons.get("upload_anyway")
+        if upload_anyway is not None and state == "disabled":
+            upload_anyway.configure(state="disabled")   # the detail pane turns it back on per song (_show_flagged_details)
 
 
 # Songs the 20-minute auto-retry failed (a stale EASY CHORD version, a title YouTube refuses, Claude failing to write a
@@ -1017,6 +1018,27 @@ def _song_list_font(widget) -> tkfont.Font:
     style.layout(_SONG_LIST_STYLE, [("Treeview.treearea", {"sticky": "nswe"})])  # no border/focus ring around the list
     root._song_list_font = font
     return font
+
+
+FLAGGED_TITLE = "Flagged for Lyrics Review"
+AI_REVIEW_TITLE = "My AI Songs to Review"
+
+
+def _review_list_of(song_dir: Path) -> str:
+    """The review list a held song shows in: our own AI songs have their own (owner, 2026-10-31: "hard to find with all
+    the other held for review songs")."""
+    return "ai_review" if is_ai_generated(song_dir) else "flagged"
+
+
+@dataclass
+class _ReviewPane:
+    """One review list's detail pane (Flagged for Lyrics Review, My AI Songs to Review): the highlighted song's title,
+    reason and action buttons, and each listed song's row data from the last scan."""
+    rows: dict[str, dict] = field(default_factory=dict)
+    buttons: dict[str, ctk.CTkButton] = field(default_factory=dict)
+    title_label: ctk.CTkLabel | None = None
+    concern_label: ctk.CTkLabel | None = None
+    note_label: ctk.CTkLabel | None = None
 
 
 class _SongListView:
@@ -1882,7 +1904,7 @@ class LyricVideoGUI:
         ctk.CTkButton(button_row, text="Create Song", command=self._on_create_song, width=110).pack(side="left")
         ctk.CTkLabel(
             button_row, text="About $0.35. Type in Band to name a new band. Claude writes the song, MiniMax\n"
-            "sings it, then the video is made. It waits in Flagged for Lyrics Review until you watch it.",
+            "sings it, then the video is made. It waits in My AI Songs to Review until you watch it.",
             text_color="gray60", justify="left", anchor="w",
         ).pack(side="left", padx=10)
         self._checking_band = False
@@ -2010,7 +2032,7 @@ class LyricVideoGUI:
                 PROJECT_ROOT / "work", voice, style, about, band, client, os.environ.get("REPLICATE_API_TOKEN", ""),
                 scheduled=scheduled,
             )
-            print("Making the video. It then waits in Flagged for Lyrics Review: watch it, then Mark Verified or Upload "
+            print("Making the video. It then waits in My AI Songs to Review: watch it, then Mark Verified or Upload "
                   "Anyway.")
         except Exception as e:
             if scheduled:
@@ -3287,10 +3309,12 @@ class LyricVideoGUI:
         scans = {
             "redo": self._scan_redo_list, "upload": self._scan_upload_list, "pending": self._scan_pending_list,
             "easy_chord_backfill": self._scan_easy_chord_backfill_list, "flagged": self._scan_flagged_list,
+            "ai_review": lambda: self._scan_flagged_list(ai_songs=True),
         }
         applies = {
             "redo": self._show_redo_list, "upload": self._show_upload_list, "pending": self._show_pending_list,
             "easy_chord_backfill": self._show_easy_chord_backfill_list, "flagged": self._show_flagged_list,
+            "ai_review": lambda data: self._show_flagged_list(data, "ai_review"),
         }
         if self._closing:
             return
@@ -3439,8 +3463,8 @@ class LyricVideoGUI:
             self._pending_upload_vars.pop(slug, None)
         elif list_name == "easy_chord_backfill":
             self._easy_chord_backfill_vars.pop(slug, None)
-        elif list_name == "flagged":
-            self._flagged_rows.pop(slug, None)
+        elif list_name in self._review_panes:
+            self._review_panes[list_name].rows.pop(slug, None)
 
     def _on_watch_song(self, slug: str) -> None:
         video_path = song_video_path(PROJECT_ROOT / "work" / slug)
@@ -3731,44 +3755,50 @@ class LyricVideoGUI:
         self._invalidate_pending_comments()
 
     def _build_flagged_songs_panel(self, parent) -> None:
-        """Flagged for Lyrics Review (issue #7): a song list (one Treeview, with a short reason per song) above ONE detail
-        pane, built once, showing the highlighted song's concern and its action buttons -- enabled or disabled for that
-        song. It used to build ~32 widgets per flagged song, over 4,000 for the owner's library."""
-        content, self._invalidate_flagged_list = self._make_collapsible_section(
-            parent, "Flagged for Lyrics Review", on_first_expand=self._refresh_flagged_songs,
-        )
-        self._flagged_rows: dict[str, dict] = {}
-        self._make_song_view(
-            content, "flagged", height_px=230, extra_column=True, on_select=self._show_flagged_details,
-            on_activate=lambda slug: self._on_flagged_watch_or_play(slug),
-        )
-        self._build_flagged_details(content)
+        """The review lists (issue #7): each a song list (one Treeview, with a short reason per song) above ONE detail pane,
+        built once, showing the highlighted song's concern and its action buttons -- enabled or disabled for that song. It
+        used to build ~32 widgets per flagged song, over 4,000 for the owner's library. Our own AI songs have their own
+        list, My AI Songs to Review (_review_list_of); both share every button's code and the "flagged" Remove list."""
+        self._review_panes: dict[str, _ReviewPane] = {}
+        invalidates = []
+        for list_name, title in (("ai_review", AI_REVIEW_TITLE), ("flagged", FLAGGED_TITLE)):
+            content, invalidate = self._make_collapsible_section(
+                parent, title, on_first_expand=lambda name=list_name: self._refresh_song_list(name),
+            )
+            invalidates.append(invalidate)
+            self._make_song_view(
+                content, list_name, height_px=230 if list_name == "flagged" else 140, extra_column=True,
+                on_select=lambda slug, name=list_name: self._show_flagged_details(slug, name),
+                on_activate=lambda slug: self._on_flagged_watch_or_play(slug),
+            )
+            self._build_flagged_details(content, list_name)
+        # Every action that changes a song's review state refreshes both lists: a song can sit in either.
+        self._invalidate_flagged_list = lambda: [invalidate() for invalidate in invalidates]
 
-    def _build_flagged_details(self, parent) -> None:
+    def _build_flagged_details(self, parent, list_name: str = "flagged") -> None:
+        pane = self._review_panes[list_name] = _ReviewPane()
         detail = ctk.CTkFrame(parent)
         detail.pack(fill="x", padx=8, pady=(0, 8))
-        self._flagged_detail_frame = detail
-        self._flagged_title_label = ctk.CTkLabel(detail, text="", anchor="w", font=ctk.CTkFont(weight="bold"))
-        self._flagged_title_label.pack(fill="x", padx=6, pady=(6, 2))
-        self._flagged_concern_label = ctk.CTkLabel(
+        pane.title_label = ctk.CTkLabel(detail, text="", anchor="w", font=ctk.CTkFont(weight="bold"))
+        pane.title_label.pack(fill="x", padx=6, pady=(6, 2))
+        pane.concern_label = ctk.CTkLabel(
             detail, text="Click a song above to see why it is here.", anchor="w", wraplength=440, justify="left",
         )
-        self._flagged_concern_label.pack(fill="x", padx=6, pady=(0, 4))
-        self._flagged_note_label = ctk.CTkLabel(
+        pane.concern_label.pack(fill="x", padx=6, pady=(0, 4))
+        pane.note_label = ctk.CTkLabel(
             detail, text="", anchor="w", text_color="gray60", wraplength=440, justify="left",
         )
-        self._flagged_note_label.pack(fill="x", padx=6, pady=(0, 4))
+        pane.note_label.pack(fill="x", padx=6, pady=(0, 4))
 
         def button(row, key, text, width, handler_name, **colors):
             # The handler is looked up when clicked, by name, so the existing _on_*_flagged methods stay the single place
             # each action lives.
             colors = colors or {"fg_color": "gray30", "hover_color": "gray20"}
             b = ctk.CTkButton(row, text=text, width=width, state="disabled",
-                              command=lambda: self._with_flagged_song(getattr(self, handler_name)), **colors)
+                              command=lambda: self._with_flagged_song(getattr(self, handler_name), list_name), **colors)
             b.pack(side="left", padx=(0, 6))
-            self._flagged_buttons[key] = b
+            pane.buttons[key] = b
 
-        self._flagged_buttons: dict[str, ctk.CTkButton] = {}
         green = {"fg_color": "#2b7a3d", "hover_color": "#236232"}
         # Rows of at most four buttons: one long row got its last buttons cropped in a narrower window (owner, 2026-09-21).
         row1 = ctk.CTkFrame(detail, fg_color="transparent")
@@ -3788,32 +3818,33 @@ class LyricVideoGUI:
         button(row3, "set_key", "Set Key", 90, "_on_set_key_flagged", **green)
         button(row3, "rebuild_easy", "Rebuild EASY version", 160, "_on_rebuild_easy_flagged", **green)
 
-    def _with_flagged_song(self, action) -> None:
-        view = self._song_views.get("flagged")
+    def _with_flagged_song(self, action, list_name: str = "flagged") -> None:
+        view = self._song_views.get(list_name)
         slug = view.selected() if view is not None else None
         if slug:
             action(slug)
 
     def _on_flagged_watch_or_play(self, slug: str) -> None:
         """Watch the video -- or, for a song held before its video, play its MP3 (the only way to hear it; 2026-09-22)."""
-        row = self._flagged_rows.get(slug, {})
+        row = next((pane.rows[slug] for pane in self._review_panes.values() if slug in pane.rows), {})
         if row.get("has_video", True):
             self._on_watch_song(slug)
         else:
             self._on_play_mp3_flagged(slug)
 
-    def _show_flagged_details(self, slug: str | None) -> None:
+    def _show_flagged_details(self, slug: str | None, list_name: str = "flagged") -> None:
         """Fills the detail pane for the highlighted song and turns each action on or off for it. An EASY CHORD version
         ("<song>/easychords") is made FROM its song -- its lyrics, timing and key all come from there -- so it never gets
         Redo, Render Anyway, Set Key or Edit Lyrics: each of those ran the whole pipeline (or saved a key) on the capo folder
         itself, dropping the CAPO badge, labelling shape chords with the original key, even nesting a second capo version
         (issue #7 review). It gets Rebuild EASY version instead, which remakes it from its song."""
-        row = self._flagged_rows.get(slug) if slug else None
-        buttons = self._flagged_buttons
+        pane = self._review_panes[list_name]
+        row = pane.rows.get(slug) if slug else None
+        buttons = pane.buttons
         if row is None:
-            self._flagged_title_label.configure(text="")
-            self._flagged_concern_label.configure(text="Click a song above to see why it is here.")
-            self._flagged_note_label.configure(text="")
+            pane.title_label.configure(text="")
+            pane.concern_label.configure(text="Click a song above to see why it is here.")
+            pane.note_label.configure(text="")
             for b in buttons.values():
                 b.configure(state="disabled")
             return
@@ -3828,9 +3859,9 @@ class LyricVideoGUI:
                 f'EASY CHORD version of "{row["parent"]}": its lyrics, timing and key come from that song. Fix them there '
                 "(Edit Lyrics / Redo / Set Key on that song), then use Rebuild EASY version here."
             )
-        self._flagged_title_label.configure(text=slug)
-        self._flagged_concern_label.configure(text=row["concern"] or "(no concern text saved)")
-        self._flagged_note_label.configure(text="\n".join(notes))
+        pane.title_label.configure(text=slug)
+        pane.concern_label.configure(text=row["concern"] or "(no concern text saved)")
+        pane.note_label.configure(text="\n".join(notes))
         enabled = {
             "watch": True,
             "whisper": not easy,
@@ -3847,12 +3878,9 @@ class LyricVideoGUI:
         for key, b in buttons.items():
             b.configure(state="normal" if enabled[key] else "disabled")
 
-    def _refresh_flagged_songs(self) -> None:
-        """Re-scans Flagged for Lyrics Review in the background (issue #7)."""
-        self._refresh_song_list("flagged")
-
-    def _scan_flagged_list(self) -> dict:
-        slugs = self._visible_flagged_songs()
+    def _scan_flagged_list(self, ai_songs: bool = False) -> dict:
+        """The rows of Flagged for Lyrics Review, or (`ai_songs`) of My AI Songs to Review."""
+        slugs = [s for s in self._visible_flagged_songs() if is_ai_generated(PROJECT_ROOT / "work" / s) == ai_songs]
         rows = {}
         for slug in slugs:
             try:
@@ -3865,28 +3893,30 @@ class LyricVideoGUI:
                               "parent": _easy_variant_parent(slug), "reason": "unreadable"}
         return {"songs": slugs, "rows": rows}
 
-    def _show_flagged_list(self, data: dict) -> None:
-        self._flagged_rows = data["rows"]
-        view = self._song_views["flagged"]
+    def _show_flagged_list(self, data: dict, list_name: str = "flagged") -> None:
+        self._review_panes[list_name].rows = data["rows"]
+        view = self._song_views[list_name]
         view.set_songs(data["songs"], extras={slug: row["reason"] for slug, row in data["rows"].items()})
-        self._show_flagged_details(view.selected())
+        self._show_flagged_details(view.selected(), list_name)
 
     def _visible_flagged_songs(self) -> list[str]:
-        """The songs Flagged for Lyrics Review lists: every flagged song except the ones the owner removed."""
+        """The songs the review lists show: every flagged song except the ones the owner removed."""
         removed = load_dismissed("flagged")
         return [s for s in list_flagged_songs(PROJECT_ROOT / "work", include_uploaded=True) if s not in removed]
 
     def _on_remove_flagged(self, slug: str) -> None:
         """Takes a song out of Flagged for Lyrics Review (owner, 2026-09-21: "remove not delete" -- some songs are too hard to
         fix). Only hides it: nothing on disk is touched, the Batch leaves it alone, and a Redo brings it back."""
+        list_name = _review_list_of(PROJECT_ROOT / "work" / slug)
         if not messagebox.askyesno(
             "Remove from review",
-            f'Remove "{slug}" from Flagged for Lyrics Review?\n\nNothing is deleted: the song\'s files stay where they are '
-            "and the Batch will skip it. Redo it from the Redo list to bring it back.",
+            f'Remove "{slug}" from {AI_REVIEW_TITLE if list_name == "ai_review" else FLAGGED_TITLE}?\n\nNothing is '
+            "deleted: the song's files stay where they are and the Batch will skip it. Redo it from the Redo list to bring "
+            "it back.",
         ):
             return
-        dismiss_song("flagged", slug)
-        self._drop_list_row("flagged", slug)  # just that row -- no rescan of the whole list (issue #7)
+        dismiss_song("flagged", slug)            # one Remove list for both review lists (the Batch reads it)
+        self._drop_list_row(list_name, slug)  # just that row -- no rescan of the whole list (issue #7)
 
     def _flagged_row_data(self, slug: str) -> dict:
         """Everything the Flagged detail pane shows for one song -- file reads only, so it runs on the list scanner's
@@ -4239,24 +4269,26 @@ class LyricVideoGUI:
 
     def _on_held_before_video(self, concern: str) -> None:
         """A run stopped before its video because the sync check failed (HeldBeforeVideo): tell the owner plainly, free the
-        buttons, and refresh the lists so the song shows in Flagged for Lyrics Review."""
+        buttons, and refresh the lists so the song shows in its review list (_review_list_of)."""
         self.status_var.set("Held for review")
         self._running = False
         self.generate_button.configure(state="normal")
         self.redo_button.configure(state="normal")
         self.batch_button.configure(state="normal")
         self._refresh_retry_upload_options()
+        work_dir = getattr(self, "_last_work_dir", None)
+        where = AI_REVIEW_TITLE if work_dir is not None and _review_list_of(work_dir) == "ai_review" else FLAGGED_TITLE
         if concern.startswith(KEY_HOLD_PREFIX):
             messagebox.showinfo(
                 "Held for the key",
-                f"No video was made yet.\n\n{concern}\n\nIt is in Flagged for Lyrics Review: use Set Key to give the song's "
-                "key, then make the video.",
+                f"No video was made yet.\n\n{concern}\n\nIt is in {where}: use Set Key to give the song's key, then make "
+                "the video.",
             )
             return
         messagebox.showinfo(
             "Held for review",
-            f"No video was made.\n\n{concern}\n\nIt is in Flagged for Lyrics Review: edit the lyrics and Redo it, or use "
-            "Render Anyway to make the video and watch it.",
+            f"No video was made.\n\n{concern}\n\nIt is in {where}: edit the lyrics and Redo it, or use Render Anyway to "
+            "make the video and watch it.",
         )
 
     def _on_render_anyway_flagged(self, slug: str, confirm: bool = True) -> None:

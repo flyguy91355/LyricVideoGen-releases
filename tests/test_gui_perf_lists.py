@@ -284,12 +284,12 @@ def test_an_easy_chord_version_in_review_offers_rebuild_instead_of_redo_render_o
 
     view.select("hard-song/easychords")
     app.root.update()
-    states = {key: b.cget("state") for key, b in app._flagged_buttons.items()}
+    states = {key: b.cget("state") for key, b in app._review_panes["flagged"].buttons.items()}
     assert {k for k, s in states.items() if s == "normal"} == {"watch", "remove", "rebuild_easy", "mark_verified",
                                                                "upload_anyway"}
     view.select("hard-song")
     app.root.update()
-    states = {key: b.cget("state") for key, b in app._flagged_buttons.items()}
+    states = {key: b.cget("state") for key, b in app._review_panes["flagged"].buttons.items()}
     assert states["set_key"] == states["redo"] == "normal" and states["rebuild_easy"] == "disabled"
 
 
@@ -365,7 +365,32 @@ def test_removing_a_flagged_song_drops_only_its_row(app, isolated, monkeypatch):
     app._with_flagged_song(app._on_remove_flagged)
     app.root.update()
 
-    assert view.slugs() == ["b-song"] and app._flagged_title_label.cget("text") == ""
+    assert view.slugs() == ["b-song"] and app._review_panes["flagged"].title_label.cget("text") == ""
+
+
+def test_our_own_ai_songs_are_reviewed_in_their_own_list(app, isolated, monkeypatch):
+    """Owner, 2026-10-31: AI songs were "hard to find with all the other held for review songs"."""
+    from lyricvideo.ai_generated import mark_ai_generated
+    _make_song(isolated, "cover-song", concern="Lyrics could not be confirmed against the vocal.")
+    mark_ai_generated(_make_song(isolated, "my-ai-song", concern="Lyrics could not be confirmed against the vocal."))
+    mark_ai_generated(_make_easy_variant(_make_song(isolated, "my-hard-ai-song", key="review")).parent)
+    _open(app, "Flagged for Lyrics Review")
+    _open(app, "My AI Songs to Review")
+    ai_view = app._song_views["ai_review"]
+    assert app._song_views["flagged"].slugs() == ["cover-song"]
+    assert ai_view.slugs() == ["my-ai-song", "my-hard-ai-song", "my-hard-ai-song/easychords"]
+
+    ai_view.select("my-ai-song")
+    app.root.update()
+    pane = app._review_panes["ai_review"]
+    assert pane.title_label.cget("text") == "my-ai-song"
+    assert pane.buttons["mark_verified"].cget("state") == "normal"
+    assert app._review_panes["flagged"].title_label.cget("text") == ""      # the other list's pane is untouched
+
+    monkeypatch.setattr(gui.messagebox, "askyesno", lambda title, message, **kw: "My AI Songs to Review" in message)
+    pane.buttons["remove"].invoke()
+    app.root.update()
+    assert ai_view.slugs() == ["my-hard-ai-song", "my-hard-ai-song/easychords"] and pane.title_label.cget("text") == ""
 
 
 # --- YouTube Comments: not built at launch; a refresh never throws away the owner's edits -------------------------------
