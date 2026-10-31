@@ -13,6 +13,7 @@ does not know."""
 from __future__ import annotations
 
 import json
+import random
 import re
 import shutil
 import time
@@ -28,6 +29,8 @@ from .key_estimate import parse_key
 from .models import atomic_write_text
 
 ROSTER_PATH = Path.home() / "PlayAlongVideoProductionArtists" / "roster.json"
+SCHEDULE_FILE = Path.home() / ".playalongvideoproduction" / "scheduled_songs.json"   # today's scheduled songs
+MAX_SCHEDULED_FAILURES = 3             # a day's scheduled songs stop after this many failed tries (no endless spend)
 MUSIC_MODEL = "minimax/music-2.6"
 MUSIC_TIMEOUT_SECONDS = 900.0          # a song took about 150 s (2026-10-30)
 MAX_LYRICS_CHARS = 3500                # MiniMax's own limits (Replicate's input schema, 2026-10-31)
@@ -210,6 +213,59 @@ def _plan_problem(data: dict | None) -> str:
     return ""
 
 
+def write_about(anthropic_client, voice: str, style: str, recent: list[str], model: str = "claude-sonnet-5") -> str:
+    """One sentence about a new song (a scheduled song has no owner's sentence), unlike the recent ones."""
+    used = "\n".join(f"- {a}" for a in recent[-20:]) or "- (none yet)"
+    prompt = (
+        f"Suggest what a new original {style} song with a {voice.lower()} lead singer could be about: one sentence, "
+        "everyday and relatable (love, home, the road, friends, hard times, hope...). Never about a real person, "
+        f"place name or brand. Make it clearly different from these earlier songs:\n{used}\n\n"
+        'Reply with ONLY JSON: {"about": "..."}'
+    )
+    for _attempt in range(_ATTEMPTS):
+        data = _ask_json(anthropic_client, prompt, 300, model)
+        about = str((data or {}).get("about") or "").strip()
+        if about and len(about) <= 400:
+            return about
+    raise RuntimeError("Claude did not suggest what the song is about; try again.")
+
+
+def plan_scheduled_song(anthropic_client, roster: dict, rng=random) -> tuple[str, str, str, str]:
+    """(voice, style, band, about) for a scheduled song (owner, 2026-10-31: random, "we want to add new bands as well"):
+    a random style and voice, then one of its roster bands or a new band, each equally likely -- so a style with no band
+    gets one, and new bands come less often as a style fills up."""
+    style, voice = rng.choice(list(STYLES)), rng.choice(VOICES)
+    band = rng.choice(bands_for(roster, voice, style) + [NEW_BAND])
+    recent = [s.get("about", "") for a in roster["artists"] for s in a.get("songs", []) if s.get("about")]
+    return voice, style, band, write_about(anthropic_client, voice, style, recent)
+
+
+def _schedule_state(path: Path, today: str) -> dict:
+    try:
+        state = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict) or state.get("date") != today:
+        state = {"date": today, "made": 0, "failed": 0}
+    return state
+
+
+def scheduled_song_due(per_day: int, today: str | None = None, path: Path | None = None) -> bool:
+    """True while today has made fewer than `per_day` scheduled songs and has not failed MAX_SCHEDULED_FAILURES times."""
+    if per_day <= 0:
+        return False
+    state = _schedule_state(path or SCHEDULE_FILE, today or datetime.now().date().isoformat())
+    return state.get("made", 0) < per_day and state.get("failed", 0) < MAX_SCHEDULED_FAILURES
+
+
+def record_scheduled_song(made: bool, today: str | None = None, path: Path | None = None) -> None:
+    path = Path(path or SCHEDULE_FILE)
+    state = _schedule_state(path, today or datetime.now().date().isoformat())
+    state["made" if made else "failed"] = state.get("made" if made else "failed", 0) + 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(state))
+
+
 def write_song(anthropic_client, voice: str, style: str, about: str, band: dict, model: str = "claude-sonnet-5") -> SongPlan:
     prompt = (
         f"Write an original {style} song for the band {band['name']}, sung by a {voice.lower()} lead singer.\n"
@@ -302,6 +358,7 @@ def new_song_folder(work_root: Path, title: str) -> Path:
 def create_song(
     work_root: Path, voice: str, style: str, about: str, band_name: str, anthropic_client, replicate_token: str, *,
     roster_path: Path = ROSTER_PATH, is_taken: Callable[[str], bool] = musicbrainz_has_artist, http_client=httpx,
+    scheduled: bool = False,
 ) -> CreatedSong:
     """Writes and makes the song into a new work folder (nothing rendered yet). The folder is removed again if the song
     could not be made. The roster records the band (a new one is added) and the song."""
@@ -334,6 +391,7 @@ def create_song(
             "title": plan.title, "band": band["name"], "voice": voice, "style": style, "about": about.strip(),
             "key": plan.key, "bpm": plan.bpm, "chords": plan.chords, "prompt": prompt, "lyrics": plan.lyrics,
             "generator": f"{MUSIC_MODEL} (Replicate)", "created": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "scheduled": scheduled,
         }
         atomic_write_text(work_dir / AI_SONG_FILE, json.dumps(record, indent=2, ensure_ascii=False) + "\n")
         mark_ai_generated(
@@ -352,7 +410,7 @@ def create_song(
     band["status"] = "active"
     band.setdefault("songs", []).append({
         "title": plan.title, "work_dir": f"work/{work_dir.name}", "about": about.strip(), "prompt": prompt,
-        "generator": f"{MUSIC_MODEL} (Replicate)", "created": record["created"],
+        "generator": f"{MUSIC_MODEL} (Replicate)", "created": record["created"], "scheduled": scheduled,
     })
     save_roster(roster, roster_path)
     print(f"Song made: {audio_path}")

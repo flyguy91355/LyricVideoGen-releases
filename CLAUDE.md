@@ -235,6 +235,8 @@ Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3, sidecar `.txt`
 `ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
 typed name (asks if on MusicBrainz) or Claude's. `ai_song.json` = Flagged until Mark Verified/Upload Anyway
 (`waits_to_be_watched`); key settles if the requested key matches the chords (no Claude/search).
+`Settings.scheduled_songs_per_day` (0 off): every 20 min if idle; a random style/voice, a roster band or a new
+one (equal odds), Claude's About (`plan_scheduled_song`); `scheduled_songs.json` counts the day (3 fails stop it).
 
 ## Redo an Existing Song
 
@@ -269,22 +271,20 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   (`_DraftQueueView`); each reply names its video too (10-3, `PendingReply.video_title`); edits are kept per draft
   id across refreshes, Approve posts the edited text, the header shows "N waiting".
 - **Settings popup** (`_open_settings_window`): built once, then hidden/shown (`_show_settings_dialog`/
-  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set, 50 ms x20: X11 needs it mapped); transient/grab_set/lift/focus_force/brief-topmost like the Update dialog; its confirms are
+  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set, 50 ms x20: X11 needs it mapped); like the Update dialog; its confirms are
   parented to it (`_ask_over`, `SettingsPanel._confirm`). Closing with unsaved changes asks like Discard and reverts
-  `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`: synthetic frame via `render_kwargs()`
-  and `resolve_font`) is debounced 150 ms. A moved timing pass mark refreshes the lists once, on close
+  `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`) is debounced
+  150 ms. A moved timing pass mark refreshes the lists once, on close
   (`_apply_pass_mark_change`). Building a `SettingsPanel` is wrapped in `_suppress_settings_save` (`load_from()` fires
   `on_change` early; 9-11).
 - **SettingsPanel** (`settings_panel.py`; `~/.playalongvideoproduction/settings.json`): writes disk ONLY via Save
-  Settings. A field differing from `self._baseline` gets a ● and a bold+orange label
-  ; Save shows an itemized `old → new`
+  Settings. A field differing from `self._baseline` gets a ● and a bold+orange label; Save shows an itemized `old → new`
   confirm, and a failed write (OSError) shows an error and stays unsaved; Discard reloads the baseline. gui's
-  `self.settings` updates live, so this session's runs use the latest values. Each field shows its default
-  (`_default_text`); each slider has a box (`_parse_clamped_float`: "%"/"s" suffix, ".5", "0,5"; unedited text is
+  `self.settings` updates live. Each field shows its default
+  (`_default_text`); each slider has a box (`_parse_clamped_float`; unedited text is
   ignored; opacity boxes are percent) driven off a trace on its Tk variable, not `CTkSlider`'s `command`;
   `on_value_change` fires only on a real change. Labels must stay short (one long label broke the panel; `_add()`).
-  Font row: file name + 'Auto' (clears it). The Category dropdown shows labels ("Howto & Style"/"Education"/"Music");
-  `youtube_category_id` stores the id. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
+  Font row: file name + 'Auto' (clears it). The Category dropdown shows labels; `youtube_category_id` stores the id. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
   and raises OSError; `load()`/`from_dict()` default a non-object file and any wrong-typed value (with a warning).
 
 ## Notable pinned dependency

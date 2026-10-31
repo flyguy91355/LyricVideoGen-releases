@@ -185,3 +185,55 @@ def test_a_typed_name_of_a_roster_band_in_other_letters_is_that_band(tmp_path, q
 
     artists = json.loads(roster_path.read_text(encoding="utf-8"))["artists"]
     assert made.band == "Burning Ember" and len(artists) == len(ROSTER["artists"])
+
+
+class _Picks:
+    """A stand-in random: the voice it is told, the first style, and the first band option or the last (a new band)."""
+    def __init__(self, voice, new_band):
+        self.voice, self.new_band = voice, new_band
+
+    def choice(self, options):
+        if tuple(options) == song_maker.VOICES:
+            return self.voice
+        if NEW_BAND in options:
+            return options[-1] if self.new_band else options[0]
+        return options[0]
+
+
+def test_a_scheduled_song_picks_a_style_and_voice_then_a_roster_band_or_a_new_one_and_its_own_subject():
+    roster = {"artists": [dict(ROSTER["artists"][4], songs=[{"about": "a porch at dusk"}])]}   # Copperleaf: male Acoustic
+    claude = FakeClaude({"about": "a long drive home"})
+
+    plan = song_maker.plan_scheduled_song(claude, roster, rng=_Picks("Male", new_band=False))
+
+    assert plan == ("Male", "Acoustic", "Copperleaf", "a long drive home")
+    assert "a porch at dusk" in claude.prompts[0]                    # told what earlier songs were about
+    assert song_maker.plan_scheduled_song(FakeClaude({"about": "x"}), roster, rng=_Picks("Male", new_band=True))[2] == NEW_BAND
+
+
+def test_scheduled_songs_stop_for_the_day_once_made_or_after_three_failures(tmp_path):
+    from lyricvideo.song_maker import record_scheduled_song, scheduled_song_due
+    state = tmp_path / "scheduled.json"
+
+    assert not scheduled_song_due(0, "2026-10-31", state)
+    assert scheduled_song_due(2, "2026-10-31", state)
+    record_scheduled_song(True, "2026-10-31", state)
+    assert scheduled_song_due(2, "2026-10-31", state)
+    record_scheduled_song(True, "2026-10-31", state)
+    assert not scheduled_song_due(2, "2026-10-31", state)
+    assert scheduled_song_due(2, "2026-11-01", state)                 # a new day
+
+    for _ in range(3):
+        record_scheduled_song(False, "2026-11-01", state)
+    assert not scheduled_song_due(2, "2026-11-01", state)
+
+
+def test_a_scheduled_song_is_marked_scheduled(tmp_path, quick):
+    roster_path = tmp_path / "roster.json"
+    roster_path.write_text(json.dumps(ROSTER), encoding="utf-8")
+
+    made = create_song(tmp_path / "work", "Female", "Hard rock", "x", "Burning Ember", FakeClaude(PLAN), "token",
+                       roster_path=roster_path, http_client=FakeReplicate(), scheduled=True)
+
+    assert json.loads((made.work_dir / AI_SONG_FILE).read_text(encoding="utf-8"))["scheduled"] is True
+    assert json.loads(roster_path.read_text(encoding="utf-8"))["artists"][0]["songs"][-1]["scheduled"] is True

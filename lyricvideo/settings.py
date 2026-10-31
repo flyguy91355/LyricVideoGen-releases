@@ -151,6 +151,8 @@ class Settings:
                                               # of already-uploaded, still-scheduled videos is fine.
     youtube_quota_retry_hours: int = 24      # once an upload hits YouTube's daily quota, how long to
                                               # wait before automatically retrying pending uploads
+    scheduled_songs_per_day: int = 0         # owner, 2026-10-31: the app makes this many new AI songs a day by itself
+                                              # (song_maker.plan_scheduled_song); 0 = off. Each waits in Flagged to be watched.
 
     def render_kwargs(self) -> dict:
         """The subset of these settings that draw_scene()/draw_chord_bar() (via

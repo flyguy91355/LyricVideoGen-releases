@@ -42,6 +42,7 @@ _INT_FIELDS = {
     "fps", "crf", "countdown_beats", "lyric_size", "chord_now_size", "chord_next_size", "panel_alpha",
     "chord_legend_size", "chord_diagram_panel_alpha", "youtube_uploads_per_day",
     "youtube_max_uploads_per_day", "youtube_quota_retry_hours", "support_overlay_size", "timing_pass_percent",
+    "scheduled_songs_per_day",
 }
 
 _YOUTUBE_CATEGORY_IDS = {"Howto & Style": "26", "Education": "27", "Music": "10"}
@@ -516,6 +517,10 @@ class SettingsPanel(ctk.CTkScrollableFrame):
         self._slider("chord_legend_size", "Chord chart size", 40, 150, 22, lambda v: f"{int(v)}%")
         self._slider("chord_diagram_panel_alpha", "Chord chart background opacity", 0, 255, 51,
                      lambda v: f"{int(v / 255 * 100)}%", parse=_parse_percent_of_255)
+
+        self._section("AI songs")
+        self._slider("scheduled_songs_per_day", "New AI songs per day", 0, 3, 3,
+                     lambda v: f"{int(v)}/day" if int(v) else "off")
 
         self._section("EASY CHORD (capo) videos")
         self._check("generate_easy_chord_versions",

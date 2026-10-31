@@ -70,7 +70,7 @@ def test_a_roster_band_starts_the_song_without_asking_musicbrainz(app, monkeypat
 
     app._on_create_song()
 
-    assert started == [("Female", "Acoustic", "Burning Ember", "a love gone wrong")]
+    assert started == [("Female", "Acoustic", "Burning Ember", "a love gone wrong", False)]
 
 
 def test_a_typed_name_a_real_act_has_is_used_only_if_the_owner_says_so(app, monkeypatch):
@@ -84,7 +84,7 @@ def test_a_typed_name_a_real_act_has_is_used_only_if_the_owner_says_so(app, monk
 
     monkeypatch.setattr(gui.messagebox, "askyesno", lambda title, text: True)
     app._on_create_song()
-    assert started == [("Female", "Acoustic", "Burning Embers", "a love gone wrong")]
+    assert started == [("Female", "Acoustic", "Burning Embers", "a love gone wrong", False)]
 
 
 def test_a_free_typed_name_starts_at_once_and_an_unchecked_one_asks(app, monkeypatch):
@@ -100,3 +100,44 @@ def test_a_free_typed_name_starts_at_once_and_an_unchecked_one_asks(app, monkeyp
     monkeypatch.setattr(song_maker, "musicbrainz_has_artist", lambda name: (_ for _ in ()).throw(RuntimeError("offline")))
     app._on_create_song()
     assert asked == ["Band name not checked"] and len(started) == 1
+
+
+def test_a_scheduled_song_starts_only_when_due_and_nothing_else_is_being_made(app, monkeypatch):
+    started = []
+    monkeypatch.setattr(LyricVideoGUI, "_start_create_song", lambda self, *a, **k: started.append(k))
+    monkeypatch.setattr(song_maker, "scheduled_song_due", lambda per_day: per_day > 0)
+
+    app.settings.scheduled_songs_per_day = 0
+    assert not app._maybe_start_scheduled_song()
+    app.settings.scheduled_songs_per_day = 1
+    app._running = True
+    assert not app._maybe_start_scheduled_song()
+    app._running = False
+    assert app._maybe_start_scheduled_song() and started == [{"scheduled": True}]
+
+    monkeypatch.setattr(song_maker, "scheduled_song_due", lambda per_day: False)
+    assert not app._maybe_start_scheduled_song()
+
+
+def test_a_scheduled_song_picks_itself_and_is_counted_made_or_failed(app, monkeypatch, tmp_path):
+    counted, ran = [], []
+    monkeypatch.setattr(gui, "anthropic", type("A", (), {"Anthropic": staticmethod(lambda: "claude")}))
+    monkeypatch.setattr(song_maker, "load_roster", lambda: {"artists": []})
+    monkeypatch.setattr(song_maker, "plan_scheduled_song", lambda client, roster: ("Male", "Folk", NEW_BAND, "a river"))
+    monkeypatch.setattr(song_maker, "record_scheduled_song", lambda made: counted.append(made))
+    monkeypatch.setattr(LyricVideoGUI, "_run_worker", lambda self, *a: ran.append(a))
+    made = song_maker.CreatedSong("River", "New Band", tmp_path / "river", tmp_path / "river" / "River.mp3")
+    calls = []
+    monkeypatch.setattr(song_maker, "create_song", lambda *a, **k: calls.append((a[1:5], k)) or made)
+
+    app._run_create_song("", "", "", "", scheduled=True)
+
+    assert calls == [(("Male", "Folk", "a river", NEW_BAND), {"scheduled": True})]
+    assert counted == [True] and ran == [(made.audio_path, made.work_dir, "River")]
+
+    monkeypatch.setattr(song_maker, "create_song", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("MiniMax")))
+    app._run_create_song("", "", "", "", scheduled=True)
+    kinds = []
+    while not app._queue.empty():
+        kinds.append(app._queue.get_nowait()[0])
+    assert counted == [True, False] and "error" in kinds

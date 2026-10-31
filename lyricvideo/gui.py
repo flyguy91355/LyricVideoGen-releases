@@ -199,6 +199,14 @@ def _state_file_exists(work_dir: Path) -> bool:
     return (Path(work_dir) / STATE_FILENAME).exists()
 
 
+def _count_scheduled_song(record, made: bool) -> None:
+    """Counts a scheduled song for today; a failed write only warns (it must never leave a run stuck as busy)."""
+    try:
+        record(made=made)
+    except Exception as e:
+        print(f"WARNING: could not count today's scheduled song: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def _upload_within_todays_cap(youtube_client, anthropic_client, work_dir: Path, settings: Settings,
                               only_if_not_uploaded: bool) -> str:
     """One upload, counted against today's cap as a single step. "uploaded", "already" (another run uploaded it first --
@@ -1495,6 +1503,7 @@ class LyricVideoGUI:
         self._check_api_keys()
         self._start_update_check()
         self._refresh_youtube_status()
+        self.root.after(5 * 60 * 1000, self._schedule_song_check)     # Settings "New AI songs per day"
 
     def _build_widgets(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -1879,6 +1888,27 @@ class LyricVideoGUI:
         self._checking_band = False
         self._refresh_band_choices()
 
+    def _schedule_song_check(self) -> None:
+        """Every 20 minutes (first 5 minutes after launch): start a scheduled AI song when one is due."""
+        try:
+            self._maybe_start_scheduled_song()
+        except Exception as e:
+            print(f"WARNING: scheduled song check failed: {type(e).__name__}: {e}", file=sys.stderr)
+        self.root.after(20 * 60 * 1000, self._schedule_song_check)
+
+    def _maybe_start_scheduled_song(self) -> bool:
+        """Settings.scheduled_songs_per_day: one more song today, only while nothing else is being made (a Generate,
+        Redo, Batch or Create Song), no update is applying and the window is not closing. True when one was started."""
+        from .song_maker import scheduled_song_due
+
+        per_day = getattr(self.settings, "scheduled_songs_per_day", 0)
+        if per_day <= 0 or self._running or self._update_apply_in_progress or self._closing:
+            return False
+        if getattr(self, "_checking_band", False) or not scheduled_song_due(per_day):
+            return False
+        self._start_create_song("", "", "", "", scheduled=True)
+        return True
+
     def _refresh_band_choices(self) -> None:
         """The Band menu for the chosen voice and style: the fitting roster bands (the first one picked), a new band, then
         the rest. The owner can also type a new band's name into it."""
@@ -1944,7 +1974,7 @@ class LyricVideoGUI:
             return
         self._start_create_song(voice, style, band, about)
 
-    def _start_create_song(self, voice: str, style: str, band: str, about: str) -> None:
+    def _start_create_song(self, voice: str, style: str, band: str, about: str, scheduled: bool = False) -> None:
         if self._running:
             messagebox.showinfo("Busy", "A video is being made right now. Create the song when it has finished.")
             return
@@ -1952,37 +1982,47 @@ class LyricVideoGUI:
         self.generate_button.configure(state="disabled")
         self.redo_button.configure(state="disabled")
         self.batch_button.configure(state="disabled")
-        self.status_var.set("Writing the song...")
+        self.status_var.set("Making a scheduled song..." if scheduled else "Writing the song...")
         self.progress_bar.set(0.0)
         self._clear_log()
         thread = threading.Thread(
             target=self._run_create_song,
-            args=(voice, style, band, about),
+            args=(voice, style, band, about, scheduled),
             daemon=True,
         )
         thread.start()
         self.root.after(100, self._poll_queue)
 
-    def _run_create_song(self, voice: str, style: str, band: str, about: str) -> None:
-        """Makes the song (song_maker.create_song), then runs it through the pipeline exactly like Generate."""
-        from .song_maker import create_song
+    def _run_create_song(self, voice: str, style: str, band: str, about: str, scheduled: bool = False) -> None:
+        """Makes the song (song_maker.create_song), then runs it through the pipeline exactly like Generate. A scheduled
+        song picks its own voice, style, band and About (plan_scheduled_song) and is counted for today."""
+        from .song_maker import create_song, load_roster, plan_scheduled_song, record_scheduled_song
 
         writer = _QueueWriter(self._queue)
         old_stdout, old_stderr = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = writer, writer
         try:
+            client = anthropic.Anthropic()
+            if scheduled:
+                voice, style, band, about = plan_scheduled_song(client, load_roster())
+                print(f"Scheduled song (Settings: New AI songs per day): {voice} {style}, band: {band}.\nAbout: {about}")
             created = create_song(
-                PROJECT_ROOT / "work", voice, style, about, band, anthropic.Anthropic(),
-                os.environ.get("REPLICATE_API_TOKEN", ""),
+                PROJECT_ROOT / "work", voice, style, about, band, client, os.environ.get("REPLICATE_API_TOKEN", ""),
+                scheduled=scheduled,
             )
             print("Making the video. It then waits in Flagged for Lyrics Review: watch it, then Mark Verified or Upload "
                   "Anyway.")
         except Exception as e:
+            if scheduled:
+                _count_scheduled_song(record_scheduled_song, made=False)
             self._queue.put(("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
             return
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
-        self.root.after(0, self._refresh_band_choices)      # a new band is on the roster now
+        if scheduled:
+            _count_scheduled_song(record_scheduled_song, made=True)
+        if hasattr(self, "create_band_menu"):                # the section was opened: a new band is on the roster now
+            self.root.after(0, self._refresh_band_choices)
         self._last_work_dir = created.work_dir
         self._run_worker(created.audio_path, created.work_dir, created.title)
 
