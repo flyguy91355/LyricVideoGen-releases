@@ -1859,7 +1859,8 @@ class LyricVideoGUI:
         ctk.CTkOptionMenu(row, values=list(STYLES), variable=self.create_style_var, width=150,
                           command=lambda _v: self._refresh_band_choices()).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(row, text="Band:").pack(side="left", padx=(0, 4))
-        self.create_band_menu = ctk.CTkOptionMenu(row, values=[""], variable=self.create_band_var, width=220)
+        # A combo box: pick a roster band, or type a new band's name.
+        self.create_band_menu = ctk.CTkComboBox(row, values=[""], variable=self.create_band_var, width=220)
         self.create_band_menu.pack(side="left")
         about_row = ctk.CTkFrame(content, fg_color="transparent")
         about_row.pack(fill="x", padx=8, pady=4)
@@ -1871,15 +1872,16 @@ class LyricVideoGUI:
         button_row.pack(fill="x", padx=8, pady=(4, 8))
         ctk.CTkButton(button_row, text="Create Song", command=self._on_create_song, width=110).pack(side="left")
         ctk.CTkLabel(
-            button_row, text="About $0.35. Claude writes it, MiniMax sings it, then the video is made.\n"
-            "It waits in Flagged for Lyrics Review until you watch it.",
+            button_row, text="About $0.35. Type in Band to name a new band. Claude writes the song, MiniMax\n"
+            "sings it, then the video is made. It waits in Flagged for Lyrics Review until you watch it.",
             text_color="gray60", justify="left", anchor="w",
         ).pack(side="left", padx=10)
+        self._checking_band = False
         self._refresh_band_choices()
 
     def _refresh_band_choices(self) -> None:
         """The Band menu for the chosen voice and style: the fitting roster bands (the first one picked), a new band, then
-        the rest."""
+        the rest. The owner can also type a new band's name into it."""
         from .song_maker import band_choices, load_roster
 
         try:
@@ -1899,6 +1901,53 @@ class LyricVideoGUI:
         if not about:
             messagebox.showerror("Missing input", "Say in one sentence what the song is about.")
             return
+        band = self.create_band_var.get().strip()
+        if not band:
+            messagebox.showerror("Missing input", "Pick a band or type a band name.")
+            return
+        if self._checking_band:
+            return
+        from .song_maker import NEW_BAND, find_band, load_roster, musicbrainz_has_artist
+
+        try:
+            known = band == NEW_BAND or find_band(load_roster(), band) is not None
+        except (OSError, ValueError):
+            known = False
+        voice, style = self.create_voice_var.get(), self.create_style_var.get()
+        if known:
+            self._start_create_song(voice, style, band, about)
+            return
+        # A name the owner typed: MusicBrainz is asked off the Tk thread (it can take a while), then _after_band_check.
+        self._checking_band = True
+        self.status_var.set(f'Checking the band name "{band}"...')
+
+        def check() -> None:
+            try:
+                taken, problem = musicbrainz_has_artist(band), ""
+            except Exception as e:
+                taken, problem = False, f"{type(e).__name__}: {e}"
+            self.root.after(0, lambda: self._after_band_check(voice, style, band, about, taken, problem))
+
+        threading.Thread(target=check, daemon=True).start()
+
+    def _after_band_check(self, voice: str, style: str, band: str, about: str, taken: bool, problem: str) -> None:
+        """A typed band name MusicBrainz knows (or could not be asked about) is used only if the owner says so."""
+        self._checking_band = False
+        self.status_var.set("")
+        if problem and not messagebox.askyesno(
+            "Band name not checked", f'MusicBrainz could not be asked about "{band}" ({problem}).\n\nUse this name anyway?',
+        ):
+            return
+        if taken and not messagebox.askyesno(
+            "Band name taken", f'MusicBrainz lists a real act named "{band}".\n\nUse this name anyway?',
+        ):
+            return
+        self._start_create_song(voice, style, band, about)
+
+    def _start_create_song(self, voice: str, style: str, band: str, about: str) -> None:
+        if self._running:
+            messagebox.showinfo("Busy", "A video is being made right now. Create the song when it has finished.")
+            return
         self._running = True
         self.generate_button.configure(state="disabled")
         self.redo_button.configure(state="disabled")
@@ -1908,7 +1957,7 @@ class LyricVideoGUI:
         self._clear_log()
         thread = threading.Thread(
             target=self._run_create_song,
-            args=(self.create_voice_var.get(), self.create_style_var.get(), self.create_band_var.get(), about),
+            args=(voice, style, band, about),
             daemon=True,
         )
         thread.start()

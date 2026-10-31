@@ -230,11 +230,11 @@ as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's
 
 ## Create a Song
 
-`song_maker.py` (GUI, 10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/tagged lyrics -> MiniMax
-Music 2.6 (Replicate; ~$0.35/song all in) -> `work/<slug>/` (tagged mp3, sidecar `.txt`, `AI_GENERATED.txt`,
-`ai_song.json`) -> pipeline. Bands from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), else Claude
-names one MusicBrainz lacks. `ai_song.json` = Flagged until Mark Verified/Upload Anyway (`waits_to_be_watched`); key
-settles if the requested key matches the chords (no Claude/search).
+`song_maker.py` (10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/lyrics -> MiniMax
+Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3, sidecar `.txt`, `AI_GENERATED.txt`,
+`ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
+typed name (asks if on MusicBrainz) or Claude's. `ai_song.json` = Flagged until Mark Verified/Upload Anyway
+(`waits_to_be_watched`); key settles if the requested key matches the chords (no Claude/search).
 
 ## Redo an Existing Song
 

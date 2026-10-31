@@ -159,3 +159,29 @@ def test_a_song_minimax_could_not_make_leaves_no_folder_and_no_roster_change(tmp
 def test_a_song_needs_a_sentence_about_it(tmp_path):
     with pytest.raises(ValueError, match="what the song is about"):
         create_song(tmp_path, "Female", "Hard rock", "  ", "Burning Ember", None, "token", roster_path=tmp_path / "r.json")
+
+
+def test_a_band_name_the_owner_typed_joins_the_roster_without_asking_claude_for_a_name(tmp_path, quick):
+    roster_path = tmp_path / "roster.json"
+    roster_path.write_text(json.dumps(ROSTER), encoding="utf-8")
+    claude = FakeClaude(PLAN)                                       # only the song is asked for
+
+    made = create_song(tmp_path / "work", "Male", "Country", "a dusty road", "  Gravel Saints ", claude, "token",
+                       roster_path=roster_path, is_taken=lambda n: pytest.fail("the GUI already asked"),
+                       http_client=FakeReplicate())
+
+    band = json.loads(roster_path.read_text(encoding="utf-8"))["artists"][-1]
+    assert made.band == "Gravel Saints" and len(claude.prompts) == 1
+    assert (band["name"], band["style"], band["voice"], band["vocal"]) == ("Gravel Saints", "Country", "male", "Male lead vocal.")
+    assert band["songs"][0]["title"] == "Wrong Turn"
+
+
+def test_a_typed_name_of_a_roster_band_in_other_letters_is_that_band(tmp_path, quick):
+    roster_path = tmp_path / "roster.json"
+    roster_path.write_text(json.dumps(ROSTER), encoding="utf-8")
+
+    made = create_song(tmp_path / "work", "Female", "Hard rock", "x", "burning ember", FakeClaude(PLAN), "token",
+                       roster_path=roster_path, http_client=FakeReplicate())
+
+    artists = json.loads(roster_path.read_text(encoding="utf-8"))["artists"]
+    assert made.band == "Burning Ember" and len(artists) == len(ROSTER["artists"])

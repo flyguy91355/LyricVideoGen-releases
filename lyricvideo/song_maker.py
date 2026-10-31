@@ -5,8 +5,10 @@ Claude writes a title, key, tempo, chords and section-tagged lyrics from the own
 Replicate (about $0.15-0.20 a song) sings them in the band's sound. The song gets its own work folder holding the audio
 (tagged with title and band), its plain lyrics beside it (fetch_lyrics' sidecar), AI_GENERATED.txt and ai_song.json; the
 GUI then runs the normal pipeline on it. Every act is a BAND from the roster (~/PlayAlongVideoProductionArtists/
-roster.json): MiniMax cannot repeat a voice, so a band name makes a different singer sound like another member. A voice
-and style with no band gets a new name from Claude that MusicBrainz does not know (owner: "Auto-pick, can change")."""
+roster.json): MiniMax cannot repeat a voice, so a band name makes a different singer sound like another member. The band is
+the roster's pick for the voice and style (owner: "Auto-pick, can change"), a new name the owner types ("I want to be able
+to pick the band name as well"; the GUI asks first when MusicBrainz knows it), or a new name from Claude that MusicBrainz
+does not know."""
 
 from __future__ import annotations
 
@@ -102,8 +104,16 @@ def band_choices(roster: dict, voice: str, style: str) -> list[str]:
     return fitting + [NEW_BAND] + sorted(a["name"] for a in roster["artists"] if a["name"] not in fitting)
 
 
-def _band(roster: dict, name: str) -> dict | None:
+def find_band(roster: dict, name: str) -> dict | None:
     return next((a for a in roster["artists"] if a["name"].lower() == name.lower()), None)
+
+
+def named_band(name: str, voice: str, style: str) -> dict:
+    """A new roster entry for a name the owner typed: the style's sound and the chosen voice."""
+    return {
+        "name": name, "genre": f"{style} ({voice.lower()} lead)", "style": style, "voice": voice.lower(), "status": "active",
+        "kind": "band", "sound": STYLES.get(style, style), "vocal": f"{voice} lead vocal.", "songs": [],
+    }
 
 
 def musicbrainz_has_artist(name: str, http_get=httpx.get, sleep=time.sleep) -> bool:
@@ -165,7 +175,7 @@ def name_new_band(
             continue
         for name in names:
             name = str(name).strip().strip('"')
-            if name and _band(roster, name) is None and not is_taken(name):
+            if name and find_band(roster, name) is None and not is_taken(name):
                 return {
                     "name": name, "genre": f"{style} ({voice.lower()} lead)", "style": style, "voice": voice.lower(),
                     "status": "active", "kind": "band",
@@ -299,10 +309,16 @@ def create_song(
         raise ValueError("Say in a sentence what the song is about.")
     if not replicate_token:
         raise RuntimeError("REPLICATE_API_TOKEN is not set -- add it to the .env file at the repo root.")
+    band_name = band_name.strip()
+    if not band_name:
+        raise ValueError("Pick a band or type a band name.")
     roster = load_roster(roster_path)
-    band = None if band_name == NEW_BAND else _band(roster, band_name)
+    band = None if band_name == NEW_BAND else find_band(roster, band_name)
     if band is None:
-        band = name_new_band(anthropic_client, voice, style, roster, is_taken=is_taken)
+        if band_name == NEW_BAND:
+            band = name_new_band(anthropic_client, voice, style, roster, is_taken=is_taken)
+        else:
+            band = named_band(band_name, voice, style)
         roster["artists"].append(band)
         print(f"New band: {band['name']} ({band['genre']}).")
     print(f"Writing the song for {band['name']}...")
