@@ -347,30 +347,55 @@ def _lrclib_search(params: dict, waits: tuple[float, ...] = LRCLIB_RETRY_WAITS) 
     return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
 
+def majority_words(items: list[dict], file_duration: float) -> list[dict]:
+    """The records of this file's length whose words most of them agree on, plus every record of another length (the vote
+    reads those to spot timing copied between editions). Owner, 2026-11-01: songs vetted at 90%+ came back held. lrclib
+    keeps many uploads of a song and choose_lyrics_candidate weighs only their timing: when all agreed where the singing
+    starts, its small bonus for more lines chose Hard to Handle's one 41-line upload over the 37 lines 148 of 150 records
+    share -- 71% of lines in sync against 91%. Words are compared line by line, case and punctuation aside; versions tied
+    for most all stay in the vote."""
+    groups: dict[str, list[dict]] = {}
+    others: list[dict] = []
+    for item in items:
+        hit = _pick_lrclib(item) if isinstance(item, dict) else None
+        key = ""
+        if hit and hit[0].strip() and (file_duration <= 0 or abs(hit[2] - file_duration) <= DURATION_TOLERANCE):
+            key = "\n".join(normalize(line) for line in _hit_to_lines(hit, file_duration))
+        if key:
+            groups.setdefault(key, []).append(item)
+        else:
+            others.append(item)
+    if not groups:
+        return items
+    most = max(len(group) for group in groups.values())
+    return [item for group in groups.values() if len(group) == most for item in group] + others
+
+
 def _fetch_lrclib_hit(audio_path: Path, title: str, artist: str, duration: float,
                       alt_titles: list[str]) -> Hit | None:
-    """lrclib's records for the song -- from lrclib.net, or from our own copy of its database (lrclib_local.py) when
-    lrclib.net fails -- chosen among by edition consensus. lrclib.net comes first while it answers: the copy returns many
-    more records per song, so the vote can pick another transcription (21 of 80 finished songs, checked 10-31; the same
-    words, "walkin'" for "walking"), and the owner's songs were vetted on lrclib.net's picks. Raises LyricsSourceDown
-    when lrclib.net failed, found no record and there is no copy: "not on lrclib" cannot be told from "lrclib is down"."""
+    """lrclib's records for the song -- from our own copy of its whole database (lrclib_local.py) first, lrclib.net only
+    for a song the copy lacks (added after its date) or when there is no copy (owner, 2026-11-01: "it should look at the
+    local database before going out to the internet") -- narrowed to the words most of them agree on (majority_words),
+    then chosen among by edition consensus. Raises LyricsSourceDown when lrclib.net failed, found no record and there is
+    no copy: "not on lrclib" cannot be told from "lrclib is down"."""
     titles = [t for t in [title, *alt_titles] if t.strip()]
     if not titles:
         return None
 
     db = local_db()
-    # With a copy to fall back on, a busy lrclib.net is not waited for.
-    candidates, failures = _lrclib_online_records(titles, artist, duration, waits=() if db is not None else LRCLIB_RETRY_WAITS)
-    if failures and db is not None:
+    candidates: dict[object, dict] = {}
+    failures: list[Exception] = []
+    if db is not None:
         try:
             records = find_records(db, [v for t in titles for v in title_variants(t)], artist, duration)
         except sqlite3.Error as exc:
             log.warning("Could not read the local lrclib copy %s (%s).", db, exc)
             db = None
         else:
-            if records:      # lrclib.net's answer is incomplete; the copy has every record up to its date
-                log.info("lrclib.net is not answering; %d record(s) from the local copy", len(records))
-                candidates, failures = {r["id"]: r for r in records}, []
+            candidates = {r["id"]: r for r in records}
+            log.info("lrclib: %d record(s) from the local copy", len(records))
+    if not candidates:
+        candidates, failures = _lrclib_online_records(titles, artist, duration)
 
     if artist:
         by_artist = {k: v for k, v in candidates.items()
@@ -391,7 +416,7 @@ def _fetch_lrclib_hit(audio_path: Path, title: str, artist: str, duration: float
     scorer: OnsetScorer | None = None
     if audio_path.is_file():
         scorer = lambda times: vocal_onset_rise(audio_path, times)  # noqa: E731
-    chosen, note = choose_lyrics_candidate(list(candidates.values()), duration, onset_scorer=scorer)
+    chosen, note = choose_lyrics_candidate(majority_words(list(candidates.values()), duration), duration, onset_scorer=scorer)
     if chosen is not None:
         log.info("lrclib: record #%s chosen (%s)", chosen.get("id", "?"), note)
         return _pick_lrclib(chosen)

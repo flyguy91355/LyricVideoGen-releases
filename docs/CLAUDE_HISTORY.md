@@ -5242,3 +5242,12 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   were 11th, 13th and 26th in line while 12:30 stood empty; a Batch's own uploads take the cap after midnight and the
   20-minute tick never runs during one. Now `_waiting_ai_songs` upload first: the tick sorts them ahead, and a band
   song's `_maybe_upload_to_youtube` (given the work root) uploads them before itself. They take only their own lane.
+- Owner: songs pre-screened at 90%+ came back held (11 of the 301-400 Batch, 71-89%). Hard to Handle 91.2% -> 71.1%: of
+  150 lrclib records, 148 share 37 lines; the edition vote (timing only) saw every record agree on the first line and its
+  +0.02/line bonus chose the one 41-line upload. Same vocals: 41 lines 77.5%, the 37 shared lines 91.2% (= the pre-screen).
+  `majority_words` now keeps the words most records share before the vote; the local copy is asked first (owner: "it
+  should look at the local database before going out to the internet"); 5 of 16 held songs checked change words.
+  Also measured: Demucs's default random shift gives different vocals per run (same file: 82.9% vs 91.2%); 5 averaged
+  shifts did not help (70.3%, 5x slower) -- the swing is in the grader: the timing gate has read the HINTED transcript
+  since 9-27 (it overwrites transcript.json), and the same placement scored 70-91% across three hinted listenings but
+  94.6-97.3% across three plain ones.

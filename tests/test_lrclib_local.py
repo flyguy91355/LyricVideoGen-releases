@@ -69,21 +69,37 @@ def test_records_are_found_by_title_start_and_either_way_round_artist(copy):
     assert [(r["artistName"], r["duration"], r["syncedLyrics"]) for r in found] == [("Eminem", 199.0, "[00:01.00]Meet Eddie")]
 
 
-def test_while_lrclib_net_answers_its_records_are_used_not_the_copy(copy, tmp_path, monkeypatch):
-    """The copy returns many more records per song, so its vote can pick another transcription: the owner's songs were
-    vetted on lrclib.net's picks."""
-    _copy(copy, [("Nebraska", "Bruce Springsteen", 272.0, "[00:01.00]The copy's transcription")])
+def _website(monkeypatch, records):
+    """lrclib.net answering every request with `records`; the requests made are recorded."""
+    asked = []
 
     class _Answer:
         status_code = 200
 
         def json(self):
-            return [{"id": 9, "trackName": "Nebraska", "artistName": "Bruce Springsteen", "duration": 272.0,
-                     "syncedLyrics": NEBRASKA}]
+            return records
 
-    monkeypatch.setattr("lyricvideo.fetch_lyrics.requests.get", lambda *a, **k: _Answer())
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.requests.get", lambda *a, **k: asked.append(k.get("params")) or _Answer())
+    return asked
+
+
+def test_the_copy_answers_first_and_lrclib_net_is_not_asked(copy, tmp_path, monkeypatch):
+    """Owner, 2026-11-01: "it should look at the local database before going out to the internet"."""
+    _copy(copy, [("Nebraska", "Bruce Springsteen", 272.0, NEBRASKA)])
+    asked = _website(monkeypatch, [{"id": 9, "trackName": "Nebraska", "artistName": "Bruce Springsteen", "duration": 272.0,
+                                    "syncedLyrics": "[00:01.00]The website's transcription"}])
 
     assert _fetch_lrclib_hit(tmp_path / "none.mp3", "Nebraska", "Bruce Springsteen", 272.0, []) == (NEBRASKA, True, 272.0)
+    assert asked == []
+
+
+def test_a_song_the_copy_lacks_is_asked_of_lrclib_net(copy, tmp_path, monkeypatch):
+    _copy(copy, [("Nebraska", "Bruce Springsteen", 272.0, NEBRASKA)])
+    newer = "[00:01.00]A song added after the copy was made"
+    _website(monkeypatch, [{"id": 9, "trackName": "Brand New Song", "artistName": "Bruce Springsteen", "duration": 200.0,
+                            "syncedLyrics": newer}])
+
+    assert _fetch_lrclib_hit(tmp_path / "none.mp3", "Brand New Song", "Bruce Springsteen", 200.0, []) == (newer, True, 200.0)
 
 
 def test_while_lrclib_net_is_down_the_copy_answers_without_waiting_on_retries(copy, tmp_path, monkeypatch):

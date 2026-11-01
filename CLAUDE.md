@@ -72,10 +72,10 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    past align keeps its audio. Redo reads the copy, so Generate from a replaced file.
 3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`) --
    `fetch_lyric_lines_verified()` tries each source (sidecar `.lrc`/`.txt` beside the audio copy; lrclib
-   edition-consensus vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
-   `lyric_lines.json`/`Song`. lrclib = lrclib.net; a request failing -> our copy of its DB dump (`lrclib_local.py`,
-   `~/PlayAlongVideoProductionLyrics/`; more records/song: another transcription can win). Failed (5xx/429/no
-   connection; retried if no copy), no copy, no record -> `LyricsSourceDown`: no other site (10-31: NetEase's were
+   edition vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
+   `lyric_lines.json`/`Song`. lrclib = our copy of its DB dump first (`lrclib_local.py`,
+   `~/PlayAlongVideoProductionLyrics/`), else lrclib.net; `majority_words` keeps the words most records
+   share (11-01) before the vote. lrclib.net failing (5xx/429/no connection, retried), no copy -> `LyricsSourceDown`: no other site (10-31: NetEase's were
    wrong songs) but a sidecar; Batch stops. Pass = matching what faster-whisper HEARS in the vocal stem (medium,
    VAD off): >=70% in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing
    vocals ignored). Section markers aren't lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",

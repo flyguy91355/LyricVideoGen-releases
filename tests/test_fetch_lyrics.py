@@ -841,3 +841,42 @@ def test_a_song_with_its_own_lyrics_file_goes_on_while_lrclib_is_down(tmp_path, 
                                                         audio_check=_audio_check_for(_SUNG))
 
     assert (lines, source) == (_WRONG_EDITION, "sidecar") and concern
+
+
+# --- the words most records agree on (owner, 2026-11-01) --------------------------------------------------------------
+
+def _synced(record_id, rows, duration=140.0):
+    text = "\n".join(f"[00:{10 + 3 * i:02d}.00]{row}" for i, row in enumerate(rows))
+    return {"id": record_id, "trackName": "Hard to Handle", "artistName": "Otis Redding", "duration": duration,
+            "syncedLyrics": text}
+
+
+def test_the_words_most_records_share_win_over_a_one_off_with_more_lines():
+    """Hard to Handle: every record agreed where the singing starts, and the vote's small bonus for more lines picked the
+    one 41-line upload over the 37 lines 148 of 150 records share (71% of lines in sync against 91%)."""
+    from lyricvideo.fetch_lyrics import choose_lyrics_candidate, majority_words
+
+    shared = ["Boys and things will come by the dozen", "That ain't nothing but drug store loving"]
+    records = [_synced(i, shared) for i in range(1, 4)] + [_synced(9, shared + ["Hey, hey", "Oh, oh"])]
+
+    assert choose_lyrics_candidate(records, 140.0)[0]["id"] == 9          # the vote alone takes the one-off
+    chosen, _note = choose_lyrics_candidate(majority_words(records, 140.0), 140.0)
+    assert chosen["id"] in {1, 2, 3}
+
+
+def test_case_and_punctuation_do_not_split_a_version():
+    from lyricvideo.fetch_lyrics import majority_words
+
+    records = [_synced(1, ["Pretty little thing, let me light your candle"]),
+               _synced(2, ["pretty little thing let me light your candle"]),
+               _synced(3, ["Pretty little thing let me light your candles"])]
+
+    assert sorted(r["id"] for r in majority_words(records, 140.0)) == [1, 2]
+
+
+def test_tied_versions_and_records_of_another_length_all_stay_in_the_vote():
+    from lyricvideo.fetch_lyrics import majority_words
+
+    records = [_synced(1, ["One version"]), _synced(2, ["Another version"]), _synced(3, ["A live take"], duration=300.0)]
+
+    assert sorted(r["id"] for r in majority_words(records, 140.0)) == [1, 2, 3]

@@ -1,8 +1,9 @@
 """Our own copy of lrclib.net's lyrics database (owner, 2026-10-31: lrclib's outage sent a whole Batch to NetEase's wrong
 songs -- "or we make our own"). lrclib publishes its whole database as one SQLite file (https://lrclib.net/db-dumps; 49 GB
 gzipped, 268 GB unpacked, on 10-30). Kept at ~/PlayAlongVideoProductionLyrics/lrclib.sqlite3 (a link to a big drive is
-fine), it answers whenever lrclib.net does not (fetch_lyrics._fetch_lrclib_hit): an outage no longer stops a Batch. No
-file there = lrclib.net only. A lookup reads ~300 rows, about 5 s on the owner's media drive.
+fine), it is asked first (fetch_lyrics._fetch_lrclib_hit; owner, 2026-11-01), lrclib.net only for a song it lacks: an
+outage no longer stops a Batch. No file there = lrclib.net only. A lookup reads ~300 rows, about 5 s on the owner's media
+drive.
 
 Records come back shaped like lrclib's own API answers, so the edition vote that picks among them is the same code."""
 
