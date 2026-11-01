@@ -5223,5 +5223,8 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   record", so every song went on to NetEase: Nebraska got Hungry Heart's words, Independence Day and Racing in the Street both got The
   River's (0-4% timing); others got a different edition and missed by a few points. The audio check held them; nothing bad uploaded. Now
   retried, then `LyricsSourceDown` stops the song (a sidecar song goes on) and the Batch. lrclib also publishes full SQLite dumps
-  (db-dumps.lrclib.net, 49 GB gz on 10-30) -- offered as a local copy so an outage cannot stop a Batch.
+  (db-dumps.lrclib.net, 49 GB gz on 10-30); owner: "yes download it" -> 268 GB unpacked on the media drive, linked at
+  ~/PlayAlongVideoProductionLyrics/lrclib.sqlite3. Checked on 80 finished lrclib songs: 52 identical lines, 6 90%+, 21 another
+  transcription of the same song (its 150 records a song vs lrclib.net's few change the vote), 1 not found ("Angie Rolling
+  Stones" title). So it is the FALLBACK, used when lrclib.net fails, not first. ~5 s a lookup.
 - Owner: AI songs "hard to find with all the other held for review songs" -> their own list, My AI Songs to Review (v2.0.106).

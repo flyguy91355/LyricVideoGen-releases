@@ -21,6 +21,7 @@ import sqlite3
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -313,10 +314,10 @@ def artist_matches(record_artist: str, wanted: str) -> bool:
     return a == b or f" {a} " in f" {b} " or f" {b} " in f" {a} "
 
 
-def _lrclib_request(endpoint: str, params: dict) -> requests.Response:
+def _lrclib_request(endpoint: str, params: dict, waits: tuple[float, ...] = LRCLIB_RETRY_WAITS) -> requests.Response:
     """GET one lrclib endpoint, retrying a busy server (lrclib drops requests under load, its owner 2026-10-30) or a
-    dropped connection. Still failing after the retries raises requests.RequestException; a plain "not found" returns."""
-    waits = list(LRCLIB_RETRY_WAITS)
+    dropped connection after each of `waits`. Still failing raises requests.RequestException; "not found" returns."""
+    waits = list(waits)
     while True:
         try:
             r = requests.get(f"{LRCLIB_BASE}/{endpoint}", params=params, headers=HTTP_HEADERS, timeout=15)
@@ -330,16 +331,16 @@ def _lrclib_request(endpoint: str, params: dict) -> requests.Response:
         time.sleep(waits.pop(0))
 
 
-def _lrclib_get(params: dict) -> dict | None:
-    r = _lrclib_request("get", params)
+def _lrclib_get(params: dict, waits: tuple[float, ...] = LRCLIB_RETRY_WAITS) -> dict | None:
+    r = _lrclib_request("get", params, waits)
     if r.status_code != 200:
         return None
     data = r.json()
     return data if isinstance(data, dict) else None
 
 
-def _lrclib_search(params: dict) -> list[dict]:
-    r = _lrclib_request("search", params)
+def _lrclib_search(params: dict, waits: tuple[float, ...] = LRCLIB_RETRY_WAITS) -> list[dict]:
+    r = _lrclib_request("search", params, waits)
     if r.status_code != 200:
         return []
     data = r.json()
@@ -348,28 +349,28 @@ def _lrclib_search(params: dict) -> list[dict]:
 
 def _fetch_lrclib_hit(audio_path: Path, title: str, artist: str, duration: float,
                       alt_titles: list[str]) -> Hit | None:
-    """lrclib's records for the song -- from our own copy of its database (lrclib_local.py) when that has any, else from
-    lrclib.net -- chosen among by edition consensus. Raises LyricsSourceDown when lrclib.net failed and found no record
-    and there is no copy: "not on lrclib" cannot be told from "lrclib is down"."""
+    """lrclib's records for the song -- from lrclib.net, or from our own copy of its database (lrclib_local.py) when
+    lrclib.net fails -- chosen among by edition consensus. lrclib.net comes first while it answers: the copy returns many
+    more records per song, so the vote can pick another transcription (21 of 80 finished songs, checked 10-31; the same
+    words, "walkin'" for "walking"), and the owner's songs were vetted on lrclib.net's picks. Raises LyricsSourceDown
+    when lrclib.net failed, found no record and there is no copy: "not on lrclib" cannot be told from "lrclib is down"."""
     titles = [t for t in [title, *alt_titles] if t.strip()]
     if not titles:
         return None
 
-    candidates: dict[object, dict] = {}
-    failures: list[Exception] = []
     db = local_db()
-    if db is not None:
+    # With a copy to fall back on, a busy lrclib.net is not waited for.
+    candidates, failures = _lrclib_online_records(titles, artist, duration, waits=() if db is not None else LRCLIB_RETRY_WAITS)
+    if failures and db is not None:
         try:
-            records = find_records(db, [v for t in titles for v in title_variants(t)], artist)
+            records = find_records(db, [v for t in titles for v in title_variants(t)], artist, duration)
         except sqlite3.Error as exc:
-            log.warning("Could not read the local lrclib copy %s (%s); asking lrclib.net.", db, exc)
+            log.warning("Could not read the local lrclib copy %s (%s).", db, exc)
             db = None
         else:
-            candidates = {r["id"]: r for r in records}
-            if candidates:
-                log.info("lrclib: %d record(s) from the local copy", len(candidates))
-    if not candidates:
-        candidates, failures = _lrclib_online_records(titles, artist, duration)
+            if records:      # lrclib.net's answer is incomplete; the copy has every record up to its date
+                log.info("lrclib.net is not answering; %d record(s) from the local copy", len(records))
+                candidates, failures = {r["id"]: r for r in records}, []
 
     if artist:
         by_artist = {k: v for k, v in candidates.items()
@@ -401,12 +402,14 @@ def _fetch_lrclib_hit(audio_path: Path, title: str, artist: str, duration: float
     return None
 
 
-def _lrclib_online_records(titles: list[str], artist: str, duration: float) -> tuple[dict[object, dict], list[Exception]]:
+def _lrclib_online_records(titles: list[str], artist: str, duration: float,
+                           waits: tuple[float, ...] = LRCLIB_RETRY_WAITS) -> tuple[dict[object, dict], list[Exception]]:
     """Every record lrclib.net's get and search find for the song, and the requests that failed."""
+    get, search = partial(_lrclib_get, waits=waits), partial(_lrclib_search, waits=waits)
     jobs: list[tuple[Callable[[dict], object], dict]] = []
     if artist and duration > 0:
         for t in titles:
-            jobs.append((_lrclib_get, {"artist_name": artist, "track_name": t, "duration": int(round(duration))}))
+            jobs.append((get, {"artist_name": artist, "track_name": t, "duration": int(round(duration))}))
     queries: list[dict] = []
     for t in titles:
         for k, variant in enumerate(title_variants(t)):
@@ -422,7 +425,7 @@ def _lrclib_online_records(titles: list[str], artist: str, duration: float) -> t
         key = tuple(sorted(params.items()))
         if key not in seen_queries:
             seen_queries.add(key)
-            jobs.append((_lrclib_search, params))
+            jobs.append((search, params))
 
     def run(job: tuple[Callable[[dict], object], dict]) -> tuple[dict, object, Exception | None]:
         fn, params = job

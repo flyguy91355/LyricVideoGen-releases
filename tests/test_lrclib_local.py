@@ -3,7 +3,6 @@
 import sqlite3
 
 import pytest
-import requests
 
 from lyricvideo import lrclib_local
 from lyricvideo.fetch_lyrics import LyricsSourceDown, _fetch_lrclib_hit
@@ -40,17 +39,16 @@ def copy(tmp_path, monkeypatch):
     return tmp_path / lrclib_local.DB_NAME
 
 
-def _no_network(monkeypatch):
-    def refuse(*a, **k):
-        raise AssertionError("the local copy had the song: lrclib.net must not be asked")
-    monkeypatch.setattr("lyricvideo.fetch_lyrics.requests.get", refuse)
-
-
 def _lrclib_down(monkeypatch):
+    """lrclib.net answers 502 to everything; any wait between retries is recorded, not slept."""
+    waited = []
+
     class _Busy:
         status_code = 502
+
     monkeypatch.setattr("lyricvideo.fetch_lyrics.requests.get", lambda *a, **k: _Busy())
-    monkeypatch.setattr("lyricvideo.fetch_lyrics.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.time.sleep", waited.append)
+    return waited
 
 
 def test_names_are_folded_the_way_lrclib_folds_them():
@@ -71,24 +69,29 @@ def test_records_are_found_by_title_start_and_either_way_round_artist(copy):
     assert [(r["artistName"], r["duration"], r["syncedLyrics"]) for r in found] == [("Eminem", 199.0, "[00:01.00]Meet Eddie")]
 
 
-def test_a_song_in_the_copy_never_waits_on_lrclib_net(copy, tmp_path, monkeypatch):
-    _copy(copy, [("Nebraska", "Bruce Springsteen", 272.0, NEBRASKA)])
-    _no_network(monkeypatch)
+def test_while_lrclib_net_answers_its_records_are_used_not_the_copy(copy, tmp_path, monkeypatch):
+    """The copy returns many more records per song, so its vote can pick another transcription: the owner's songs were
+    vetted on lrclib.net's picks."""
+    _copy(copy, [("Nebraska", "Bruce Springsteen", 272.0, "[00:01.00]The copy's transcription")])
+
+    class _Answer:
+        status_code = 200
+
+        def json(self):
+            return [{"id": 9, "trackName": "Nebraska", "artistName": "Bruce Springsteen", "duration": 272.0,
+                     "syncedLyrics": NEBRASKA}]
+
+    monkeypatch.setattr("lyricvideo.fetch_lyrics.requests.get", lambda *a, **k: _Answer())
 
     assert _fetch_lrclib_hit(tmp_path / "none.mp3", "Nebraska", "Bruce Springsteen", 272.0, []) == (NEBRASKA, True, 272.0)
 
 
-def test_a_song_the_copy_lacks_is_asked_of_lrclib_net(copy, tmp_path, monkeypatch):
+def test_while_lrclib_net_is_down_the_copy_answers_without_waiting_on_retries(copy, tmp_path, monkeypatch):
     _copy(copy, [("Nebraska", "Bruce Springsteen", 272.0, NEBRASKA)])
-    asked = []
+    waited = _lrclib_down(monkeypatch)
 
-    class _NotFound:
-        status_code = 404
-
-    monkeypatch.setattr("lyricvideo.fetch_lyrics.requests.get", lambda url, **k: asked.append(url) or _NotFound())
-
-    assert _fetch_lrclib_hit(tmp_path / "none.mp3", "Brand New Song", "Bruce Springsteen", 200.0, []) is None
-    assert asked
+    assert _fetch_lrclib_hit(tmp_path / "none.mp3", "Nebraska", "Bruce Springsteen", 272.0, []) == (NEBRASKA, True, 272.0)
+    assert waited == []
 
 
 def test_with_the_copy_a_song_it_lacks_is_not_on_lrclib_even_while_lrclib_net_is_down(copy, tmp_path, monkeypatch):
@@ -99,10 +102,11 @@ def test_with_the_copy_a_song_it_lacks_is_not_on_lrclib_even_while_lrclib_net_is
 
 
 def test_without_the_copy_lrclib_net_being_down_stops_the_song(copy, tmp_path, monkeypatch):
-    _lrclib_down(monkeypatch)
+    waited = _lrclib_down(monkeypatch)
 
     with pytest.raises(LyricsSourceDown):
         _fetch_lrclib_hit(tmp_path / "none.mp3", "Nebraska", "Bruce Springsteen", 272.0, [])
+    assert waited                                   # with nothing to fall back on, a busy lrclib.net is retried
 
 
 def test_an_unreadable_copy_falls_back_to_lrclib_net(copy, tmp_path, monkeypatch):

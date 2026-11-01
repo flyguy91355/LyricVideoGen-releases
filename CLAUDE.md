@@ -73,12 +73,12 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
 3. **fetch_lyrics** (`fetch_lyrics.py`, `lyric_audio_match.py`, `transcribe.py`) --
    `fetch_lyric_lines_verified()` tries each source (sidecar `.lrc`/`.txt` beside the audio copy; lrclib
    edition-consensus vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
-   `lyric_lines.json`/`Song`. lrclib = our copy of its DB dump first (`lrclib_local.py`,
-   `~/PlayAlongVideoProductionLyrics/lrclib.sqlite3`), else lrclib.net; that busy/down (5xx/429/no connection; retried 2 s,
-   5 s), no copy, no record -> `LyricsSourceDown`: no other site (10-31: NetEase gave wrong songs) unless a sidecar
-   exists; Batch stops. Pass = matching what faster-whisper HEARS in the vocal stem (medium, VAD off): >=70%
-   in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing vocals ignored).
-   Section markers are not lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
+   `lyric_lines.json`/`Song`. lrclib = lrclib.net; a request failing -> our copy of its DB dump (`lrclib_local.py`,
+   `~/PlayAlongVideoProductionLyrics/`; more records/song: another transcription can win). Failed (5xx/429/no
+   connection; retried if no copy), no copy, no record -> `LyricsSourceDown`: no other site (10-31: NetEase's were
+   wrong songs) but a sidecar; Batch stops. Pass = matching what faster-whisper HEARS in the vocal stem (medium,
+   VAD off): >=70% in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing
+   vocals ignored). Section markers aren't lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
    "Chorus:", "(x2)"/"Repeat chorus"; a leading "[..]" tag stripped). Unsung lead/tail credit lines are trimmed per
    candidate before the check (`trim=`, from `pipeline._build_unsung_trim`: line times, Whisper words, vocal
    loudness) only when none of their words were heard. `artist_matches` compares whole words. None passing keeps the
@@ -349,7 +349,7 @@ soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
 A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
 (`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts; N.C. over music
 filled (`chord_gaps.py`, AI songs only for now).
-`scripts/find_truncated_videos.py` (dry run) lists cut-short mp4s; `--set-aside` -> `*.truncated.mp4` (skipped by name).
+`scripts/find_truncated_videos.py` (dry run): cut-short mp4s; `--set-aside` -> `*.truncated.mp4` (skipped by name).
 `youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
 raises). Status label + Connect refresh off the
