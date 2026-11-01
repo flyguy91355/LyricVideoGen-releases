@@ -10,6 +10,7 @@ import http.client
 import random
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -221,7 +222,7 @@ def _all_uploaded_video_ids(youtube_client) -> list[str]:
     return video_ids
 
 
-def reserved_publish_datetimes(youtube_client) -> list[datetime]:
+def reserved_publish_datetimes(youtube_client, known_video_ids: Iterable[str] = ()) -> list[datetime]:
     """Every LOCAL publish moment already claimed anywhere on this channel,
     down to the minute -- a still-scheduled private video's own publishAt,
     or an already-public video's real publishedAt, converted from
@@ -245,9 +246,15 @@ def reserved_publish_datetimes(youtube_client) -> list[datetime]:
     review, F023): a set collapsed several videos sharing one publish moment
     into a single claim, so a day holding a pile-up never looked full and
     kept attracting more. Returns an empty list for a channel with zero
-    uploads."""
+    uploads.
+
+    `known_video_ids` (this app's own youtube_state.json records) are read
+    too: the uploads playlist is not a complete list (2026-11-01: it gave 238
+    entries, 17 of them repeats, and left out 17 real videos -- 5 still
+    scheduled), and every slot a missed video held looked free, so for a week
+    each 9:00/16:00 slot published two videos. Ids are read once each."""
     claimed: list[datetime] = []
-    video_ids = _all_uploaded_video_ids(youtube_client)
+    video_ids = list(dict.fromkeys([*_all_uploaded_video_ids(youtube_client), *known_video_ids]))
     for i in range(0, len(video_ids), 50):
         batch = video_ids[i:i + 50]
         response = youtube_client.videos().list(part="snippet,status", id=",".join(batch)).execute()

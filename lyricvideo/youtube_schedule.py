@@ -47,7 +47,9 @@ from .youtube import reserved_publish_datetimes, set_thumbnail, upload_video
 from .youtube_metadata import (
     build_easy_chord_title, build_play_along_title, generate_video_metadata, is_valid_youtube_title,
 )
-from .youtube_state import STATE_FILENAME, YoutubeState, save_youtube_state
+from .youtube_state import (
+    EASY_CHORD_SUBDIR, STATE_FILENAME, YoutubeState, save_youtube_state, uploaded_song_dirs,
+)
 
 log = logging.getLogger("playalongvideoproduction")
 
@@ -510,7 +512,9 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
         description = render_description(support_text, description)
 
     if settings.youtube_privacy == "public":
-        claims, times = publish_lane(reserved_publish_datetimes(youtube_client), settings, ai_song)
+        work_root = work_dir.parent.parent if work_dir.name == EASY_CHORD_SUBDIR else work_dir.parent
+        known = [state.video_id for _slug, _path, state in uploaded_song_dirs(work_root)]
+        claims, times = publish_lane(reserved_publish_datetimes(youtube_client, known), settings, ai_song)
         slot = compute_next_publish_slot(now, claims, times)
         video_id = upload_video(
             youtube_client, video_path, title, description, tags,

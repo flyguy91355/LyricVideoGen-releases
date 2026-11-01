@@ -195,13 +195,13 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      uses `_plausible_line_end()`; word highlight keys on each word's start.
    - `layout.build_image_timeline()`: one segment per sung line; in gaps one per instrumental chord, short ones merged
      forward to `Settings.image_min_hold_seconds` (2.0), boundaries always real chord onsets; a too-short gap holds
-     the prior image; Ken Burns paces to the block's span.
+     the prior image; Ken Burns paces to the block.
    - Lane labels shrink to 18 pt (`_lane_label_font`) else are omitted (`_lane_label_visible`). No title/artist text
-     in the frame (owner 9-09).
+     in the frame.
    - `render.draw_support_overlay()`: `Settings.support_overlay_text` (blank = off) in the last
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
      `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
-     (not clickable). Order: description, key note, tip/thank-you (9-29).
+     Order: description, key note, tip/thank-you (9-29).
      `scripts/update_support_description.py` re-renders into this order (bodies under `READY_CHARS`, 200).
 
 ## EASY CHORD versions
@@ -311,8 +311,7 @@ upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the 
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
 `scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, never the working tree),
 re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits
-(HISTORY 9-13). The owner runs this git checkout directly, so commits reach them at once; releases keep the banner and
-changelog meaningful.
+(HISTORY 9-13). The owner runs this checkout directly (commits reach them at once); releases keep the banner/changelog meaningful.
 
 ## YouTube upload + channel management
 
@@ -321,8 +320,8 @@ Design `docs/superpowers/specs/2026-09-10-youtube-upload-design.md` (why `publis
 beside its `lyrics_timed.json`; `uploaded_song_dirs(work_root)` / `mark_engagement_comment_posted(work_root, id)`
 include nested `<song>/easychords`. One that exists but cannot be read counts as uploaded everywhere (fail closed).
 `youtube.py` wraps the Data API v3 (`upload_video`, `list_new_comments`, `post_reply`, playlists,
-`post_top_level_comment` = `commentThreads().insert`), each taking an injected client (faked in tests; no test touches
-the network); `Comment.author_channel_id`. `upload_video` retries a dropped connection or 5xx up to 8x on the SAME
+`post_top_level_comment` = `commentThreads().insert`), each taking an injected client (faked in tests);
+ `Comment.author_channel_id`. `upload_video` retries a dropped connection or 5xx up to 8x on the SAME
 resumable request (`bytes */N` recovers what YouTube stored); 4xx (quota, uploadLimitExceeded, invalidTitle) raise at
 once; `is_quota_exceeded_error` also knows HTTP 403 `quotaExceeded`.
 `youtube_metadata.py`: every Claude call has thinking off and is retried; `generate_video_metadata` (description/tags)
@@ -334,11 +333,12 @@ an ellipsis).
 `youtube_schedule.schedule_upload()` is the single upload path (auto and manual). It refuses a missing, unreadable,
 audio-less or cut-short video with `IncompleteVideo` (`.cut_short`, `.video_path`; cut short = picture >1 s shorter
 than audio per `assemble.rendered_stream_seconds`) -- like the key, stale-EASY and bad-title checks, before the Claude
-call and any YouTube call; the GUI logs it as 'the video must be made again' and never renames the file. It uploads one
+call and any YouTube call; the GUI logs 'the video must be made again', never renaming the file. It uploads one
 at a time (`_UPLOAD_LOCK`, `upload_in_progress()`); `only_if_not_uploaded=True` raises `AlreadyUploaded` when a
 `youtube_state.json` EXISTS (even empty/cut off); a state write failing after the upload raises naming the video_id.
-Public target -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the channel's live
-schedule (`reserved_publish_datetimes()`, one claim per video), localizing each slot for its own date (DST-safe),
+Public -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the live
+schedule (`reserved_publish_datetimes()`: uploads list + our youtube_state ids: it misses some, 11-01; one claim
+per video), each slot localized on its date (DST),
 at `Settings.youtube_upload_times` (AI songs: `youtube_ai_upload_times`, own claims by time of day,
 `publish_lane`; blank = shared), capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private: at once.
@@ -350,10 +350,9 @@ A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delet
 (`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts; N.C. over music
 filled (`chord_gaps.py`, AI songs only for now).
 `scripts/find_truncated_videos.py` (dry run): cut-short mp4s; `--set-aside` -> `*.truncated.mp4` (skipped by name).
-`youtube_auth.py`: `connect()` (browser consent with a `client_secret_*.json`) saves `youtube_token.json` (0600 in a
+`youtube_auth.py`: `connect()` (browser consent, `client_secret_*.json`) saves `youtube_token.json` (0600,
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
-raises). Status label + Connect refresh off the
-Tk thread. Worker threads format an error's
+raises). Status label + Connect refresh off Tk. Worker threads format an error's
 text BEFORE a deferred `root.after` lambda (`except ... as e` unbinds `e`; 9-14).
 **GUI uploads**: "Upload to YouTube" = a `list_rendered_songs()` list + Upload (the only path that re-sends a song,
 after "create a duplicate?"), and the "Pending YouTube Uploads" checklist (`list_pending_uploads()`: never-uploaded,
@@ -362,10 +361,10 @@ Upload Selected / Upload Anyway during a run or the tick's auto-retry say 'Uploa
 (a Batch/tick finish never re-enables them mid-run); the tick just skips. Every pending or auto upload goes
 through `_upload_within_todays_cap` (`_UPLOAD_SLOT_LOCK`: re-check state, cap,
 `schedule_upload(only_if_not_uploaded=True)`, `record_upload`); `AlreadyUploaded` is a skip (in the results).
-`_maybe_upload_to_youtube(work_dir, settings)` gates auto-upload (enabled, connected, never uploaded -- verified
-live by `video_exists()`, failing CLOSED, so a deleted video re-uploads; flagged songs skipped) from `_run_worker`
-and each Batch item; failures only warn.
-A failed auto-retry waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
+`_maybe_upload_to_youtube(work_dir, settings, root)` gates auto-upload (enabled, connected, never uploaded --
+verified live by `video_exists()`, failing CLOSED, so a deleted video re-uploads; flagged songs skipped) from
+`_run_worker` and each Batch item; failures only warn. With an AI lane, waiting AI songs (`_waiting_ai_songs`) upload
+first (tick order; before a band song's, 11-01). A failed auto-retry waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
 **Comments** (`youtube_comment_state.py`): `_scan_youtube_comments` (Check
 Now or the 20-minute tick, never overlapping: `_COMMENT_CHECK_LOCK`) walks `uploaded_song_dirs` (EASY included); one
 `videos.list(part=status,statistics)` per 50 videos; a public video's comments are read only when its commentCount
@@ -416,7 +415,7 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 ```
 
 `tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
-(per-user path constants redirected; XDG_CACHE_HOME stays real): the suite
-never touches the real `~/.playalongvideoproduction/`. Its font fixture lists Windows fonts too. Real-window tests
+(per-user paths redirected; XDG_CACHE_HOME stays real): the suite
+never touches the real `~/.playalongvideoproduction`. Its font fixture lists Windows fonts too. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
-Tests write only to pytest's `tmp_path`, never a fixed path (a leftover file caused a stale-cache bug).
+Tests write only to pytest's `tmp_path`, never a fixed path.

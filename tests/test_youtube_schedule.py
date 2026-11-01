@@ -318,6 +318,33 @@ def test_schedule_upload_public_spaces_past_a_date_already_claimed_on_the_real_c
     assert publish_at.startswith("2026-09-11")
 
 
+def test_schedule_upload_public_counts_this_apps_own_uploads_the_channel_list_leaves_out(tmp_path):
+    """2026-11-01: the channel's uploads list left out 17 real videos, 5 of them still scheduled, so their slots looked
+    free and each 9:00/16:00 slot published two videos for a week. The app's own youtube_state.json records count too."""
+    from lyricvideo.youtube_state import YoutubeState, save_youtube_state
+
+    work_dir = _make_song_work_dir(tmp_path)
+    other = tmp_path / "other-song"
+    other.mkdir()
+    save_youtube_state(other, YoutubeState(video_id="missed", uploaded_at="2026-09-09T10:00:00", title="t"))
+    settings = SimpleNamespace(
+        youtube_privacy="public", youtube_category_id="26", youtube_made_for_kids=False,
+        youtube_upload_times="15:00",
+    )
+    client = _FakeYoutubeClient(video_id="vid123", existing_videos=[
+        {"id": "missed", "status": {"publishAt": "2026-09-10T20:00:00Z"}, "snippet": {}},
+    ])
+    client._existing_video_ids = []                  # the uploads list does not return it
+
+    schedule_upload(
+        client, _FakeAnthropicClient(), work_dir, settings,
+        now=datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc),
+    )
+
+    publish_at = client._videos.insert_kwargs["body"]["status"]["publishAt"]
+    assert publish_at.startswith("2026-09-11")
+
+
 def test_schedule_upload_public_fills_a_gap_instead_of_stacking_past_a_far_future_claim(tmp_path):
     """Real scenario, 2026-09-13: one video is mis-scheduled far in the
     future (here, three weeks out) while today is wide open -- the new

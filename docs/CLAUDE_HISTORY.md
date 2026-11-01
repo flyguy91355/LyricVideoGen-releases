@@ -5228,3 +5228,17 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   transcription of the same song (its 150 records a song vs lrclib.net's few change the vote), 1 not found ("Angie Rolling
   Stones" title). So it is the FALLBACK, used when lrclib.net fails, not first. ~5 s a lookup.
 - Owner: AI songs "hard to find with all the other held for review songs" -> their own list, My AI Songs to Review (v2.0.106).
+
+## HISTORY 11-01: two videos in every publish slot; AI songs waited behind the band backlog
+
+- Owner: "i have twice as many songs going public that supoose to" ... "1 song at 9 1 ai song at 12:30 and 1 song at 4pm".
+  From at least 10-25 every 9:00/16:00 slot published two videos. The uploads playlist (playlistItems on the channel's
+  uploads list) is not a complete list: on 11-01 it gave 238 entries, 17 of them repeats, and left out 17 real videos (5
+  still scheduled); earlier it gave exactly 200. Each missed video's slot looked free to compute_next_publish_slot.
+  reserved_publish_datetimes now also reads the app's own youtube_state.json ids (each id once). 24 of the 25 scheduled
+  videos were moved by hand (videos.update part=status, every other status field sent back) to one per slot, Nov 1-13,
+  and checked by re-reading the channel.
+- AI songs (youtube_ai_upload_times 12:30) shared the 4-a-day upload cap with band songs, in name order: 3 verified ones
+  were 11th, 13th and 26th in line while 12:30 stood empty; a Batch's own uploads take the cap after midnight and the
+  20-minute tick never runs during one. Now `_waiting_ai_songs` upload first: the tick sorts them ahead, and a band
+  song's `_maybe_upload_to_youtube` (given the work root) uploads them before itself. They take only their own lane.

@@ -557,6 +557,24 @@ def test_reserved_publish_datetimes_counts_every_video_sharing_one_publish_momen
     assert len(reserved_publish_datetimes(client)) == 3
 
 
+def test_reserved_publish_datetimes_reads_known_ids_the_uploads_list_leaves_out_and_repeats_once():
+    """2026-11-01: the uploads list repeated 17 entries and left out 17 real videos."""
+    client = _FakeChannelUploadsClient([
+        {"id": "listed", "status": {"publishAt": "2026-11-01T14:00:00Z"}, "snippet": {}},
+        {"id": "left-out", "status": {"publishAt": "2026-11-01T21:00:00Z"}, "snippet": {}},
+    ])
+    client.playlistItems = lambda: SimpleNamespace(list=lambda **kw: SimpleNamespace(execute=lambda: {
+        "items": [{"contentDetails": {"videoId": "listed"}}, {"contentDetails": {"videoId": "listed"}}],
+    }))
+
+    result = reserved_publish_datetimes(client, ["left-out", "listed"])
+
+    assert result == [
+        datetime(2026, 11, 1, 14, 0, tzinfo=timezone.utc).astimezone(),
+        datetime(2026, 11, 1, 21, 0, tzinfo=timezone.utc).astimezone(),
+    ]
+
+
 def _make_http_error(status: int):
     from googleapiclient.errors import HttpError
 

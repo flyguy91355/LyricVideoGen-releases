@@ -948,6 +948,74 @@ def test_dismiss_comment_removes_from_queue_and_invalidates(monkeypatch):
     assert invalidated == [True]
 
 
+def test_maybe_upload_to_youtube_uploads_the_waiting_ai_songs_before_a_band_song(tmp_path, monkeypatch):
+    """Owner, 2026-11-01: one AI song publishes at 12:30 each day. A verified one waited behind the band backlog while
+    12:30 stood empty, so a Batch's band song lets the waiting AI songs take today's uploads first."""
+    import lyricvideo.gui as gui_module
+
+    order = []
+    monkeypatch.setattr(gui_module._AiFirstRetries, "_auto_retry_not_before", {})
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui._waiting_ai_songs", lambda work_root: ["my-ai-song"])
+    monkeypatch.setattr(
+        "lyricvideo.gui._retry_pending_uploads",
+        lambda work_root, settings, slugs: order.append(("ai", work_root, slugs)) or {"succeeded": slugs, "failed": []},
+    )
+    monkeypatch.setattr(
+        "lyricvideo.gui.schedule_upload", lambda yt, an, work_dir, settings, **kw: order.append(("band", work_dir)),
+    )
+    band = tmp_path / "band-song"
+    band.mkdir()
+
+    _maybe_upload_to_youtube(band, Settings(youtube_auto_upload=True), tmp_path)
+
+    assert order == [("ai", tmp_path, ["my-ai-song"]), ("band", band)]
+
+
+def test_maybe_upload_to_youtube_leaves_the_ai_songs_alone_without_an_ai_lane(tmp_path, monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.build", lambda *a, **k: "fake-youtube-client")
+    monkeypatch.setattr("lyricvideo.gui.anthropic.Anthropic", lambda: "fake-anthropic-client")
+    monkeypatch.setattr("lyricvideo.gui._waiting_ai_songs", _must_not_run)
+    monkeypatch.setattr("lyricvideo.gui.schedule_upload", lambda *a, **kw: None)
+
+    _maybe_upload_to_youtube(tmp_path / "band-song", Settings(youtube_auto_upload=True, youtube_ai_upload_times=""),
+                             tmp_path)
+
+
+def test_waiting_ai_songs_lists_only_ai_songs_that_are_not_removed_or_held(tmp_path, monkeypatch):
+    from lyricvideo.gui import _waiting_ai_songs
+
+    for slug in ("ai-ready", "ai-removed", "ai-held", "band"):
+        (tmp_path / slug).mkdir()
+        if slug.startswith("ai"):
+            (tmp_path / slug / "AI_GENERATED.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["ai-held", "ai-ready", "ai-removed", "band"])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: {"ai-removed"})
+    monkeypatch.setattr("lyricvideo.gui.list_flagged_songs", lambda work_root: ["ai-held"])
+
+    assert _waiting_ai_songs(tmp_path) == ["ai-ready"]
+
+
+def test_retry_pending_uploads_if_due_uploads_ai_songs_first(monkeypatch):
+    monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", lambda: "fake-credentials")
+    monkeypatch.setattr("lyricvideo.gui.list_pending_uploads", lambda work_root: ["band-a", "my-ai-song", "band-b"])
+    monkeypatch.setattr("lyricvideo.gui.load_dismissed", lambda list_name: set())
+    monkeypatch.setattr("lyricvideo.gui.list_flagged_songs", lambda work_root: [])
+    monkeypatch.setattr("lyricvideo.gui.is_ai_generated", lambda folder: Path(folder).name == "my-ai-song")
+    calls = []
+    monkeypatch.setattr("lyricvideo.gui._retry_pending_uploads", lambda work_root, settings, slugs: calls.append(slugs))
+    stub = _gui_stub(
+        _running=False, settings=Settings(youtube_auto_upload=True), _refresh_retry_upload_options=lambda: None,
+    )
+
+    LyricVideoGUI._retry_pending_uploads_if_due(stub)
+
+    assert calls == [["my-ai-song", "band-a", "band-b"]]
+
+
 def test_retry_pending_uploads_if_due_skips_while_generate_redo_or_batch_is_running(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.youtube_auth.load_credentials", _must_not_run)
     stub = _gui_stub(_running=True, settings=Settings(youtube_auto_upload=True))
@@ -1809,7 +1877,7 @@ def test_run_batch_worker_releases_memory_after_every_item_success_or_failure(mo
     before failing."""
     released = []
     monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: released.append(True))
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
 
     def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
         if title == "Bad Song":
@@ -1833,7 +1901,7 @@ def test_the_batch_stops_when_lrclib_is_down(monkeypatch):
     same way, so the Batch stops and says how to pick up again."""
     from lyricvideo.fetch_lyrics import LyricsSourceDown
     monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     ran = []
 
     def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
@@ -1866,7 +1934,7 @@ def test_run_batch_worker_resumes_an_interrupted_item_at_its_own_resume_stage(mo
     interrupted song with "no way to resume" other than redoing everything,
     including the slowest stage in the whole pipeline)."""
     monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     calls = []
 
     def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
@@ -2092,7 +2160,7 @@ def test_the_held_message_says_no_video_was_made_shows_the_reason_and_frees_the_
 
 def test_a_batch_carries_on_after_a_song_is_held_before_its_video_and_counts_it_separately(monkeypatch):
     monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     ran = []
 
     def fake_run_pipeline(audio_path, work_dir, title, **kwargs):
@@ -2227,7 +2295,7 @@ def test_redoing_a_removed_song_brings_it_back_to_review(monkeypatch):
     brought_back = []
     monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: brought_back.append((list_name, slug)))
     monkeypatch.setattr("lyricvideo.gui.run_pipeline", lambda *a, **k: Path("work/a/a.mp4"))
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
 
     LyricVideoGUI._run_worker(stub, Path("a.mp3"), Path("work/a"), "A", "fetch_lyrics")
@@ -2245,7 +2313,7 @@ def test_run_worker_force_easy_chord_overrides_the_setting_for_this_one_run_only
         "lyricvideo.gui.run_pipeline",
         lambda *a, **k: captured.setdefault("settings", k["settings"]) or Path("work/a/a.mp4"),
     )
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: None)
     stub = _gui_stub(_queue=queue.Queue(), settings=Settings(generate_easy_chord_versions=False))
 
@@ -2261,7 +2329,7 @@ def test_run_worker_without_force_easy_chord_passes_settings_through_unchanged(m
         "lyricvideo.gui.run_pipeline",
         lambda *a, **k: captured.setdefault("settings", k["settings"]) or Path("work/a/a.mp4"),
     )
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: None)
     stub = _gui_stub(_queue=queue.Queue(), settings=Settings(generate_easy_chord_versions=False))
 
@@ -2275,7 +2343,7 @@ def test_a_batch_that_regenerates_a_removed_song_brings_it_back_to_review(monkey
     monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: brought_back.append((list_name, slug)))
     monkeypatch.setattr("lyricvideo.gui.release_memory", lambda: None)
     monkeypatch.setattr("lyricvideo.gui.run_pipeline", lambda *a, **k: None)
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     monkeypatch.setattr("lyricvideo.gui.backup_song_outputs", lambda *a, **k: None)
     items = [BatchItem(audio_path=Path("a.mp3"), title="A", work_dir=Path("work/a"), already_done=True)]
 
@@ -2544,7 +2612,7 @@ def test_run_worker_passes_fresh_images_through_to_run_pipeline(monkeypatch):
         "lyricvideo.gui.run_pipeline",
         lambda *a, **k: captured.setdefault("fresh_images", k["fresh_images"]) or Path("work/a/a.mp4"),
     )
-    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings: None)
+    monkeypatch.setattr("lyricvideo.gui._maybe_upload_to_youtube", lambda work_dir, settings, work_root=None: None)
     monkeypatch.setattr("lyricvideo.gui.undismiss_song", lambda list_name, slug: None)
     stub = _gui_stub(_queue=queue.Queue(), settings=Settings())
 

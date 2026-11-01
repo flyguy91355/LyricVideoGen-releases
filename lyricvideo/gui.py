@@ -757,7 +757,43 @@ def _stage_to_resume(song_dir: Path) -> str:
     return "images" if load_decision(song_dir) is not None else "detect_chords"
 
 
-def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
+class _AiFirstRetries:
+    """The auto-retry backoff (_auto_retry_due) for _upload_waiting_ai_songs, which has no GUI to keep it on."""
+    _auto_retry_not_before: dict[str, datetime] = {}
+
+
+def _waiting_ai_songs(work_root: Path) -> list[str]:
+    """Our own AI songs ready to upload: pending, not removed from the list, not held. Owner, 2026-11-01: "1 song at 9, 1
+    ai song at 12:30 and 1 song at 4pm". They publish only in their own lane (youtube_ai_upload_times), so they go before
+    band songs for the day's capped uploads; behind the band backlog in name order, a verified one waited days while
+    12:30 stood empty."""
+    dismissed = load_dismissed("pending")
+    flagged = set(list_flagged_songs(work_root))
+    return [
+        s for s in list_pending_uploads(work_root)
+        if s not in dismissed and s not in flagged and is_ai_generated(work_root / s)
+    ]
+
+
+def _upload_waiting_ai_songs(work_root: Path, settings: Settings) -> None:
+    """Uploads the waiting AI songs (_waiting_ai_songs) within today's cap. Never raises; one that fails waits
+    _AUTO_RETRY_BACKOFF, like the 20-minute tick's retries."""
+    try:
+        now = datetime.now().astimezone()
+        waiting = _auto_retry_due(_AiFirstRetries, _waiting_ai_songs(work_root), now)
+        if not waiting:
+            return
+        results = _retry_pending_uploads(work_root, settings, waiting)
+        _note_auto_retry_results(_AiFirstRetries, results, now)
+        for slug in results["succeeded"]:
+            print(f"Uploaded to YouTube: {slug}")
+        for slug, reason in results["failed"]:
+            print(f"WARNING: YouTube upload failed for {slug}: {reason}", file=sys.stderr)
+    except Exception as e:
+        print(f"WARNING: could not upload the waiting AI songs: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def _maybe_upload_to_youtube(work_dir: Path, settings: Settings, work_root: Path | None = None) -> None:
     """Uploads work_dir's finished video to YouTube if auto-upload is on,
     YouTube is connected, and this song has never been (verifiably) uploaded
     before -- Redo of an already-uploaded song is deliberately skipped to
@@ -777,7 +813,9 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
     automatically on a later day, same as a quota-exceeded skip. A song
     flagged by check_lyric_accuracy() (2026-09-18, Song.lyrics_accuracy_concern
     non-empty) never auto-uploads either -- it still fully rendered, and
-    shows up in the "Flagged for Lyrics Review" panel instead."""
+    shows up in the "Flagged for Lyrics Review" panel instead.
+
+    With `work_root` (the GUI's work/), a band song first lets the waiting AI songs upload (_waiting_ai_songs)."""
     if not settings.youtube_auto_upload:
         return
     credentials = youtube_auth.load_credentials()
@@ -788,6 +826,10 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings) -> None:
         return  # still cooling down from a prior quota-exceeded error
     if _uploads_remaining_today(settings) <= 0:
         return  # today's upload cap reached -- picked up automatically on a later day
+    if work_root is not None and settings.youtube_ai_upload_times.strip() and not is_ai_generated(work_dir):
+        _upload_waiting_ai_songs(work_root, settings)
+        if _uploads_remaining_today(settings) <= 0:
+            return
     try:
         if load_song(work_dir / "lyrics_timed.json").lyrics_accuracy_concern:
             return  # flagged -- see the "Flagged for Lyrics Review" panel
@@ -2726,7 +2768,7 @@ class LyricVideoGUI:
                             start_stage=item.resume_stage, settings=self.settings,
                             progress_callback=lambda stage: self._queue.put(("stage", stage)),
                         )
-                    _maybe_upload_to_youtube(item.work_dir, self.settings)
+                    _maybe_upload_to_youtube(item.work_dir, self.settings, PROJECT_ROOT / "work")
                     self._queue.put(("batch_item_done", None))
                     results["succeeded"].append(item.title)
                 except HeldBeforeVideo as e:
@@ -4502,6 +4544,8 @@ class LyricVideoGUI:
         pending = _auto_retry_due(self, pending, now)
         if not pending:
             return
+        if self.settings.youtube_ai_upload_times.strip():
+            pending.sort(key=lambda s: not is_ai_generated(PROJECT_ROOT / "work" / s))   # AI songs first (_waiting_ai_songs)
         if not _UPLOAD_RUN_LOCK.acquire(blocking=False):
             return  # a manual run started meanwhile
         try:
@@ -4538,7 +4582,7 @@ class LyricVideoGUI:
                 progress_callback=lambda stage: self._queue.put(("stage", stage)),
                 fresh_images=fresh_images,
             )
-            _maybe_upload_to_youtube(work_dir, self.settings)
+            _maybe_upload_to_youtube(work_dir, self.settings, PROJECT_ROOT / "work")
             self._queue.put(("done", str(out_path)))
         except HeldBeforeVideo as e:
             self._queue.put(("held", e.concern))
