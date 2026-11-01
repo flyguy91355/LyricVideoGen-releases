@@ -1670,7 +1670,7 @@ def test_the_owners_lyrics_still_get_whisper_word_timings_for_the_aligner(tmp_pa
 
     run_pipeline(Path("audio.mp3"), work_dir)
 
-    assert len(calls) == 1
+    assert len(calls) == 2              # the plain listening the timing gate grades by, then the hinted one for anchors
 
 
 def test_the_owners_own_lyrics_are_used_as_whisper_hotwords(tmp_path, monkeypatch):
@@ -1686,7 +1686,7 @@ def test_the_owners_own_lyrics_are_used_as_whisper_hotwords(tmp_path, monkeypatc
 
     run_pipeline(Path("audio.mp3"), work_dir)
 
-    assert calls == [{"hotwords": "Boris the spider"}]
+    assert calls == [{}, {"hotwords": "Boris the spider"}]      # plain first (the timing gate grades by it)
 
 
 def test_the_accepted_fetched_lyrics_hint_a_second_transcription_for_the_aligner_only(tmp_path, monkeypatch):

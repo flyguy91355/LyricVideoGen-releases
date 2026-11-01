@@ -22,6 +22,12 @@ from pathlib import Path
 # long "ba ba ba" / "oh oh oh" runs the gate ignores. Any model change needs the gate re-validated on the owner's judged songs first.
 _DEFAULT_MODEL = "medium"
 _TRANSCRIPT_FILE = "transcript.json"
+# The listening hinted with the song's own lyrics (lyric_hotwords) is kept apart from the plain one (2026-11-01): it helps
+# the aligner place lines, but the timing gate grades by the plain listening, as when it was validated on the owner's
+# judged songs (9-20). From 9-27 the hinted one overwrote transcript.json, and on some runs it heard lyrics where they are
+# not sung (Hard to Handle: verse-3 words at 60 s): the same placement scored 70-91% across three hinted listenings and
+# 94.6-97.3% across three plain ones.
+_HINTED_FILE = "transcript_hinted.json"
 
 _loaded_model = None
 _loaded_model_name = None
@@ -101,12 +107,12 @@ def transcribe_vocals(vocals_path: Path, work_dir: Path, model=None, hotwords: s
     """The words heard in `vocals_path`, as one lowercase-insensitive string. `model` is
     injectable (tests pass a fake with the same .transcribe() shape). `hotwords` (owner, 2026-09-27,
     see lyric_hotwords()) hints Whisper toward the song's own real vocabulary throughout the whole
-    transcription -- "" (the default) is today's exact behavior."""
+    transcription -- cached apart, in transcript_hinted.json (see _HINTED_FILE); "" is the plain listening."""
     vocals_path = Path(vocals_path)
     if not vocals_path.exists():
         raise FileNotFoundError(f"Vocal stem not found: {vocals_path}")
     vocals_size = vocals_path.stat().st_size
-    cache_path = Path(work_dir) / _TRANSCRIPT_FILE
+    cache_path = Path(work_dir) / (_HINTED_FILE if hotwords else _TRANSCRIPT_FILE)
 
     language = _language()
     cached = _read_cache(cache_path, vocals_size, language, hotwords)
@@ -165,15 +171,20 @@ def load_transcript_text(work_dir: Path) -> str | None:
         return None
 
 
-def load_transcript_words(work_dir: Path) -> list[dict]:
-    """The cached transcript's [{word, start, end}] word timings, or [] if there are none (older cache,
-    unreadable file) -- the anchors the lyric aligner uses to keep every line inside its own stretch of the
-    song (see anchors.py)."""
+def load_transcript_words(work_dir: Path, file_name: str = _TRANSCRIPT_FILE) -> list[dict]:
+    """The cached plain transcript's [{word, start, end}] word timings, or [] if there are none (older cache,
+    unreadable file) -- what the timing gate grades a song's lines by (timing_gate, owner_whisper)."""
     try:
-        data = json.loads((Path(work_dir) / _TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+        data = json.loads((Path(work_dir) / file_name).read_text(encoding="utf-8"))
         return [
             {"word": str(w["word"]), "start": float(w["start"]), "end": float(w["end"])}
             for w in data.get("words", [])
         ]
     except (OSError, ValueError, KeyError, TypeError):
         return []
+
+
+def load_hinted_words(work_dir: Path) -> list[dict]:
+    """The hinted listening's word timings (see _HINTED_FILE), [] when there is none: the anchors the lyric aligner uses to
+    keep every line inside its own stretch of the song (anchors.py). Never what a line is graded by."""
+    return load_transcript_words(work_dir, _HINTED_FILE)

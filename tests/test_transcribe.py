@@ -299,8 +299,33 @@ def test_hotwords_are_passed_to_the_model(tmp_path):
 def test_hotwords_are_saved_in_the_cache(tmp_path):
     transcribe_vocals(_vocals(tmp_path), tmp_path, model=_FakeModel([" hello there"]), hotwords="Boris the spider")
 
-    cached = json.loads((tmp_path / "transcript.json").read_text(encoding="utf-8"))
+    cached = json.loads((tmp_path / "transcript_hinted.json").read_text(encoding="utf-8"))
     assert cached["hotwords"] == "Boris the spider"
+
+
+def test_the_hinted_listening_never_replaces_the_plain_one_the_timing_gate_grades_by(tmp_path):
+    """2026-11-01: from 9-27 the hinted listening overwrote transcript.json, and the gate graded by it -- the same placement
+    scored 70-91% across hinted listenings, 94.6-97.3% across plain ones (Hard to Handle)."""
+    from lyricvideo.transcribe import load_hinted_words, load_transcript_words
+
+    class _Words(_FakeModel):
+        def __init__(self, word):
+            super().__init__([f" {word}"])
+            self.word = word
+
+        def transcribe(self, *a, **k):
+            segments, info = super().transcribe(*a, **k)
+            segments = list(segments)
+            for segment in segments:
+                segment.words = [SimpleNamespace(word=self.word, start=1.0, end=1.5)]
+            return segments, info
+
+    vocals = _vocals(tmp_path)
+    transcribe_vocals(vocals, tmp_path, model=_Words("plain"))
+    transcribe_vocals(vocals, tmp_path, model=_Words("hinted"), hotwords="hinted")
+
+    assert [w["word"] for w in load_transcript_words(tmp_path)] == ["plain"]
+    assert [w["word"] for w in load_hinted_words(tmp_path)] == ["hinted"]
 
 
 def test_a_cache_made_with_different_hotwords_is_not_reused(tmp_path):

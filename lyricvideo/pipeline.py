@@ -55,7 +55,8 @@ from .timing_gate import (
 )
 from .owner_whisper import add_corrections, corrected_heard_words
 from .transcribe import (
-    load_transcript_segments, load_transcript_text, load_transcript_words, lyric_hotwords, transcribe_vocals,
+    load_hinted_words, load_transcript_segments, load_transcript_text, load_transcript_words, lyric_hotwords,
+    transcribe_vocals,
 )
 from .banned import is_banned
 from .youtube_state import STATE_FILENAME
@@ -785,8 +786,9 @@ def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duratio
     (align.align_words_anchored). Both are computed from one model pass; sync.decide_alignment picks. A song whose
     timing still cannot be trusted comes back with a non-empty concern so it is set aside for the owner's review.
     Without word timings (Whisper unavailable) this is exactly the original single whole-song alignment."""
-    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
-    sung = list(heard)      # everything the recognizer heard: what the sync check (timing_gate) compares each line with
+    # The hinted listening (when there is one) anchors the placement; the plain one grades it (transcribe._HINTED_FILE).
+    sung = [HeardWord(w["word"], w["start"], w["end"]) for w in load_transcript_words(work_dir)]
+    heard = [HeardWord(w["word"], w["start"], w["end"]) for w in load_hinted_words(work_dir)] or list(sung)
     line_words = [[w.word for w in line.words] for line in parsed_lines]
 
     def settled(candidates, preferred, earlier_concern=""):
@@ -1060,7 +1062,8 @@ def _replace_audio_copy(source: Path, copy: Path, work_dir: Path) -> None:
     length replacement would match)."""
     _copy_audio_atomically(source, copy)
     shutil.rmtree(work_dir / "htdemucs" / copy.stem, ignore_errors=True)
-    (work_dir / "transcript.json").unlink(missing_ok=True)       # transcribe.py's cache file
+    (work_dir / "transcript.json").unlink(missing_ok=True)       # transcribe.py's cache files
+    (work_dir / "transcript_hinted.json").unlink(missing_ok=True)
 
 
 def _length_may_be_a_header_guess(audio_path: Path) -> bool:
@@ -1426,6 +1429,7 @@ def run_pipeline(
             # the aligner as anchors (cached), and the aligner and sync check still time them.
             print("Using the lyrics you edited (lyrics_owner.txt); no online lookup or AI check for these.")
             try:
+                transcribe_vocals(vocals_path, work_dir)        # the plain listening the timing gate grades by
                 transcribe_vocals(vocals_path, work_dir, hotwords=lyric_hotwords(owner_lines))
             except Exception as e:
                 print(f"WARNING: could not listen to the vocals ({type(e).__name__}: {e}); timing will use the "
@@ -1458,9 +1462,9 @@ def run_pipeline(
         if owner_lines is None and lines_text:
             # The accepted candidate's own text hints a SECOND, separate transcription for the aligner's anchors
             # only (owner + review, 2026-09-27) -- audio_check above stayed unhinted throughout, so the
-            # independent lyrics-vs-audio check was never primed with the very text it judged. This is what the
-            # align stage's anchors (load_transcript_words) read; it overwrites the unhinted transcript.json
-            # written above via _build_audio_check, at the cost of one more ~70 s Whisper call for a
+            # independent lyrics-vs-audio check was never primed with the very text it judged. The align stage's
+            # anchors (load_hinted_words) read it from transcript_hinted.json; the plain transcript.json written above
+            # stays what the timing gate grades by (2026-11-01), at the cost of one more ~70 s Whisper call for a
             # fetched-lyrics song (the owner-edited branch above needs only its own one call).
             try:
                 transcribe_vocals(vocals_path, work_dir, hotwords=lyric_hotwords(lines_text))
