@@ -53,6 +53,7 @@ class KeyDecision:
             return f"{KEY_HOLD_PREFIX} no chords were detected, so the song's key is unknown. Set Key to give it, then make the video."
         if self.requested_key:
             opinion = f"it was made to be in {self.requested_key}"
+            opinion += f", and Claude reading the chords says {self.published_key}" if self.published_key else ""
         else:
             opinion = f"the second opinion says {self.published_key}" if self.published_key else "there was no second opinion"
         if self.research_notes or self.research_key:
@@ -135,16 +136,20 @@ def settle_song_key(
     estimate = estimate_key_from_chords(chord_track)
     candidates = candidate_keys(chord_track)
     published = None
-    made_here = created_song(work_dir)          # nothing is published about a song we made: no opinion, no web search
-    ask = owner is None and estimate is not None and anthropic_client is not None and not made_here
+    made_here = created_song(work_dir)          # nothing is published about a song we made: no web search
+    requested = requested_key(work_dir) if made_here else None
+    as_asked = estimate is not None and requested and parse_key(requested) == (estimate.tonic, estimate.mode)
+    # A song we made whose music is not in the key it was asked for (the music AI does not always play the chords it was
+    # given; owner, 2026-11-02: "why cant ai know what key its in when ai made the song"): Claude reads its chords alone.
+    ask = owner is None and estimate is not None and anthropic_client is not None and not as_asked
     if ask:
-        published = ask_published_key(anthropic_client, title, artist, candidates, chord_summary(chord_track))
+        published = ask_published_key(anthropic_client, title, artist, candidates, chord_summary(chord_track),
+                                      our_own=made_here)
     researched = None
     agreed = estimate is not None and published and parse_key(published) == (estimate.tonic, estimate.mode)
-    if ask and not agreed:
+    if ask and not agreed and not made_here:
         researched = research_song_key(anthropic_client, title, artist, candidates, chord_summary(chord_track))
-    decision = decide_key(estimate, published, owner, candidates, researched,
-                          requested=requested_key(work_dir) if made_here else None)
+    decision = decide_key(estimate, published, owner, candidates, researched, requested=requested)
     if save:
         save_decision(work_dir, decision)
     if decision.confirmed:

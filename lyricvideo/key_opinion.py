@@ -25,10 +25,12 @@ def _reply_text(response) -> str:
 
 def ask_published_key(
     anthropic_client, title: str, artist: str, candidates: list[str], chords: str, model: str = "claude-sonnet-5",
+    our_own: bool = False,
 ) -> str | None:
     """One of `candidates` (as written there, in the app's own spelling), or None when Claude says none fit / is unsure /
     answers off the list or off the format, or the call fails. Sonnet 5 thinks by default, which can use a small token
-    budget up and return no text (see youtube_metadata.py), so thinking is off -- this is a one-line formatted answer."""
+    budget up and return no text (see youtube_metadata.py), so thinking is off -- this is a one-line formatted answer.
+    `our_own`: a song Create a Song made has no sheet music, so Claude judges the key from the chords alone."""
     allowed = {}
     for c in candidates:
         parsed = parse_key(c)
@@ -38,10 +40,15 @@ def ask_published_key(
         return None
     by = f" by {artist.strip()}" if artist and artist.strip() else ""
     options = "\n".join(f"- {c}" for c in candidates)
+    question = (
+        "No sheet music exists for this song. Judging by its chords alone, which ONE of these keys is it in?"
+        if our_own else
+        "Which ONE of these keys is the key its published sheet music lists for the original recording (for example the "
+        "original key on Musicnotes)?"
+    )
     prompt = (
         f'The song "{title}"{by} has these chords in its recording (share of the song): {chords}.\n\n'
-        "Which ONE of these keys is the key its published sheet music lists for the original recording (for example the "
-        f"original key on Musicnotes)?\n{options}\n\n"
+        f"{question}\n{options}\n\n"
         "Reply with EXACTLY one line and nothing else: KEY: <the key copied from the list>, or KEY: NONE if none of "
         "them is right or you are not sure."
     )

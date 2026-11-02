@@ -230,12 +230,12 @@ as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's
 
 ## Create a Song
 
-`song_maker.py` (10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/lyrics -> MiniMax
-Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3, sidecar `.txt`, `AI_GENERATED.txt`,
+`song_maker.py` (10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/words -> MiniMax
+Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3, `.txt` sidecar, `AI_GENERATED.txt`,
 `ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
-typed name (asks if on MusicBrainz) or Claude's. `ai_song.json` = held until Mark Verified/Upload Anyway
-(`waits_to_be_watched`); key settles if the asked-for key matches the chords (no Claude/search).
-`Settings.scheduled_songs_per_day` (0 off): every 20 min if idle; a random style/voice, a roster band or a new
+typed name (asks MusicBrainz) or Claude's. `ai_song.json` = held until Mark Verified/Upload Anyway
+(`waits_to_be_watched`); key: the asked-for one if the chords match, else the chords' if Claude reading them agrees
+`Settings.scheduled_songs_per_day` (0 off): every 20 min if idle; random style/voice, a roster band or a new
 one (equal odds), Claude's About (`plan_scheduled_song`); `scheduled_songs.json` counts the day (3 fails stop it).
 
 ## Redo an Existing Song
@@ -418,4 +418,4 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 (per-user paths redirected; XDG_CACHE_HOME stays real): the suite
 never touches the real `~/.playalongvideoproduction`. Its font fixture lists Windows fonts too. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
-Tests write only to pytest's `tmp_path`, never a fixed path.
+Tests write only under pytest's `tmp_path`.

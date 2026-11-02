@@ -249,9 +249,22 @@ def test_a_created_song_settles_on_the_key_it_was_asked_for_when_the_chords_agre
     assert client.calls == []                                   # nothing is published about our own song: no opinion, no search
 
 
-def test_a_created_song_whose_chords_are_not_in_its_asked_for_key_waits_for_the_owner(tmp_path):
+def test_a_created_song_whose_music_left_its_asked_for_key_settles_when_claude_reads_its_chords_the_same(tmp_path):
+    # Cracked Bowl Kitchen (owner, 2026-11-02): asked for G major, the music played C G Am F -- held for a key the owner
+    # could not know with no video made.
     (tmp_path / "ai_song.json").write_text(json.dumps({"key": "F minor"}), encoding="utf-8")
     client = FakeClient("KEY: D major")
+    decision, out = settle_song_key(tmp_path, D_SONG, "x", "y", client)
+    assert decision.confirmed and decision.source == "agreed" and decision.key == "D major" and out.key == "D major"
+    assert len(client.calls) == 1                               # the chords-alone question; no web search
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "No sheet music exists" in prompt and "Musicnotes" not in prompt
+
+
+def test_a_created_song_whose_chords_claude_reads_differently_waits_for_the_owner(tmp_path):
+    (tmp_path / "ai_song.json").write_text(json.dumps({"key": "F minor"}), encoding="utf-8")
+    client = FakeClient("KEY: G major")
     decision, _out = settle_song_key(tmp_path, D_SONG, "x", "y", client)
-    assert decision.status == "review" and "it was made to be in F minor" in decision.concern()
-    assert client.calls == []
+    assert decision.status == "review"
+    assert "it was made to be in F minor, and Claude reading the chords says G major" in decision.concern()
+    assert len(client.calls) == 1
