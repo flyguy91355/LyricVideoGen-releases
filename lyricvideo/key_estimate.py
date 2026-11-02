@@ -73,6 +73,31 @@ def estimate_key_from_chords(track: ChordTrack) -> KeyEstimate | None:
     return KeyEstimate(tonic=scored[0][1], mode=scored[0][2], margin=scored[0][0] - scored[1][0])
 
 
+HOME_MIN_SECONDS = 1.0      # a chord shorter than this is a detection blip, not where the song starts or ends
+
+
+def home_key(track: ChordTrack) -> tuple[int, str] | None:
+    """(tonic, mode) of the chord the song starts on, ends on AND plays most -- its home chord, which names its key (owner,
+    2026-11-02: "is c the first and last chord of the song???"; it named the settled key of all 71 settled songs it
+    applied to, none wrong). None when those are not one chord."""
+    seconds: dict[tuple[int, str], float] = {}
+    held: list[tuple[int, str]] = []
+    for e in track.events:
+        parsed = parse_chord_label(e.label)
+        if parsed is None:
+            continue
+        chord = (parsed[0], _triad(parsed[1]))
+        seconds[chord] = seconds.get(chord, 0.0) + (e.end - e.start)
+        if e.end - e.start >= HOME_MIN_SECONDS:
+            held.append(chord)
+    if not held:
+        return None
+    top = max(seconds, key=seconds.get)
+    if held[0] != top or held[-1] != top:
+        return None
+    return top[0], "major" if top[1] == "maj" else "minor"
+
+
 def candidate_keys(track: ChordTrack, count: int = 4) -> list[str]:
     """The `count` best-fitting keys, best first ("D major", "B minor", ...) -- what a second opinion chooses between."""
     return [key_name(tonic, mode, True) for _score, tonic, mode in _scored_keys(track)[:count]]

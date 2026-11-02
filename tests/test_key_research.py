@@ -33,7 +33,7 @@ class Client:
 
 def song():
     ev, t = [], 0.0
-    for label, secs in (("D", 8), ("G", 4), ("A", 4), ("D", 8)):
+    for label, secs in (("A", 4), ("D", 8), ("G", 4), ("D", 8)):     # opens away from home (home_key)
         ev.append(ChordEvent(start=t, end=t + secs, label=label))
         t += secs
     return ChordTrack(events=ev, key="D major", bpm=100.0)

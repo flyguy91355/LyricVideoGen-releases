@@ -20,7 +20,8 @@ def track(*labels_and_seconds, key="C major"):
 
 
 D_MAJOR = KeyEstimate(tonic=2, mode="major", margin=0.3)
-D_SONG = track(("D", 8), ("G", 4), ("A", 4), ("D", 8))
+D_SONG = track(("A", 4), ("D", 8), ("G", 4), ("D", 8))     # opens away from home: the second opinion is asked
+HOME_D_SONG = track(("D", 8), ("G", 4), ("A", 4), ("D", 8))  # starts, ends and dwells on D
 
 
 class FakeClient:
@@ -268,3 +269,19 @@ def test_a_created_song_whose_chords_claude_reads_differently_waits_for_the_owne
     assert decision.status == "review"
     assert "it was made to be in F minor, and Claude reading the chords says G major" in decision.concern()
     assert len(client.calls) == 1
+
+
+def test_a_song_that_starts_ends_and_dwells_on_the_chords_key_settles_without_asking_claude(tmp_path):
+    # owner, 2026-11-02: "is c the first and last chord of the song???" -- named the settled key of all 71 settled songs
+    # it applied to; the second opinion's IV/V mix-ups (Won't Get Fooled Again: "D major") no longer hold such a song.
+    client = FakeClient("KEY: G major")
+    decision, out = settle_song_key(tmp_path, HOME_D_SONG, "x", "y", client)
+    assert decision.confirmed and decision.source == "home" and decision.key == "D major" and out.key == "D major"
+    assert client.calls == []
+
+
+def test_a_blip_is_not_where_a_song_starts_but_a_real_other_last_chord_is_no_home():
+    from lyricvideo.key_estimate import home_key
+    assert home_key(track(("B", 0.4), ("C", 8), ("G", 4), ("C", 6))) == (0, "major")
+    assert home_key(track(("C", 8), ("Am", 4), ("F", 4), ("G", 3))) is None
+    assert home_key(track(("Am", 8), ("G", 2), ("Am7", 3))) == (9, "minor")

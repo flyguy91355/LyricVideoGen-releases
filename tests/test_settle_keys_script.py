@@ -53,7 +53,7 @@ def _run(monkeypatch, root, client, prefer_flats=True, argv=("--apply",)):
 def test_a_rerun_asks_nothing_about_songs_already_settled(tmp_path, monkeypatch, capsys):
     settled = _song(tmp_path, "settled-song", ["D", "G", "A", "D"], "D major")
     save_decision(settled, KeyDecision(status="confirmed", key="D major", source="agreed", chord_key="D major", at="then"))
-    fresh = _song(tmp_path, "fresh-song", ["D", "G", "A", "D"], "D major")
+    fresh = _song(tmp_path, "fresh-song", ["A", "D", "G", "D"], "D major")
     client = FakeClient("KEY: D major")
 
     assert _run(monkeypatch, tmp_path, client) == 0

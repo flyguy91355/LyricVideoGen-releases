@@ -2199,6 +2199,16 @@ def _disagreeing_second_opinion(monkeypatch):
     )
 
 
+def _chords_away_from_home(monkeypatch):
+    # Opens on C but ends on G: the home-chord rule (key_estimate.home_key) cannot settle it, so the second opinion decides.
+    monkeypatch.setattr(
+        "lyricvideo.pipeline.detect_chords",
+        lambda instrumental_stem_path, **kwargs: ChordTrack(
+            events=[ChordEvent(0.0, 6.0, "C"), ChordEvent(6.0, 8.0, "F"), ChordEvent(8.0, 10.0, "G")], key="", bpm=100.0,
+        ),
+    )
+
+
 def test_a_confirmed_key_is_what_the_video_and_the_saved_song_carry(tmp_path, monkeypatch):
     from lyricvideo.key_decision import load_decision
 
@@ -2221,6 +2231,7 @@ def test_a_song_whose_key_is_in_doubt_is_held_before_images_and_video_and_not_ma
     from lyricvideo.pipeline import HELD_MARKER, HeldBeforeVideo, song_video_path
 
     _patch_common(monkeypatch, tmp_path)
+    _chords_away_from_home(monkeypatch)
     _disagreeing_second_opinion(monkeypatch)
     for name in ("summarize_song_gist", "get_or_generate_image", "assemble_video"):
         monkeypatch.setattr(f"lyricvideo.pipeline.{name}", _must_not_run)
@@ -2240,6 +2251,7 @@ def test_no_second_opinion_also_holds_the_song(tmp_path, monkeypatch):
     from lyricvideo.pipeline import HeldBeforeVideo
 
     _patch_common(monkeypatch, tmp_path)
+    _chords_away_from_home(monkeypatch)
     monkeypatch.setattr("lyricvideo.key_decision.ask_published_key", lambda *a, **k: None)
     monkeypatch.setattr("lyricvideo.pipeline.assemble_video", _must_not_run)
 
@@ -2252,6 +2264,7 @@ def test_a_video_left_from_before_a_redo_is_moved_aside_when_the_new_key_is_held
     from lyricvideo.pipeline import HeldBeforeVideo
 
     _patch_common(monkeypatch, tmp_path)
+    _chords_away_from_home(monkeypatch)
     _disagreeing_second_opinion(monkeypatch)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -2269,6 +2282,7 @@ def test_the_owners_key_lets_the_held_song_resume_at_images_and_be_rendered_with
     from lyricvideo.pipeline import HELD_MARKER, HeldBeforeVideo
 
     _patch_common(monkeypatch, tmp_path)
+    _chords_away_from_home(monkeypatch)
     _disagreeing_second_opinion(monkeypatch)
     work_dir = tmp_path / "work"
     with pytest.raises(HeldBeforeVideo):
@@ -2289,6 +2303,7 @@ def test_resuming_a_key_held_song_without_choosing_a_key_holds_it_again(tmp_path
     from lyricvideo.pipeline import HeldBeforeVideo
 
     _patch_common(monkeypatch, tmp_path)
+    _chords_away_from_home(monkeypatch)
     _disagreeing_second_opinion(monkeypatch)
     work_dir = tmp_path / "work"
     with pytest.raises(HeldBeforeVideo):

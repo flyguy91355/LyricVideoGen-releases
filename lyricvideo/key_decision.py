@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .key_estimate import (
-    KeyEstimate, candidate_keys, chord_summary, estimate_key_from_chords, parse_key, respell_chord_track,
+    KeyEstimate, candidate_keys, chord_summary, estimate_key_from_chords, home_key, parse_key, respell_chord_track,
 )
 from .key_opinion import ask_published_key
 from .key_research import KeyResearch, research_song_key
@@ -68,7 +68,7 @@ class KeyDecision:
 
 def decide_key(
     estimate: KeyEstimate | None, published: str | None, owner: str | None, candidates: list[str],
-    researched: KeyResearch | None = None, requested: str | None = None,
+    researched: KeyResearch | None = None, requested: str | None = None, home: tuple[int, str] | None = None,
 ) -> KeyDecision:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     chord_key = estimate.name if estimate else ""
@@ -83,6 +83,8 @@ def decide_key(
         return KeyDecision(status="confirmed", key=estimate.name, source="agreed", **base)
     if estimate is not None and requested and parse_key(requested) == (estimate.tonic, estimate.mode):
         return KeyDecision(status="confirmed", key=estimate.name, source="requested", **base)
+    if estimate is not None and home == (estimate.tonic, estimate.mode):     # it starts, ends and dwells on that key's chord
+        return KeyDecision(status="confirmed", key=estimate.name, source="home", **base)
     researched_key = parse_key(researched.key) if researched is not None and researched.confident else None
     if estimate is not None and researched_key is not None:     # the cited sources settle a disagreement (key_research.py)
         return KeyDecision(status="confirmed", key=key_name(researched_key[0], researched_key[1], True), source="researched", **base)
@@ -141,7 +143,9 @@ def settle_song_key(
     as_asked = estimate is not None and requested and parse_key(requested) == (estimate.tonic, estimate.mode)
     # A song we made whose music is not in the key it was asked for (the music AI does not always play the chords it was
     # given; owner, 2026-11-02: "why cant ai know what key its in when ai made the song"): Claude reads its chords alone.
-    ask = owner is None and estimate is not None and anthropic_client is not None and not as_asked
+    home = home_key(chord_track)
+    at_home = estimate is not None and home == (estimate.tonic, estimate.mode)
+    ask = owner is None and estimate is not None and anthropic_client is not None and not as_asked and not at_home
     if ask:
         published = ask_published_key(anthropic_client, title, artist, candidates, chord_summary(chord_track),
                                       our_own=made_here)
@@ -149,7 +153,7 @@ def settle_song_key(
     agreed = estimate is not None and published and parse_key(published) == (estimate.tonic, estimate.mode)
     if ask and not agreed and not made_here:
         researched = research_song_key(anthropic_client, title, artist, candidates, chord_summary(chord_track))
-    decision = decide_key(estimate, published, owner, candidates, researched, requested=requested)
+    decision = decide_key(estimate, published, owner, candidates, researched, requested=requested, home=home)
     if save:
         save_decision(work_dir, decision)
     if decision.confirmed:

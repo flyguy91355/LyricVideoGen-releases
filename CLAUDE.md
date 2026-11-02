@@ -121,12 +121,12 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `requirements.txt` pins. A resume past this stage whose song has no chords runs it (and the key settle) first;
    `gui._stage_to_resume`: no chords -> detect_chords, chords + video -> render, chords + key decision -> images.
    **Key check** (`key_decision.py`; owner: video and description MUST show the real key):
-   `settle_song_key()` sets `chord_track.key` when the chord-based estimate (`key_estimate.py`) AGREES with a Claude
-   second opinion among its candidates (`key_opinion.py`); on disagreement `key_research.py` (Haiku 4.5, web search <=2,
-   ~4 cents) settles it only on high confidence + 2 cited sources (`source` "researched"; a Render Anyway resume of
+   `settle_song_key()` sets `chord_track.key` when the chord-based estimate (`key_estimate.py`) AGREES with the home chord
+   (`home_key`: first=last=most played; 11-02) or a Claude second opinion (`key_opinion.py`); on disagreement `key_research.py` (Haiku 4.5, web search <=2,
+   ~4 cents) settles it only on high confidence + 2 sources (`source` "researched"; a Render Anyway resume of
    an unresearched hold searches too); else the song is HELD before images and Flagged with **Set Key** (`key_owner.json`, wins, survives Redo). A Set Key the saved chords already carry confirms at once
-   (`confirm_owner_key`; the video needs no remaking); otherwise Render Anyway's resume runs `apply_saved_owner_key`
-   (respells, records the decision regardless). On an uploaded song (listed only while its EASY version waits on the key,
+   (`confirm_owner_key`; no remake); otherwise Render Anyway's resume runs `apply_saved_owner_key`
+   (respells, records the decision). On an uploaded song (listed only while its EASY version waits on the key,
    `easy_version_waits_on_key`, reason 'key (EASY waits)') `_settle_key_of_uploaded_song` respells and confirms without
    re-rendering, then offers Rebuild EASY version. `key_decision.json` records it. `parse_key` accepts every real
    spelling, refuses double accidentals and a capital 'M', never raises. `chord_theory.spell_in_key` spells by function: the key's own chords in its letters and

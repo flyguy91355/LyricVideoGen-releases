@@ -16,7 +16,7 @@ class FakeClient:
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=self.reply)])
 
 
-def make_song(tmp_path, stored_key, name="some-song", chords=(("D", 8), ("G", 4), ("A", 4), ("D", 8))):
+def make_song(tmp_path, stored_key, name="some-song", chords=(("A", 4), ("D", 8), ("G", 4), ("D", 8))):
     work_dir = tmp_path / name
     work_dir.mkdir()
     events, t = [], 0.0

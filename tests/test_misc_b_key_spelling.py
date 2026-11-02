@@ -9,7 +9,7 @@ from lyricvideo.models import ChordEvent, ChordTrack
 
 def _sharp_spelled_flat_key_track() -> ChordTrack:
     # I-IV-V-vi-ii in Bb major, spelled the way detect_chords() now hands them over (sharps, key "")
-    labels = ["A#", "D#", "F", "Gm", "Cm", "A#", "D#", "F", "A#"]
+    labels = ["A#", "D#", "F", "Gm", "Cm", "A#", "D#", "A#", "F"]     # ends on F: no home chord
     events = [ChordEvent(float(i * 2), float(i * 2 + 2), label) for i, label in enumerate(labels)]
     return ChordTrack(events=events, key="", bpm=100.0)
 
