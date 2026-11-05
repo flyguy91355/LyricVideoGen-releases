@@ -106,18 +106,19 @@ class _FakeMessages:
 
 
 class _FakeAnthropicClient:
-    def __init__(self, text="GENRE: Classic Rock"):
+    def __init__(self, text="GENRES: Classic Rock"):
         self.messages = _FakeMessages(text)
 
 
 def _make_work_dir(
     tmp_path: Path, artist: str, genre: str = "", video_id: str = "vid123", key: str = "", chords: list[str] = (),
+    folder: str = "my-song", genres: list[str] | None = None,
 ) -> Path:
-    work_dir = tmp_path / "my-song"
+    work_dir = tmp_path / folder
     work_dir.mkdir()
     info = {"title": "My Song", "artist": artist, "duration": 200.0, "alt_titles": []}
-    if genre:
-        info["genre"] = genre
+    if genres is not None or genre:
+        info["genres"] = list(genres) if genres is not None else [genre]
     (work_dir / "song_info.json").write_text(json.dumps(info), encoding="utf-8")
     events = [ChordEvent(start=float(i), end=float(i + 1), label=label) for i, label in enumerate(chords)]
     song = Song(
@@ -138,8 +139,6 @@ def _patch_state(monkeypatch, playlist_ids=None, genres=None, pending=None):
         "lyricvideo.youtube_playlists.save_playlist_id",
         lambda key, pid: playlist_ids.__setitem__(key, pid),
     )
-    monkeypatch.setattr("lyricvideo.youtube_playlists.load_genres", lambda: list(genres))
-    monkeypatch.setattr("lyricvideo.youtube_playlists.add_genre_if_new", lambda g: genres.append(g))
     monkeypatch.setattr("lyricvideo.youtube_playlists.load_pending_comments", lambda: list(pending))
     monkeypatch.setattr("lyricvideo.youtube_playlists.add_pending_comment", lambda c: pending.append(c))
     return playlist_ids, genres, pending
@@ -147,6 +146,7 @@ def _patch_state(monkeypatch, playlist_ids=None, genres=None, pending=None):
 
 def test_organize_video_adds_to_all_artist_and_genre_playlists(tmp_path, monkeypatch):
     playlist_ids, _genres, added_comments = _patch_state(monkeypatch)
+    _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock", folder="money", video_id="vid000")
     work_dir = _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock")
     client = _FakeYoutubeClient()
 
@@ -154,22 +154,24 @@ def test_organize_video_adds_to_all_artist_and_genre_playlists(tmp_path, monkeyp
     organize_video(client, _FakeAnthropicClient("COMMENT: Nice!"), work_dir)
 
     assert is_video_in_playlist(client, playlist_ids["all"], "vid123")
-    assert is_video_in_playlist(client, playlist_ids["artist:Pink Floyd"], "vid123")
+    assert client._playlist_items.members[playlist_ids["artist:Pink Floyd"]] == {"vid000", "vid123"}
     assert is_video_in_playlist(client, playlist_ids["genre:Classic Rock"], "vid123")
     assert len(added_comments) == 1
     assert added_comments[0].video_id == "vid123"
 
 
-def test_organize_video_adds_to_every_listed_artists_playlist(tmp_path, monkeypatch):
+def test_organize_video_adds_to_every_listed_artists_playlist_that_has_two_songs(tmp_path, monkeypatch):
     playlist_ids, _genres, _comments = _patch_state(monkeypatch)
-    work_dir = _make_work_dir(tmp_path, artist="Bryan Adams, Sting, Rod Stewart", genre="Pop Rock / Soft Rock")
+    for n in (1, 2):
+        _make_work_dir(tmp_path, artist="Sting", genre="Pop", folder=f"sting-{n}", video_id=f"sting{n}")
+    work_dir = _make_work_dir(tmp_path, artist="Bryan Adams, Sting, Rod Stewart", genre="Soft Rock")
     client = _FakeYoutubeClient()
 
     from lyricvideo.youtube_playlists import organize_video
     organize_video(client, _FakeAnthropicClient(), work_dir)
 
-    for artist in ["Bryan Adams", "Sting", "Rod Stewart"]:
-        assert is_video_in_playlist(client, playlist_ids[f"artist:{artist}"], "vid123")
+    assert client._playlist_items.members[playlist_ids["artist:Sting"]] == {"sting1", "sting2", "vid123"}
+    assert "artist:Bryan Adams" not in playlist_ids and "artist:Rod Stewart" not in playlist_ids
 
 
 def test_split_artists_splits_a_genuine_multi_artist_collaboration():
@@ -187,16 +189,16 @@ def test_split_artists_keeps_a_band_whose_own_name_has_a_comma_in_it():
     assert _split_artists("Earth, Wind & Fire") == ["Earth, Wind & Fire"]
 
 
-def test_organize_video_classifies_and_caches_genre_when_blank(tmp_path, monkeypatch):
+def test_organize_video_classifies_and_caches_genres_when_none_saved(tmp_path, monkeypatch):
     _patch_state(monkeypatch)
-    work_dir = _make_work_dir(tmp_path, artist="Lynyrd Skynyrd")  # no genre yet
+    work_dir = _make_work_dir(tmp_path, artist="Lynyrd Skynyrd")  # no genres yet
     client = _FakeYoutubeClient()
 
     from lyricvideo.youtube_playlists import organize_video
-    organize_video(client, _FakeAnthropicClient("GENRE: Southern Rock"), work_dir)
+    organize_video(client, _FakeAnthropicClient("GENRES: Southern Rock"), work_dir)
 
     info = json.loads((work_dir / "song_info.json").read_text(encoding="utf-8"))
-    assert info["genre"] == "Southern Rock"
+    assert info["genres"] == ["Southern Rock", "Rock"]
 
 
 def test_organize_video_does_not_reclassify_when_genre_already_cached(tmp_path, monkeypatch):
@@ -205,9 +207,9 @@ def test_organize_video_does_not_reclassify_when_genre_already_cached(tmp_path, 
     client = _FakeYoutubeClient()
 
     def _must_not_run(*a, **k):
-        raise AssertionError("should not reclassify a song that already has a genre")
+        raise AssertionError("should not reclassify a song that already has its genres")
 
-    monkeypatch.setattr("lyricvideo.youtube_playlists.classify_genre", _must_not_run)
+    monkeypatch.setattr("lyricvideo.youtube_playlists.classify_genres", _must_not_run)
 
     from lyricvideo.youtube_playlists import organize_video
     organize_video(client, _FakeAnthropicClient(), work_dir)  # must not raise
@@ -366,8 +368,9 @@ class _NoTextAnthropicClient:
 
 
 def test_organize_video_still_fills_the_all_and_artist_playlists_when_no_genre_comes_back(tmp_path, monkeypatch):
-    playlist_ids, genres, comments = _patch_state(monkeypatch)
-    work_dir = _make_work_dir(tmp_path, artist="Made Up Band")          # no genre cached yet
+    playlist_ids, _genres, comments = _patch_state(monkeypatch)
+    _make_work_dir(tmp_path, artist="Made Up Band", folder="other-song", video_id="vid000", genre="Pop")
+    work_dir = _make_work_dir(tmp_path, artist="Made Up Band")          # no genres cached yet
     before = (work_dir / "song_info.json").read_text(encoding="utf-8")
     client = _FakeYoutubeClient()
 
@@ -376,8 +379,7 @@ def test_organize_video_still_fills_the_all_and_artist_playlists_when_no_genre_c
 
     assert is_video_in_playlist(client, playlist_ids["all"], "vid123")
     assert is_video_in_playlist(client, playlist_ids["artist:Made Up Band"], "vid123")
-    assert genres == ["Classic Rock"]                                   # no "" (or fragment) added to the shared list
-    assert not any(key.startswith("genre:") for key in playlist_ids)
+    assert set(key for key in playlist_ids if key.startswith("genre:")) == set()
     assert (work_dir / "song_info.json").read_text(encoding="utf-8") == before
     assert comments == []                                               # a blank engagement comment is never queued
 
@@ -401,7 +403,7 @@ def test_organize_video_never_creates_a_song_info_json_holding_only_the_genre(tm
     client = _FakeYoutubeClient()
 
     from lyricvideo.youtube_playlists import organize_video
-    organize_video(client, _FakeAnthropicClient("GENRE: Southern Rock\nCOMMENT: Which instrument?"), work_dir)
+    organize_video(client, _FakeAnthropicClient("GENRES: Southern Rock\nCOMMENT: Which instrument?"), work_dir)
 
     assert not (work_dir / "song_info.json").exists()
     assert is_video_in_playlist(client, playlist_ids["all"], "vid123")
@@ -415,7 +417,7 @@ def test_organize_video_leaves_an_unreadable_song_info_json_byte_for_byte(tmp_pa
     (work_dir / "song_info.json").write_text("{not json", encoding="utf-8")
 
     from lyricvideo.youtube_playlists import organize_video
-    organize_video(_FakeYoutubeClient(), _FakeAnthropicClient("GENRE: Pop\nCOMMENT: Hi!"), work_dir)
+    organize_video(_FakeYoutubeClient(), _FakeAnthropicClient("GENRES: Pop\nCOMMENT: Hi!"), work_dir)
 
     assert (work_dir / "song_info.json").read_text(encoding="utf-8") == "{not json"
 
@@ -425,10 +427,10 @@ def test_organize_video_keeps_every_other_song_info_field_when_caching_the_genre
     work_dir = _make_work_dir(tmp_path, artist="Made Up Band")
 
     from lyricvideo.youtube_playlists import organize_video
-    organize_video(_FakeYoutubeClient(), _FakeAnthropicClient("GENRE: Pop\nCOMMENT: Hi!"), work_dir)
+    organize_video(_FakeYoutubeClient(), _FakeAnthropicClient("GENRES: Pop\nCOMMENT: Hi!"), work_dir)
 
     info = json.loads((work_dir / "song_info.json").read_text(encoding="utf-8"))
-    assert info["genre"] == "Pop" and info["title"] == "My Song" and info["artist"] == "Made Up Band"
+    assert info["genres"] == ["Pop"] and info["title"] == "My Song" and info["artist"] == "Made Up Band"
 
 
 # --- artist credits split into the real artists (issue #7 review, F146) ------------------------------------------------
@@ -453,7 +455,8 @@ def test_split_artists_keeps_a_plain_duo_and_a_band_with_the_whole():
 
 def test_organize_video_never_creates_a_playlist_for_a_made_up_artist_pair(tmp_path, monkeypatch):
     playlist_ids, _genres, _comments = _patch_state(monkeypatch)
-    work_dir = _make_work_dir(tmp_path, artist="Bryan Adams, Rod Stewart & Sting", genre="Pop Rock / Soft Rock")
+    _make_work_dir(tmp_path, artist="Bryan Adams, Rod Stewart & Sting", genre="Soft Rock", folder="b", video_id="v0")
+    work_dir = _make_work_dir(tmp_path, artist="Bryan Adams, Rod Stewart & Sting", genre="Soft Rock")
     client = _FakeYoutubeClient()
 
     from lyricvideo.youtube_playlists import organize_video
@@ -466,10 +469,12 @@ def test_organize_video_never_creates_a_playlist_for_a_made_up_artist_pair(tmp_p
 
 def test_organize_video_prefers_the_individual_artists_identify_saved(tmp_path, monkeypatch):
     playlist_ids, _genres, _comments = _patch_state(monkeypatch)
-    work_dir = _make_work_dir(tmp_path, artist="Hall & Oates, Made Up Singer", genre="Pop")
-    info = json.loads((work_dir / "song_info.json").read_text(encoding="utf-8"))
-    info["artists"] = ["Hall & Oates", "Made Up Singer"]
-    (work_dir / "song_info.json").write_text(json.dumps(info), encoding="utf-8")
+    for folder, video_id in (("other-song", "vid000"), ("my-song", "vid123")):
+        work_dir = _make_work_dir(tmp_path, artist="Hall & Oates, Made Up Singer", genre="Pop", folder=folder,
+                                  video_id=video_id)
+        info = json.loads((work_dir / "song_info.json").read_text(encoding="utf-8"))
+        info["artists"] = ["Hall & Oates", "Made Up Singer"]
+        (work_dir / "song_info.json").write_text(json.dumps(info), encoding="utf-8")
 
     from lyricvideo.youtube_playlists import organize_video
     organize_video(_FakeYoutubeClient(), _FakeAnthropicClient("COMMENT: Hi!"), work_dir)
@@ -713,3 +718,153 @@ def test_add_video_to_playlist_with_retry_reraises_an_unrelated_error_immediatel
         assert e.status_code == 429
 
     assert len(calls) == 1  # only tried once -- no retry for a non-404
+
+
+# --- owner, 2026-11-05: artist playlists only for 2+ songs; genres from one fixed list, several per song ---------------
+
+def _add_easy_version(song_dir: Path, video_id: str, artist: str) -> Path:
+    easy_dir = song_dir / "easychords"
+    easy_dir.mkdir()
+    (easy_dir / "song_info.json").write_text(json.dumps({"title": "My Song EasyChords", "artist": artist}),
+                                             encoding="utf-8")
+    save_song(Song(title="My Song EasyChords", audio_path="a.mp3", lines=[LyricLine(words=[Word(word="la")])],
+                   chord_track=ChordTrack(key="D major", events=[])), easy_dir / "lyrics_timed.json")
+    save_youtube_state(easy_dir, YoutubeState(video_id=video_id, uploaded_at="2026-09-10T15:00:00", title="t"))
+    return easy_dir
+
+
+def test_an_artist_with_one_song_and_its_easy_version_gets_no_artist_playlist(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    song_dir = _make_work_dir(tmp_path, artist="Albert King", genre="Blues")
+    easy_dir = _add_easy_version(song_dir, "easy1", "Albert King")
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), song_dir)
+    organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), easy_dir)
+
+    assert not any(key.startswith("artist:") for key in playlist_ids)
+    assert not any(title.startswith("Albert King") for title in client._playlists.inserted_titles)
+
+
+def test_an_artists_second_song_brings_every_one_of_their_videos_into_a_new_playlist(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    first = _make_work_dir(tmp_path, artist="Albert King", genre="Blues", folder="bad-sign", video_id="first")
+    _add_easy_version(first, "first-easy", "Albert King")
+    second = _make_work_dir(tmp_path, artist="Albert King", genre="Blues", folder="crosscut-saw", video_id="second")
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), second)
+
+    assert client._playlist_items.members[playlist_ids["artist:Albert King"]] == {"first", "first-easy", "second"}
+
+
+def test_a_video_goes_in_every_genre_it_fits_and_no_other_genre_playlist_is_made(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Eagles", genres=["Country Rock", "Country", "Rock"])
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), work_dir)
+
+    for genre in ("Country Rock", "Country", "Rock"):
+        assert is_video_in_playlist(client, playlist_ids[f"genre:{genre}"], "vid123")
+    assert {key for key in playlist_ids if key.startswith("genre:")} == {"genre:Country Rock", "genre:Country", "genre:Rock"}
+    assert "Country Rock - Play Along Videos" in client._playlists.inserted_titles
+
+
+def test_a_saved_genre_not_on_the_fixed_list_is_ignored(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Eagles", genres=["Pop Rock / Soft Rock", "Soft Rock"])
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(_FakeYoutubeClient(), _FakeAnthropicClient("COMMENT: Hi!"), work_dir)
+
+    assert {key for key in playlist_ids if key.startswith("genre:")} == {"genre:Soft Rock"}
+
+
+def test_a_video_is_taken_out_of_a_fixed_genre_playlist_it_no_longer_fits(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(
+        monkeypatch, playlist_ids={"genre:Blues": "PLB", "genre:Pop Rock / Soft Rock": "PLOLD"})
+    work_dir = _make_work_dir(tmp_path, artist="Eagles", genres=["Country Rock", "Rock"])
+    client = _FakeYoutubeClient()
+    client._playlists.existing_playlist_ids.update({"PLB", "PLOLD"})
+    client._playlist_items.members.update({"PLB": {"vid123"}, "PLOLD": {"vid123"}})
+
+    from lyricvideo.youtube_playlists import organize_video
+    removed = organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), work_dir)
+
+    assert not is_video_in_playlist(client, "PLB", "vid123")
+    assert is_video_in_playlist(client, "PLOLD", "vid123")      # an old-name playlist is the clean-up script's to delete
+    assert removed == ["genre:Blues"]
+
+
+def test_no_genre_answer_takes_the_video_out_of_no_genre_playlist(tmp_path, monkeypatch):
+    _patch_state(monkeypatch, playlist_ids={"genre:Blues": "PLB"})
+    work_dir = _make_work_dir(tmp_path, artist="Made Up Band")
+    client = _FakeYoutubeClient()
+    client._playlists.existing_playlist_ids.add("PLB")
+    client._playlist_items.members["PLB"] = {"vid123"}
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _NoTextAnthropicClient(), work_dir)
+
+    assert is_video_in_playlist(client, "PLB", "vid123")
+
+
+def test_an_easy_version_uses_its_songs_genres_and_the_song_is_classified_once(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    song_dir = _make_work_dir(tmp_path, artist="Made Up Band")                 # no genres yet
+    easy_dir = _add_easy_version(song_dir, "easy1", "Made Up Band")
+    calls = []
+    monkeypatch.setattr("lyricvideo.youtube_playlists.classify_genres",
+                        lambda *a, **k: calls.append(a) or ["Folk"])
+    client = _FakeYoutubeClient()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), easy_dir)
+    organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), song_dir)
+
+    assert len(calls) == 1
+    assert client._playlist_items.members[playlist_ids["genre:Folk"]] == {"easy1", "vid123"}
+    assert json.loads((song_dir / "song_info.json").read_text(encoding="utf-8"))["genres"] == ["Folk"]
+
+
+def test_our_own_ai_song_is_classified_with_the_style_it_was_made_in(tmp_path, monkeypatch):
+    _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Sundown Avenue")
+    (work_dir / "ai_song.json").write_text(json.dumps({"style": "Soft rock", "band": "Sundown Avenue"}), encoding="utf-8")
+    seen = {}
+
+    def fake_classify(client, title, artist, lyrics, style_hint=""):
+        seen["style"] = style_hint
+        return ["Soft Rock", "Rock"]
+
+    monkeypatch.setattr("lyricvideo.youtube_playlists.classify_genres", fake_classify)
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(_FakeYoutubeClient(), _FakeAnthropicClient("COMMENT: Hi!"), work_dir)
+
+    assert seen["style"] == "Soft rock"
+
+
+def test_a_sibling_video_gone_from_youtube_never_stops_the_new_upload_being_organized(tmp_path, monkeypatch):
+    playlist_ids, _genres, _comments = _patch_state(monkeypatch)
+    _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock", folder="gone", video_id="gone1")
+    work_dir = _make_work_dir(tmp_path, artist="Pink Floyd", genre="Classic Rock")
+    client = _FakeYoutubeClient()
+    real_list = client._playlist_items.list
+
+    def list_items(part, playlistId, videoId):
+        if videoId == "gone1":
+            raise _make_http_error(404)
+        return real_list(part, playlistId, videoId)
+
+    client._playlist_items.list = list_items
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(client, _FakeAnthropicClient("COMMENT: Hi!"), work_dir)
+
+    assert is_video_in_playlist(client, playlist_ids["artist:Pink Floyd"], "vid123")
+    assert is_video_in_playlist(client, playlist_ids["genre:Classic Rock"], "vid123")

@@ -117,6 +117,7 @@ scripts/fix_playlist_data_20260923.py
 scripts/import_image_library.py
 scripts/key_notes_2026-09-26.json
 scripts/preview_library_matches.py
+scripts/reorganize_playlists.py
 scripts/revalidate_hotwords.py
 scripts/settle_keys.py
 scripts/update_support_description.py

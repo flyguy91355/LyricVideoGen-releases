@@ -11,7 +11,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
 
 - **Linux and Windows.** Launchers `run_playalongvideoproduction.sh`/`.bat` call the venv's own `python`, never
   `source .venv/bin/activate`; `venv.py`'s `venv_python()` resolves `.venv/bin/python` vs
-  `.venv/Scripts/python.exe` -- read every `.venv/bin/python` below that way. `.gitattributes`: `*.sh`/`.githooks/*`
+  `.venv/Scripts/python.exe` -- read every `.venv/bin/python` so. `.gitattributes`: `*.sh`/`.githooks/*`
   LF, `*.bat` CRLF.
 - **GUI** (`gui.py`, CustomTkinter; desktop icon or the launcher): pick an audio file -- title/artist/lyrics are
   identified and fetched, chords detected; the title field is an optional override (its live YouTube-title preview
@@ -48,8 +48,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
       [--stage identify|separate|fetch_lyrics|align|detect_chords|images|render]
   ```
   `--stage` resumes from artifacts already in `--work-dir`; `run_pipeline()`'s `end_stage` stops early.
-- Needs `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` (template `.env.example`); unrelated to
-  AITrading beside it.
+- Needs `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` in `.env` (template `.env.example`).
 
 ## Pipeline stages (`lyricvideo/pipeline.py`, `STAGES`)
 
@@ -190,7 +189,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    - Like/Subscribe (`render.draw_like_subscribe`, 10-4; `like_subscribe_state`): a cursor clicks Subscribe, bell
      rings; in the count-in and the last `like_subscribe_lead_seconds` (10).
    - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
-     (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()`: past a line's plausible end "current" advances to the next line as an unsung preview (9-15),
+     (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()`: past a line's plausible end "current" advances to the next line as an unsung preview,
      blank after the last; previews show only `Settings.lyric_preview_lead_seconds` (3.0) ahead. `scroll_progress`
      uses `_plausible_line_end()`; word highlight keys on each word's start.
    - `layout.build_image_timeline()`: one segment per sung line; in gaps one per instrumental chord, short ones merged
@@ -230,9 +229,9 @@ as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's
 
 ## Create a Song
 
-`song_maker.py` (10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/words -> MiniMax
-Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3, `.txt` sidecar, `AI_GENERATED.txt`,
-`ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
+`song_maker.py` (10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/words (chord-only
+lines dropped: `drop_chord_lines`) -> MiniMax Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3,
+`.txt` sidecar, `AI_GENERATED.txt`, `ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
 typed name (asks MusicBrainz) or Claude's. `ai_song.json` = held until Mark Verified/Upload Anyway
 (`waits_to_be_watched`); key: the asked-for one if the chords match, else the chords' if Claude reading them agrees
 `Settings.scheduled_songs_per_day` (0 off): every 20 min if idle; random style/voice, a roster band or a new
@@ -269,7 +268,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   Anyway, Remove, Set Key (plain text, no emoji). A `<song>/easychords` row gets only Watch/Remove and Rebuild EASY
   version (`_on_rebuild_easy_flagged`); the other handlers refuse it (`_refuse_easy_variant`).
 - **YouTube Comments** / **Pending Engagement Comments**: collapsible and lazy, each one list + one editor
-  (`_DraftQueueView`); each reply names its video too (10-3, `PendingReply.video_title`); edits are kept per draft
+  (`_DraftQueueView`); each reply names its video too (`PendingReply.video_title`); edits are kept per draft
   id across refreshes, Approve posts the edited text, the header shows "N waiting".
 - **Settings popup** (`_open_settings_window`): built once, then hidden/shown (`_show_settings_dialog`/
   `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set, 50 ms x20: X11 needs it mapped); like the Update dialog; its confirms are
@@ -277,7 +276,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`) is debounced
   150 ms. A moved timing pass mark refreshes the lists once, on close
   (`_apply_pass_mark_change`). Building a `SettingsPanel` is wrapped in `_suppress_settings_save` (`load_from()` fires
-  `on_change` early; 9-11).
+  `on_change` early).
 - **SettingsPanel** (`settings_panel.py`; `~/.playalongvideoproduction/settings.json`): writes disk ONLY via Save
   Settings. A field differing from `self._baseline` gets a ● and a bold+orange label; Save shows an itemized `old → new`
   confirm, and a failed write (OSError) shows an error and stays unsaved; Discard reloads the baseline. gui's
@@ -310,8 +309,8 @@ parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is ref
 upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply; `_poll_update_queue` handles each message alone and always reschedules.
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
 `scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, never the working tree),
-re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits
-(HISTORY 9-13). The owner runs this checkout directly (commits reach them at once); releases keep the banner/changelog meaningful.
+re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits.
+The owner runs this checkout directly (commits reach them at once); releases keep the banner/changelog meaningful.
 
 ## YouTube upload + channel management
 
@@ -380,17 +379,18 @@ Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies
 `youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`). Every sent reply goes to Posted Replies (`youtube_posted_replies.json`,
 `record_posted_reply`, with `reply_id`); Save Edit there calls `update_comment` (50 units);
 replies sent since it was last opened (`load_posted_seen_at`) show ● NEW + an 'N new' count.
-**Channel organization** (spec 9-17): after every `schedule_upload()` gui calls `youtube_playlists.organize_video()`
-(fails soft; idempotent): All, EASY/3/4 and artist playlists first, then genre (`classify_genre`). EASY/3/4 membership
-is reconciled both ways from the real key (owner key > confirmed decision > saved key; an easychords version uses its
-shape key). Artists: song_info `artists` (`_artists_for`) else `_split_artists` ('A, B & C', comma-named acts kept
-whole). A cache miss re-finds the channel's playlist by exact title before creating one; `add_video_to_playlist_with_
+**Channel organization** (spec 9-17, 11-05): after every `schedule_upload()` gui calls `youtube_playlists.
+organize_video()` (fails soft; idempotent): All, EASY/3/4, then artist playlists (only 2+ uploaded songs, EASY = same
+song; all their videos), then genres (`classify_genres`: <=3 of fixed `GENRES`, + Rock for rock-family; cached in the
+song's song_info `genres`). EASY/3/4 and fixed-genre membership is reconciled both ways; EASY/3/4 from the real key
+(owner key > confirmed decision > saved key; easychords: its shape key). Artists: song_info `artists` else
+`_split_artists` ('A, B & C', comma-named acts kept whole).
+A cache miss re-finds the channel's playlist by exact title before creating one; `add_video_to_playlist_with_
 retry()` rides a fresh 404. State files (comment, playlist, youtube_state, token) use locked read-modify-write and
 atomic writes (`youtube_state.atomic_write_text`); an unreadable one is moved to `*.corrupt-<time>`. Key notes: only
 paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` keeps exactly one, first.
-`scripts/backfill_channel_organization.py` (loads `.env`; stops on quota; `--dry-run`, `--only`, `--key-notes`
-[default `scripts/key_notes_2026-09-26.json`]/`--no-key-notes`, `--fix-playlist-descriptions` backing up to
-`reports/`) applies this to older uploads.
+`scripts/backfill_channel_organization.py` (`-h`; audited keys: `key_notes_2026-09-26.json`) re-applies it;
+`scripts/reorganize_playlists.py` (plan; `--apply`, resumable) applies the 11-05 rules.
 
 ## deep_review
 
@@ -414,8 +414,7 @@ never silently replaced.
 cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scripts/python.exe
 ```
 
-`tests/conftest.py` points HOME/USERPROFILE at a throwaway home before any import and gives each test its own
-(per-user paths redirected; XDG_CACHE_HOME stays real): the suite
-never touches the real `~/.playalongvideoproduction`. Its font fixture lists Windows fonts too. Real-window tests
+`tests/conftest.py` gives each test a throwaway HOME/USERPROFILE, set before any import (XDG_CACHE_HOME stays real):
+the suite never touches the real `~/.playalongvideoproduction`. Its font fixture lists Windows fonts too. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
 Tests write only under pytest's `tmp_path`.

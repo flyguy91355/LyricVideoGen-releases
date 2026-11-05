@@ -163,3 +163,146 @@ def test_the_support_update_finds_nested_easy_chord_uploads(tmp_path):
     assert script.find_uploaded_videos(tmp_path) == {
         "MAIN": ("some-song", main_dir), "EASY": ("some-song/easychords", easy_dir),
     }
+
+
+# --- reorganize_playlists.py (owner, 2026-11-05: no 1-song artist playlists; genres from the fixed list) ---------------
+
+def _playlist(pid, title, count=1):
+    return {"id": pid, "title": title, "count": count}
+
+
+def test_the_rework_sorts_the_channels_playlists_and_touches_only_its_own_kinds():
+    script = _load_script("reorganize_playlists")
+    playlists = [
+        _playlist("P1", "Albert King - Play Along Videos", 2), _playlist("P2", "Eagles - Play Along Videos", 6),
+        _playlist("P3", "Crosby - Play Along Videos", 2), _playlist("P4", "Country - Play Along Videos", 24),
+        _playlist("P5", "Pop Rock / Soft Rock - Play Along Videos", 29), _playlist("P6", "#1 ALL Play Along Videos", 256),
+        _playlist("P7", "Play Along Videos", 1), _playlist("P8", "EASY CHORD Play Along Songs", 166),
+        _playlist("P9", "My Favourites", 3),
+    ]
+
+    sorted_ = script.sort_playlists(playlists, {"Albert King": 1, "Eagles": 6}, {"Country", "Pop Rock / Soft Rock"})
+
+    assert [p["id"] for p in sorted_["delete_artist"]] == ["P1", "P3"]
+    assert [p["id"] for p in sorted_["keep_artist"]] == ["P2"]
+    assert [p["id"] for p in sorted_["fixed_genre"]] == ["P4"]
+    assert [p["id"] for p in sorted_["old_genre"]] == ["P5"]
+    assert [p["id"] for p in sorted_["other"]] == ["P6", "P7", "P8", "P9"]
+
+
+class _Calls:
+    def __init__(self, log, name):
+        self._log, self._name = log, name
+
+    def __getattr__(self, method):
+        return lambda *a, **k: self._log.append((self._name, method)) or SimpleNamespace(execute=lambda: {})
+
+
+class _CountingClient:
+    def __init__(self):
+        self.log = []
+
+    def playlists(self):
+        return _Calls(self.log, "playlists")
+
+    def playlistItems(self):
+        return _Calls(self.log, "playlistItems")
+
+
+def test_the_quota_budget_stops_before_a_call_that_would_go_over():
+    script = _load_script("reorganize_playlists")
+    real = _CountingClient()
+    client = script.QuotaBudget(real, max_units=101)
+
+    client.playlistItems().list(part="id").execute()                 # 1
+    client.playlistItems().insert(part="snippet", body={}).execute()  # 50
+    client.playlists().delete(id="x").execute()                       # 50 -> 101
+    with pytest.raises(script.BudgetSpent):
+        client.playlists().list(part="id").execute()
+
+    assert client.used == 101 and len(real.log) == 3
+
+
+def test_the_plans_client_refuses_any_youtube_change():
+    script = _load_script("reorganize_playlists")
+    client = script.QuotaBudget(_CountingClient(), max_units=500, read_only=True)
+
+    client.playlists().list(part="id").execute()
+    with pytest.raises(RuntimeError):
+        client.playlists().delete(id="x")
+
+
+def _rework_fixture(tmp_path, monkeypatch, script, playlists):
+    for slug, vid, artist in (("song-a", "va", "Albert King"), ("song-b", "vb", "Eagles"), ("song-c", "vc", "Eagles")):
+        folder = _uploaded_song(tmp_path / slug, vid)
+        (folder / "song_info.json").write_text(json.dumps({"title": slug, "artist": artist, "genres": ["Blues"]}),
+                                               encoding="utf-8")
+    cache = {"artist:Albert King": "P1", "genre:Pop Rock / Soft Rock": "P5", "all": "PA"}
+    log = []
+    monkeypatch.setattr(script, "list_own_playlists", lambda yt: list(playlists))
+    monkeypatch.setattr(script, "load_playlist_ids", lambda: dict(cache))
+    monkeypatch.setattr(script, "remove_playlist_ids", lambda keys: [cache.pop(k, None) for k in keys])
+    monkeypatch.setattr(script, "load_genres", lambda: ["Pop Rock / Soft Rock"])
+    monkeypatch.setattr(script, "video_exists", lambda yt, vid: True)
+    monkeypatch.setattr(script, "delete_playlist", lambda yt, pid: log.append(("delete", pid)) or True)
+    monkeypatch.setattr(script, "load_key_overrides", lambda path: {})
+    return cache, log
+
+
+def test_the_rework_deletes_one_song_artist_playlists_sorts_every_video_then_drops_old_genres(tmp_path, monkeypatch):
+    script = _load_script("reorganize_playlists")
+    playlists = [_playlist("P1", "Albert King - Play Along Videos"), _playlist("P5", "Pop Rock / Soft Rock - Play Along Videos")]
+    cache, log = _rework_fixture(tmp_path, monkeypatch, script, playlists)
+
+    def organize(yt, ai, work_dir, **kwargs):
+        assert kwargs["include_artist_catalog"] is False
+        log.append(("organize", work_dir.name))
+        return []
+
+    monkeypatch.setattr(script, "organize_video", organize)
+
+    result = script.run("yt", "ai", tmp_path, apply=True, progress_path=tmp_path / "done.json")
+
+    assert log == [("delete", "P1"), ("organize", "song-a"), ("organize", "song-b"), ("organize", "song-c"),
+                   ("delete", "P5")]
+    assert "artist:Albert King" not in cache and "genre:Pop Rock / Soft Rock" not in cache and cache["all"] == "PA"
+    assert result["finished"] is True
+
+
+def test_the_rework_stops_at_the_budget_keeps_old_genres_and_a_rerun_carries_on(tmp_path, monkeypatch):
+    script = _load_script("reorganize_playlists")
+    playlists = [_playlist("P5", "Pop Rock / Soft Rock - Play Along Videos")]
+    _cache, log = _rework_fixture(tmp_path, monkeypatch, script, playlists)
+    budget = {"left": 2}
+
+    def organize(yt, ai, work_dir, **kwargs):
+        if budget["left"] == 0:
+            raise script.BudgetSpent("budget")
+        budget["left"] -= 1
+        log.append(("organize", work_dir.name))
+        return []
+
+    monkeypatch.setattr(script, "organize_video", organize)
+    progress = tmp_path / "done.json"
+
+    first = script.run("yt", "ai", tmp_path, apply=True, progress_path=progress)
+    assert first["finished"] is False and ("delete", "P5") not in log
+
+    budget["left"] = 5
+    second = script.run("yt", "ai", tmp_path, apply=True, progress_path=progress)
+
+    assert [entry for entry in log if entry[0] == "organize"] == [
+        ("organize", "song-a"), ("organize", "song-b"), ("organize", "song-c")]
+    assert second["finished"] is True and log[-1] == ("delete", "P5")
+
+
+def test_the_rework_plan_changes_nothing(tmp_path, monkeypatch):
+    script = _load_script("reorganize_playlists")
+    playlists = [_playlist("P1", "Albert King - Play Along Videos")]
+    _cache, log = _rework_fixture(tmp_path, monkeypatch, script, playlists)
+    monkeypatch.setattr(script, "organize_video", lambda *a, **k: log.append("organize"))
+
+    result = script.run("yt", "ai", tmp_path, apply=False, progress_path=tmp_path / "done.json")
+
+    assert log == [] and not (tmp_path / "done.json").exists()
+    assert [p["id"] for p in result["sorted"]["delete_artist"]] == ["P1"]

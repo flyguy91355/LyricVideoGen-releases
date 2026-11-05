@@ -14,7 +14,16 @@ _METADATA_ATTEMPTS = 3
 # not a quota stop, so without fitting the title first such a song failed on every retry, forever (issue #7 review, F142).
 YOUTUBE_TITLE_MAX = 100
 PLAY_ALONG_TITLE_SUFFIX = " - (Play Along Lyrics & Chords)"
-_GENRE_MAX_CHARS = 60
+
+# Owner, 2026-11-05: one simple, fixed genre list (no more minted "Singer-Songwriter / Folk Rock"-style names); a song goes
+# in every genre it really fits, up to MAX_GENRE_PICKS, and every rock-family song also goes in Rock.
+GENRES = [
+    "Rock", "Classic Rock", "Hard Rock", "Soft Rock", "Country", "Country Rock", "Bluegrass", "Folk", "Blues",
+    "R&B / Soul", "Pop", "Reggae", "Hip-Hop / Rap", "Metal", "Punk", "Alternative", "Southern Rock", "Gospel", "Jazz",
+]
+MAX_GENRE_PICKS = 3
+ROCK_FAMILY = {"Classic Rock", "Hard Rock", "Soft Rock", "Country Rock", "Southern Rock", "Alternative", "Punk", "Metal"}
+_GENRE_BY_LOWER = {g.lower(): g for g in GENRES}
 
 
 def _extract_text(response) -> str:
@@ -202,42 +211,38 @@ def draft_comment_reply(
     return fields["REPLY"].strip(), is_error_report
 
 
-def classify_genre(
-    anthropic_client, song_title: str, artist: str, full_lyrics: str,
-    known_genres: list[str], model: str = "claude-sonnet-5",
-) -> str:
-    """Picks one genre for this song's Genre playlist. The list is shared
-    and growing (see youtube_playlist_state.py) -- Claude is told to reuse
-    an existing entry whenever one reasonably fits, and only mint a new one
-    when the song genuinely doesn't fit anything already there, so the
-    channel's genre vocabulary doesn't fragment into near-duplicates.
-
-    Returns "" -- never a guess, never a cut-off fragment -- when no clean
-    answer came back (issue #7 review, F085: a thinking-only reply used to
-    raise and stop the whole playlist organization, and a reply cut off at
-    the old 50-token budget, e.g. "Classic Ro", became a permanent public
-    playlist and a new entry in the shared genre list). API errors still
-    propagate; organize_video treats a blank genre as "no genre playlist"."""
+def classify_genres(
+    anthropic_client, song_title: str, artist: str, full_lyrics: str, style_hint: str = "",
+    model: str = "claude-sonnet-5",
+) -> list[str]:
+    """The genre playlists this song belongs in: names from GENRES only, best fit first, at most MAX_GENRE_PICKS of
+    Claude's picks, plus "Rock" for any rock-family pick. `style_hint` is the style one of our own AI songs was made in.
+    Returns [] -- never a guess or a cut-off name -- when no clean answer comes back; API errors still propagate."""
     known_artist = artist.strip()
     artist_line = f'It is performed by "{known_artist}".\n' if known_artist else ""
-    genre_list = "\n".join(f"- {g}" for g in known_genres if g and g.strip())
+    style_line = f'It was made as a "{style_hint.strip()}" song.\n' if style_hint.strip() else ""
+    genre_list = "".join(f"- {g}\n" for g in GENRES)
     prompt = (
         f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
-        f"{artist_line}"
-        "Classify this song's musical genre for a YouTube playlist. Here is the "
-        f"list of genres already used on this channel:\n{genre_list}\n\n"
-        "If one of these already fits reasonably well, reuse it EXACTLY as written. "
-        "Only propose a new genre name if none of them fit. Reply with EXACTLY one line:\n"
-        "GENRE: <the genre name>"
+        f"{artist_line}{style_line}"
+        "Which of these YouTube playlist genres does this song genuinely belong to?\n"
+        f"{genre_list}\n"
+        f"Pick 1 to {MAX_GENRE_PICKS}, best fit first, using the names exactly as written. Reply with EXACTLY one line:\n"
+        "GENRES: <name>; <name>; <name>"
     )
     try:
-        fields = _ask_for_fields(anthropic_client, model, 100, prompt, ["GENRE"], ["GENRE"])
+        fields = _ask_for_fields(anthropic_client, model, 100, prompt, ["GENRES"], ["GENRES"])
     except MetadataGenError:
-        return ""
-    genre = fields["GENRE"].strip()
-    if len(genre) > _GENRE_MAX_CHARS or "\n" in genre:
-        return ""
-    return genre
+        return []
+    picks: list[str] = []
+    for name in fields["GENRES"].replace(",", ";").split(";"):
+        genre = _GENRE_BY_LOWER.get(name.strip().strip(".").lower())
+        if genre and genre not in picks:
+            picks.append(genre)
+    picks = picks[:MAX_GENRE_PICKS]
+    if "Rock" not in picks and ROCK_FAMILY.intersection(picks):
+        picks.append("Rock")
+    return picks
 
 
 def draft_engagement_comment(anthropic_client, song_title: str, model: str = "claude-sonnet-5") -> str:

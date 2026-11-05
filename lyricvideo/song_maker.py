@@ -189,6 +189,21 @@ def name_new_band(
     raise RuntimeError(f"Claude suggested no free band name for a {voice.lower()} {style} band; try again.")
 
 
+_CHORD = re.compile(r"[A-G][#b]?(?:maj|min|m|dim|aug|sus|add)?\d*(?:sus\d|add\d)?(?:/[A-G][#b]?)?")
+_CHORD_SEPARATORS = re.compile(r"[\s|,.\-–—>→]+")
+
+
+def _is_chord_line(line: str) -> bool:
+    tokens = [t for t in _CHORD_SEPARATORS.split(line.strip()) if t]
+    return bool(tokens) and all(_CHORD.fullmatch(t) for t in tokens)
+
+
+def drop_chord_lines(tagged_lyrics: str) -> str:
+    """The lyrics without lines made only of chord names ("G C D Em" under [Intro]): MiniMax sings every line it gets,
+    so it sang the chord names (2026-11-05, Hands Like My Father's)."""
+    return "\n".join(line for line in tagged_lyrics.splitlines() if not _is_chord_line(line))
+
+
 def sung_lines(tagged_lyrics: str) -> list[str]:
     """The lyric lines without the section tags: the sidecar the lyrics check and the video use."""
     return [line.strip() for line in tagged_lyrics.splitlines() if line.strip() and not _SECTION.fullmatch(line.strip())]
@@ -275,6 +290,7 @@ def write_song(anthropic_client, voice: str, style: str, about: str, band: dict,
         "- Lyrics with section tags on their own lines: [Intro], [Verse], [Pre Chorus], [Chorus], [Bridge], [Interlude], "
         "[Solo], [Outro]. Shape: Intro, Verse, Chorus, Verse, Chorus, Bridge, Chorus, Outro (a Pre Chorus is fine). An "
         "instrumental section is just its tag. About 3 minutes long.\n"
+        "- Never write chord names in the lyrics: every line under a tag is sung, so chords go only in \"chords\".\n"
         "- Short lines (at most 9 words), plain words that are easy to sing and to understand.\n"
         "- Write every repeat out in full: never '(x2)', 'Repeat chorus' or lines in parentheses (no backing vocals).\n"
         f"- Under 2,500 characters in all. Never name a real artist, song or brand, never copy real lyrics.\n\n"
@@ -284,6 +300,8 @@ def write_song(anthropic_client, voice: str, style: str, about: str, band: dict,
     problem = ""
     for _attempt in range(_ATTEMPTS):
         data = _ask_json(anthropic_client, prompt, 3000, model)
+        if isinstance(data, dict) and isinstance(data.get("lyrics"), str):
+            data["lyrics"] = drop_chord_lines(data["lyrics"])
         problem = _plan_problem(data)
         if not problem:
             return SongPlan(

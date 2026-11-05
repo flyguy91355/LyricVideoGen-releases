@@ -1,6 +1,6 @@
 """Orchestrates channel organization for one already-uploaded video:
-All/Artist/Genre playlist membership, plus queuing its drafted engagement
-comment for owner review. Called automatically right after every
+All/EASY/3-/4-CHORD, artist (2+ songs) and genre (fixed list, several per song)
+playlist membership, plus queuing its drafted engagement comment for owner review. Called automatically right after every
 schedule_upload() (see gui.py's two upload call sites) and by
 scripts/backfill_channel_organization.py for the videos that predate this
 feature. See
@@ -19,14 +19,15 @@ from .chord_theory import NOTES_SHARP, is_easy_key, key_name, load_easy_chord_ca
 from .key_decision import load_decision, load_owner_key
 from .key_estimate import parse_key
 from .models import load_song
+from .ai_generated import AI_SONG_FILE
 from .youtube import (
     add_video_to_playlist, create_playlist, find_own_playlist_by_title, find_playlist_by_id, get_playlist_description,
-    remove_video_from_playlist,
+    is_quota_exceeded_error, remove_video_from_playlist,
 )
 from .youtube_comment_state import PendingComment, add_pending_comment, load_pending_comments
-from .youtube_metadata import classify_genre, draft_engagement_comment
-from .youtube_playlist_state import add_genre_if_new, load_genres, load_playlist_ids, save_playlist_id
-from .youtube_state import atomic_write_text, load_youtube_state
+from .youtube_metadata import GENRES, classify_genres, draft_engagement_comment
+from .youtube_playlist_state import load_playlist_ids, save_playlist_id
+from .youtube_state import EASY_CHORD_SUBDIR, atomic_write_text, load_youtube_state, uploaded_song_dirs
 
 _PLAYLIST_PROPAGATION_RETRIES = 3
 _PLAYLIST_PROPAGATION_DELAY_SECONDS = 2.0
@@ -38,6 +39,19 @@ _PLAYLIST_LOCK = threading.RLock()
 ALL_PLAYLIST_KEY = "all"
 ALL_PLAYLIST_TITLE = "Play Along Videos - All"
 ALL_PLAYLIST_DESCRIPTION = "Every play-along lyrics & chords video on this channel."
+
+# Owner, 2026-11-05: "I dont want a playlist for a artist that i have only 1 song" -- a song and its EASY CHORD version
+# are one song.
+MIN_SONGS_FOR_ARTIST_PLAYLIST = 2
+PLAYLIST_TITLE_SUFFIX = " - Play Along Videos"          # every artist and genre playlist's title ends with this
+
+
+def artist_playlist_title(artist: str) -> str:
+    return f"{artist}{PLAYLIST_TITLE_SUFFIX}"
+
+
+def genre_playlist_title(genre: str) -> str:
+    return f"{genre}{PLAYLIST_TITLE_SUFFIX}"
 
 
 def _join_names(names: list[str]) -> str:
@@ -201,15 +215,84 @@ def _read_song_info(work_dir: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _save_genre(work_dir: Path, genre: str) -> None:
-    """Caches the genre in song_info.json -- only when that file really exists and reads cleanly, merged into a fresh
-    read of it so nothing else in it is lost, and written atomically. A pre-merge song without the file gets none (a
-    file holding only {"genre": ...} made the next Redo fail with KeyError 'title')."""
+def _save_genres(work_dir: Path, genres: list[str]) -> None:
+    """Caches the genres in song_info.json ("genres"; the old single "genre" is left as it was) -- only when that file
+    really exists and reads cleanly, merged into a fresh read of it so nothing else in it is lost, and written
+    atomically. A pre-merge song without the file gets none (a file holding only the genre made the next Redo fail with
+    KeyError 'title')."""
     fresh = _read_song_info(work_dir)
     if fresh is None or not fresh.get("title"):
         return
-    fresh["genre"] = genre
+    fresh["genres"] = genres
     atomic_write_text(Path(work_dir) / "song_info.json", json.dumps(fresh))
+
+
+def song_folder(work_dir: Path) -> Path:
+    """The song's own folder: an EASY CHORD version (`<song>/easychords`) belongs to its song."""
+    work_dir = Path(work_dir)
+    return work_dir.parent if work_dir.name == EASY_CHORD_SUBDIR else work_dir
+
+
+def saved_genres(song_dir: Path) -> list[str] | None:
+    """The song's cached genres (fixed-list names only), or None when none were saved yet."""
+    listed = (_read_song_info(song_dir) or {}).get("genres")
+    if not isinstance(listed, list):
+        return None
+    return [g for g in GENRES if g in listed]
+
+
+def _ai_style(song_dir: Path) -> str:
+    """The style one of our own AI songs was made in (ai_song.json), else ""."""
+    try:
+        data = json.loads((Path(song_dir) / AI_SONG_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(data.get("style") or "") if isinstance(data, dict) else ""
+
+
+def genres_for(anthropic_client, work_dir: Path, song=None) -> list[str]:
+    """The genres a video's SONG belongs in: cached in the song folder's song_info.json, else asked of Claude once
+    (and cached there, so its EASY CHORD version never asks again). [] when Claude gave no usable answer."""
+    song_dir = song_folder(work_dir)
+    cached = saved_genres(song_dir)
+    if cached is not None:
+        return cached
+    info = _read_song_info(song_dir) or {}
+    if song is None or Path(work_dir) != song_dir:
+        song = load_song(song_dir / "lyrics_timed.json")
+    title = info.get("title") or song.title or song_dir.name
+    lyrics = "\n".join(line.text for line in song.lines)
+    try:
+        genres = classify_genres(anthropic_client, title, str(info.get("artist") or ""), lyrics,
+                                 style_hint=_ai_style(song_dir))
+    except Exception as e:
+        print(f"WARNING: could not classify genres for {song_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
+        return []
+    if genres:
+        _save_genres(song_dir, genres)
+    return genres
+
+
+def uploaded_videos_by_artist(work_root: Path) -> dict[str, dict[str, list[str]]]:
+    """artist -> {song folder name -> its uploaded video ids (the song's and its EASY CHORD version's)}, over every
+    uploaded, not-banned video under work_root."""
+    by_artist: dict[str, dict[str, list[str]]] = {}
+    for _slug, path, state in uploaded_song_dirs(work_root):
+        for artist in _artists_for(_read_song_info(path) or {}):
+            by_artist.setdefault(artist, {}).setdefault(song_folder(path).name, []).append(state.video_id)
+    return by_artist
+
+
+def _add_other_video(youtube_client, playlist_id: str, video_id: str, label: str) -> None:
+    """Adds another of the artist's videos; one gone from YouTube is skipped with a warning (a quota stop still raises)."""
+    from googleapiclient.errors import HttpError
+
+    try:
+        add_video_to_playlist_with_retry(youtube_client, playlist_id, video_id)
+    except HttpError as e:
+        if is_quota_exceeded_error(e):
+            raise
+        print(f"WARNING: could not add video {video_id} to {label}: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 def _artists_for(info: dict) -> list[str]:
@@ -259,12 +342,15 @@ def wanted_easy_like_playlists(work_dir: Path, song, key_override: str | None = 
 
 def organize_video(
     youtube_client, anthropic_client, work_dir: Path, *, key_override: str | None = None,
+    include_artist_catalog: bool = True,
 ) -> list[str]:
-    """Puts one uploaded video in its playlists and queues its engagement comment. The All, EASY/3-/4-CHORD and artist
-    playlists come first; the genre (one Claude call) is looked up after them and fails soft, so a bad or missing genre
-    answer never keeps a video out of every playlist (issue #7 review, F085). EASY/3-/4-CHORD membership is reconciled
-    both ways: added when the key qualifies, removed from any of those it no longer qualifies for (F148). Returns the
-    cache keys of the playlists it took the video OUT of (usually none)."""
+    """Puts one uploaded video in its playlists and queues its engagement comment. The All and EASY/3-/4-CHORD playlists
+    come first, then its artists' playlists -- only an artist with MIN_SONGS_FOR_ARTIST_PLAYLIST uploaded songs has one,
+    and every video of theirs goes in -- then its genres (genres_for: one Claude call per song, failing soft, so a
+    missing answer never keeps a video out of the other playlists; issue #7 review, F085). EASY/3-/4-CHORD and the
+    fixed-list genre playlists are reconciled both ways: the video is taken back out of any it no longer belongs in
+    (F148). `include_artist_catalog=False` adds only this video to its artist playlists (scripts/reorganize_playlists.py
+    visits every video itself). Returns the cache keys of the playlists it took the video OUT of (usually none)."""
     work_dir = Path(work_dir)
     removed: list[str] = []
     state = load_youtube_state(work_dir)
@@ -275,8 +361,6 @@ def organize_video(
     song = load_song(work_dir / "lyrics_timed.json")   # the song's key, its chord count, and genre classification below
     known = info or {}
     title = known.get("title") or song.title or state.title or work_dir.name
-    artist_field = str(known.get("artist") or "")
-    genre = str(known.get("genre") or "").strip()
 
     all_playlist_id = get_or_create_playlist(
         youtube_client, ALL_PLAYLIST_KEY, ALL_PLAYLIST_TITLE, ALL_PLAYLIST_DESCRIPTION,
@@ -294,30 +378,35 @@ def organize_video(
             if remove_video_from_playlist(youtube_client, cached_ids[key], state.video_id):
                 removed.append(key)
 
-    for artist in _artists_for(known):
+    artists = _artists_for(known)
+    by_artist = uploaded_videos_by_artist(song_folder(work_dir).parent) if artists else {}
+    for artist in artists:
+        songs = by_artist.get(artist, {})
+        if len(songs) < MIN_SONGS_FOR_ARTIST_PLAYLIST:
+            continue
         artist_playlist_id = get_or_create_playlist(
-            youtube_client, f"artist:{artist}", f"{artist} - Play Along Videos",
+            youtube_client, f"artist:{artist}", artist_playlist_title(artist),
             f"Every play-along lyrics & chords video on this channel by {artist}.",
         )
         add_video_to_playlist_with_retry(youtube_client, artist_playlist_id, state.video_id)
+        others = {v for videos in songs.values() for v in videos} - {state.video_id} if include_artist_catalog else set()
+        for video_id in sorted(others):
+            _add_other_video(youtube_client, artist_playlist_id, video_id, artist_playlist_title(artist))
 
-    if not genre:
-        full_lyrics = "\n".join(line.text for line in song.lines)
-        try:
-            genre = classify_genre(anthropic_client, title, artist_field, full_lyrics, load_genres())
-        except Exception as e:
-            print(f"WARNING: could not classify a genre for {work_dir.name}: {type(e).__name__}: {e}", file=sys.stderr)
-            genre = ""
-        if genre:
-            add_genre_if_new(genre)
-            _save_genre(work_dir, genre)
-
-    if genre:
+    genres = genres_for(anthropic_client, work_dir, song)
+    for genre in genres:
         genre_playlist_id = get_or_create_playlist(
-            youtube_client, f"genre:{genre}", f"{genre} - Play Along Videos",
+            youtube_client, f"genre:{genre}", genre_playlist_title(genre),
             f"Every {genre} play-along lyrics & chords video on this channel.",
         )
         add_video_to_playlist_with_retry(youtube_client, genre_playlist_id, state.video_id)
+    if genres:
+        cached_ids = load_playlist_ids()
+        for genre in GENRES:
+            key = f"genre:{genre}"
+            if genre not in genres and cached_ids.get(key):
+                if remove_video_from_playlist(youtube_client, cached_ids[key], state.video_id):
+                    removed.append(key)
 
     if not state.engagement_comment_posted:
         already_pending = any(c.video_id == state.video_id for c in load_pending_comments())

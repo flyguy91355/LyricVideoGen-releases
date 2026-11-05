@@ -5251,3 +5251,21 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   shifts did not help (70.3%, 5x slower) -- the swing is in the grader: the timing gate has read the HINTED transcript
   since 9-27 (it overwrites transcript.json), and the same placement scored 70-91% across three hinted listenings but
   94.6-97.3% across three plain ones.
+
+## HISTORY 11-05: sung chord names; playlists reworked
+
+- Owner: Hands Like My Father's "has the chord names said in the very beginning of the song". Claude had written the
+  progression ("G C D Em" / "G C D") under [Intro] although the prompt said an instrumental section is just its tag, and
+  MiniMax sings every line it gets (it sang them four times). 3 of 13 AI songs had it: Hands Like My Father's, Cracked
+  Bowl Kitchen (also under [Solo], sung mid-song straight into the next chorus) and Thunder Keeps Me Company (uploaded).
+  song_maker now drops chord-name-only lines (`drop_chord_lines`) and the prompt forbids them. Hands Like My Father's
+  was fixed in place: the stems run 1105 samples (the mp3 encoder delay) behind ffmpeg's decode; the vocal stem was
+  subtracted from the mix and muted before 15.9 s (originals in `sung_chord_names_original/`); re-separating the new
+  intro shows the vocal at -70 dB where it was -17 dB. Whisper still "hears" GCD there over the bare music.
+- Owner: "I dont want a playlist for a artist that i have only 1 song" and genres "country, country rock, rock,
+  bluegrass, and all the others", every song real or AI, no empty genre playlist. Chosen: one fixed list of 19 genres,
+  up to 3 per song plus Rock for rock-family songs, a song and its EASY version are one song. The channel had 125
+  playlists: 96 artist ones (58 for a one-song artist, plus leftovers like "Crosby"/"Stills"), 22 Claude-minted genres
+  ("Singer-Songwriter / Folk Rock", "60s Pop Rock / British Invasion"). Checked on 11 songs before use (Take It Easy:
+  Country Rock, Classic Rock, Soft Rock, Rock; the bluegrass AI band: Bluegrass, Country, Folk).
+  `scripts/reorganize_playlists.py` moves the channel over within a per-run quota budget (uploads cost ~1,600 a day each).

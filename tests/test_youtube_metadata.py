@@ -1,7 +1,8 @@
 from lyricvideo.youtube_metadata import (
     build_easy_chord_title,
     build_play_along_title,
-    classify_genre,
+    GENRES,
+    classify_genres,
     draft_comment_reply,
     draft_engagement_comment,
     generate_video_metadata,
@@ -141,32 +142,34 @@ def test_draft_comment_reply_detects_non_error_comment():
     assert reply == "Glad you liked it!"
 
 
-def test_classify_genre_returns_the_parsed_genre():
-    client = _FakeAnthropicClient("GENRE: Classic Rock")
+def test_classify_genres_returns_the_fixed_list_names_it_picked_best_first():
+    client = _FakeAnthropicClient("GENRES: Country Rock; country; Soft Rock")
 
-    genre = classify_genre(client, "Free Bird", "Lynyrd Skynyrd", "lyrics here", known_genres=["Classic Rock"])
+    genres = classify_genres(client, "Take It Easy", "Eagles", "lyrics here")
 
-    assert genre == "Classic Rock"
+    assert genres == ["Country Rock", "Country", "Soft Rock", "Rock"]      # every rock-family song is in Rock too
 
 
-def test_classify_genre_includes_every_known_genre_in_the_prompt():
-    client = _FakeAnthropicClient("GENRE: Classic Rock")
+def test_classify_genres_offers_exactly_the_fixed_list_and_the_style_hint():
+    client = _FakeAnthropicClient("GENRES: Bluegrass")
 
-    classify_genre(client, "Free Bird", "Lynyrd Skynyrd", "lyrics here", known_genres=["Classic Rock", "Country"])
+    classify_genres(client, "Some Song", "Some Band", "lyrics", style_hint="Acoustic")
 
     prompt = client.messages._prompt_text()
-    assert "Classic Rock" in prompt
-    assert "Country" in prompt
+    assert all(f"- {g}\n" in prompt for g in GENRES)
+    assert "Acoustic" in prompt
 
 
-def test_classify_genre_can_propose_a_genre_not_in_the_known_list():
-    """The list is a starting point, not a hard cap -- a genuinely new
-    genre gets minted rather than forced into an ill-fitting bucket."""
-    client = _FakeAnthropicClient("GENRE: Bluegrass")
+def test_classify_genres_drops_names_not_on_the_list_and_keeps_at_most_three_picks():
+    client = _FakeAnthropicClient("GENRES: Space Polka, Blues, Jazz, Gospel, Pop, Blues")
 
-    genre = classify_genre(client, "Some Song", "Some Artist", "lyrics", known_genres=["Classic Rock"])
+    assert classify_genres(client, "Some Song", "Some Band", "lyrics") == ["Blues", "Jazz", "Gospel"]
 
-    assert genre == "Bluegrass"
+
+def test_classify_genres_returns_nothing_when_no_name_is_on_the_list():
+    client = _FakeAnthropicClient("GENRES: Space Polka")
+
+    assert classify_genres(client, "Some Song", "Some Band", "lyrics") == []
 
 
 def test_draft_engagement_comment_returns_the_parsed_text():
@@ -268,7 +271,7 @@ class _CutOffResponse:
 
 # --- comment replies, genres and engagement comments: thinking off, retried, never a blank or cut-off answer ----------
 # Issue #7 review, F084/F085: with Sonnet 5's default adaptive thinking these small calls could return no text at all
-# (a thinking-only reply), which aborted the whole comment scan / playlist organization, and classify_genre's 50-token
+# (a thinking-only reply), which aborted the whole comment scan / playlist organization, and the old genre call's 50-token
 # budget could cut a genre in half ("Classic Ro") that then became a permanent public playlist.
 
 def test_draft_comment_reply_turns_thinking_off():
@@ -300,48 +303,40 @@ def test_draft_comment_reply_raises_rather_than_returning_a_blank_draft():
     assert len(client.messages.calls) == 3
 
 
-def test_classify_genre_turns_thinking_off_with_room_to_answer():
-    client = _ScriptedClient(["GENRE: Classic Rock"])
+def test_classify_genres_turns_thinking_off_with_room_to_answer():
+    client = _ScriptedClient(["GENRES: Classic Rock"])
 
-    classify_genre(client, "Some Song", "Some Band", "la la", known_genres=["Classic Rock"])
+    classify_genres(client, "Some Song", "Some Band", "la la")
 
     call = client.messages.calls[0]
     assert call["thinking"] == {"type": "disabled"} and call["max_tokens"] >= 100
 
 
-def test_classify_genre_returns_blank_instead_of_raising_when_no_text_ever_comes_back():
+def test_classify_genres_returns_nothing_instead_of_raising_when_no_text_ever_comes_back():
     client = _ScriptedClient([_THINKING_ONLY] * 3)
 
-    assert classify_genre(client, "Some Song", "Some Band", "la la", known_genres=["Classic Rock"]) == ""
+    assert classify_genres(client, "Some Song", "Some Band", "la la") == []
 
 
-def test_classify_genre_never_returns_a_cut_off_genre():
+def test_classify_genres_never_uses_a_cut_off_answer():
     class _Messages:
         def __init__(self):
             self.calls = 0
 
         def create(self, **kwargs):
             self.calls += 1
-            return _CutOffResponse("GENRE: Classic Ro")
+            return _CutOffResponse("GENRES: Classic Rock; Blu")
 
     client = type("Client", (), {"messages": _Messages()})()
 
-    assert classify_genre(client, "Some Song", "Some Band", "la la", known_genres=[]) == ""
+    assert classify_genres(client, "Some Song", "Some Band", "la la") == []
     assert client.messages.calls == 3
 
 
-def test_classify_genre_returns_blank_for_a_reply_without_a_genre_line():
+def test_classify_genres_returns_nothing_for_a_reply_without_a_genres_line():
     client = _ScriptedClient(["I think it is rock.", "Hmm.", "Rock, probably."])
 
-    assert classify_genre(client, "Some Song", "Some Band", "la la", known_genres=[]) == ""
-
-
-def test_classify_genre_leaves_blank_genres_out_of_the_prompt():
-    client = _ScriptedClient(["GENRE: Country"])
-
-    classify_genre(client, "Some Song", "Some Band", "la la", known_genres=["Country", "", "  "])
-
-    assert "\n- \n" not in client.messages.calls[0]["messages"][0]["content"]
+    assert classify_genres(client, "Some Song", "Some Band", "la la") == []
 
 
 def test_draft_engagement_comment_turns_thinking_off_and_raises_rather_than_returning_blank():

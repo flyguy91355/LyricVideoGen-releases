@@ -140,6 +140,35 @@ def find_own_playlist_by_title(youtube_client, title: str) -> str | None:
             return None
 
 
+def list_own_playlists(youtube_client) -> list[dict]:
+    """[{"id", "title", "count"}] for every one of the connected channel's own playlists (1 quota unit per 50)."""
+    found, page_token = [], None
+    while True:
+        response = youtube_client.playlists().list(
+            part="snippet,contentDetails", mine=True, maxResults=50, pageToken=page_token,
+        ).execute()
+        for item in response.get("items", []):
+            found.append({"id": item["id"], "title": item.get("snippet", {}).get("title", ""),
+                          "count": int(item.get("contentDetails", {}).get("itemCount", 0))})
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            return found
+
+
+def delete_playlist(youtube_client, playlist_id: str) -> bool:
+    """Deletes one of the channel's own playlists (50 quota units); the videos in it are untouched. False when it was
+    already gone."""
+    from googleapiclient.errors import HttpError
+
+    try:
+        youtube_client.playlists().delete(id=playlist_id).execute()
+    except HttpError as e:
+        if e.status_code == 404:
+            return False
+        raise
+    return True
+
+
 def get_playlist_description(youtube_client, playlist_id: str) -> str | None:
     """The playlist's current public description, or None when the playlist no longer exists."""
     response = youtube_client.playlists().list(part="snippet", id=playlist_id).execute()

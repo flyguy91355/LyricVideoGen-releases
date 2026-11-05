@@ -88,6 +88,21 @@ def test_claudes_song_is_asked_again_until_it_is_usable():
     assert sung_lines(plan.lyrics)[0] == "line 0 of the verse" and "[Chorus]" not in sung_lines(plan.lyrics)
 
 
+def test_chord_names_written_as_lyrics_never_reach_minimax():
+    # 2026-11-05: Claude put "G C D Em" under [Intro] and MiniMax sang the chord names (Hands Like My Father's).
+    lyrics = ("[Intro]\nG C D Em\nG | C | D\n\n[Verse]\nA day like this\nAm I wrong\n" + "\n".join(
+        f"line {i} of the verse" for i in range(6)) + "\n\n[Solo]\nEm - C - G - D\nDsus4 Cadd9 G/B\n\n[Chorus]\nsing it loud\n")
+    claude = FakeClaude({**PLAN, "lyrics": lyrics})
+
+    plan = write_song(claude, "Female", "Hard rock", "x", ROSTER["artists"][0])
+
+    assert sung_lines(plan.lyrics)[:2] == ["A day like this", "Am I wrong"]
+    assert "[Intro]" in plan.lyrics and "[Solo]" in plan.lyrics and "sing it loud" in plan.lyrics
+    for chords in ("G C D Em", "G | C | D", "Em - C - G - D", "Dsus4 Cadd9 G/B"):
+        assert chords not in plan.lyrics
+    assert "never write chord names" in claude.prompts[0].lower()
+
+
 def test_the_music_prompt_uses_the_bands_own_vocal_only_when_it_sings_with_that_voice():
     plan = write_song(FakeClaude(PLAN), "Female", "Hard rock", "x", ROSTER["artists"][0])
 
