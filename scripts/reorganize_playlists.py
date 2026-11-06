@@ -121,16 +121,19 @@ def _save_done(path: Path, done: set[str]) -> None:
     atomic_write_text(Path(path), json.dumps(sorted(done)))
 
 
-def _delete_playlists(youtube_client, playlists: list[dict], label: str) -> int:
-    deleted_ids = set()
-    for playlist in playlists:
-        delete_playlist(youtube_client, playlist["id"])
-        deleted_ids.add(playlist["id"])
-        print(f"  deleted {label}: {playlist['title']}")
-    stale_keys = [key for key, pid in load_playlist_ids().items() if pid in deleted_ids]
+def _forget_playlist_ids(playlist_ids: set[str]) -> None:
+    """Drops the app's cached ids that point at these (deleted) playlists."""
+    stale_keys = [key for key, pid in load_playlist_ids().items() if pid in playlist_ids]
     if stale_keys:
         remove_playlist_ids(stale_keys)
-    return len(deleted_ids)
+
+
+def _delete_playlists(youtube_client, playlists: list[dict], label: str) -> int:
+    for playlist in playlists:
+        delete_playlist(youtube_client, playlist["id"])
+        _forget_playlist_ids({playlist["id"]})          # at once: a budget stop must not leave the cache pointing at it
+        print(f"  deleted {label}: {playlist['title']}")
+    return len(playlists)
 
 
 def _print_plan(sorted_: dict, by_artist: dict, genres_by_song: dict[str, list[str]], videos: list) -> None:

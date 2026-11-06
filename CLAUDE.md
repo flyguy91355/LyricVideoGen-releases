@@ -390,7 +390,7 @@ retry()` rides a fresh 404. State files (comment, playlist, youtube_state, token
 atomic writes (`youtube_state.atomic_write_text`); an unreadable one is moved to `*.corrupt-<time>`. Key notes: only
 paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` keeps exactly one, first.
 `scripts/backfill_channel_organization.py` (`-h`; audited keys: `key_notes_2026-09-26.json`) re-applies it;
-`scripts/reorganize_playlists.py` (plan; `--apply`, resumable) applies the 11-05 rules.
+`scripts/reorganize_playlists.py` (plan; `--apply` once a day, resumes) applies the 11-05 rules.
 
 ## deep_review
 
@@ -417,4 +417,4 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 `tests/conftest.py` gives each test a throwaway HOME/USERPROFILE, set before any import (XDG_CACHE_HOME stays real):
 the suite never touches the real `~/.playalongvideoproduction`. Its font fixture lists Windows fonts too. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
-Tests write only under pytest's `tmp_path`.
+Tests write only under `tmp_path`.

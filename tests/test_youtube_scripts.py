@@ -306,3 +306,23 @@ def test_the_rework_plan_changes_nothing(tmp_path, monkeypatch):
 
     assert log == [] and not (tmp_path / "done.json").exists()
     assert [p["id"] for p in result["sorted"]["delete_artist"]] == ["P1"]
+
+
+def test_a_budget_stop_mid_deletion_leaves_no_cached_id_for_a_playlist_already_deleted(tmp_path, monkeypatch):
+    script = _load_script("reorganize_playlists")
+    playlists = [_playlist("P1", "Albert King - Play Along Videos"), _playlist("P2", "Al Green - Play Along Videos")]
+    cache, log = _rework_fixture(tmp_path, monkeypatch, script, playlists)
+    cache["artist:Al Green"] = "P2"
+
+    def delete(yt, pid):
+        if pid == "P2":
+            raise script.BudgetSpent("budget")
+        log.append(("delete", pid))
+        return True
+
+    monkeypatch.setattr(script, "delete_playlist", delete)
+
+    result = script.run("yt", "ai", tmp_path, apply=True, progress_path=tmp_path / "done.json")
+
+    assert result["finished"] is False and log == [("delete", "P1")]
+    assert "artist:Albert King" not in cache and cache["artist:Al Green"] == "P2"
