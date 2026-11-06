@@ -5254,14 +5254,14 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
 
 ## HISTORY 11-05: sung chord names; playlists reworked
 
-- Owner: Hands Like My Father's "has the chord names said in the very beginning of the song". Claude had written the
-  progression ("G C D Em" / "G C D") under [Intro] although the prompt said an instrumental section is just its tag, and
-  MiniMax sings every line it gets (it sang them four times). 3 of 13 AI songs had it: Hands Like My Father's, Cracked
-  Bowl Kitchen (also under [Solo], sung mid-song straight into the next chorus) and Thunder Keeps Me Company (uploaded).
-  song_maker now drops chord-name-only lines (`drop_chord_lines`) and the prompt forbids them. Hands Like My Father's
-  was fixed in place: the stems run 1105 samples (the mp3 encoder delay) behind ffmpeg's decode; the vocal stem was
-  subtracted from the mix and muted before 15.9 s (originals in `sung_chord_names_original/`); re-separating the new
-  intro shows the vocal at -70 dB where it was -17 dB. Whisper still "hears" GCD there over the bare music.
+- Owner: Hands Like My Father's "has the chord names said in the very beginning of the song". 3 of 13 AI songs had
+  the chords as lyric lines under [Intro] (and [Solo]) in Claude's own reply -- no code added them; MiniMax sings every
+  line. Cause, reproduced with the 10-31 prompt and each song's own inputs: the rule "3-5 chords a guitarist can play
+  along with" -- 18 of 36 replies wrote a chord chart into the lyrics; without those words 0 of 54 (and 0 of 18 from the
+  real write_song). Those words are gone from the song prompt (a test guards it). A first fix (v2.0.114) only stripped
+  chord-name lines after the fact and added a rule on top; the owner: "find the cause... not bandaids" -- both removed.
+  Hands Like My Father's and Thunder Keeps Me Company had the sung names taken out of the intro (vocal stem subtracted;
+  stems run 1105 samples behind ffmpeg's decode; originals in `sung_chord_names_original/`); owner: leave the 3 songs.
 - Owner: "I dont want a playlist for a artist that i have only 1 song" and genres "country, country rock, rock,
   bluegrass, and all the others", every song real or AI, no empty genre playlist. Chosen: one fixed list of 19 genres,
   up to 3 per song plus Rock for rock-family songs, a song and its EASY version are one song. The channel had 125

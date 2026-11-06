@@ -229,9 +229,9 @@ as 'not built -- <reason>', and calls `release_memory()` per song. deep_review's
 
 ## Create a Song
 
-`song_maker.py` (10-31): Voice/Style/Band/About -> Claude writes title/key/BPM/chords/words (chord-only
-lines dropped: `drop_chord_lines`) -> MiniMax Music 2.6 (Replicate, ~$0.35/song) -> `work/<slug>/` (tagged mp3,
-`.txt` sidecar, `AI_GENERATED.txt`, `ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
+`song_maker.py`: Voice/Style/Band/About -> Claude writes title/key/BPM/chords/words (no 'a guitarist can
+play along with': chords became lyrics) -> MiniMax Music 2.6 (Replicate, $0.35/song) -> `work/<slug>/` (tagged
+mp3, `.txt` sidecar, `AI_GENERATED.txt`, `ai_song.json`) -> pipeline. Band: picked from `~/PlayAlongVideoProductionArtists/roster.json` (`style`/`voice`), a
 typed name (asks MusicBrainz) or Claude's. `ai_song.json` = held until Mark Verified/Upload Anyway
 (`waits_to_be_watched`); key: the asked-for one if the chords match, else the chords' if Claude reading them agrees
 `Settings.scheduled_songs_per_day` (0 off): every 20 min if idle; random style/voice, a roster band or a new
@@ -271,7 +271,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   (`_DraftQueueView`); each reply names its video too (`PendingReply.video_title`); edits are kept per draft
   id across refreshes, Approve posts the edited text, the header shows "N waiting".
 - **Settings popup** (`_open_settings_window`): built once, then hidden/shown (`_show_settings_dialog`/
-  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set, 50 ms x20: X11 needs it mapped); like the Update dialog; its confirms are
+  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set 50 ms x20: X11 needs it mapped); like the Update dialog; its confirms are
   parented to it (`_ask_over`, `SettingsPanel._confirm`). Closing with unsaved changes asks like Discard and reverts
   `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`) is debounced
   150 ms. A moved timing pass mark refreshes the lists once, on close
