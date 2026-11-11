@@ -146,18 +146,18 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `_carry_respelled_chord_pictures`, before images and before render: no spend). Pictures already in `images/` or
    `images_backup_*/` (decodable, not placeholders) are counted first; none missing -> no Claude client and no
    `REPLICATE_API_TOKEN` needed (else a missing token is a clear RuntimeError). A cached placeholder or undecodable
-   file is a cache miss; cache writes are temp file + `os.replace`. Replicate polling rides out network errors,
-   cancels on timeout, honours Retry-After.
+   file is a cache miss (writes atomic; Replicate polling rides out errors).
    `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image
    falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
    solid colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
-   **Shared image library** (spec 9-25, HISTORY 9-30/10-1: saving unconditional, `use_image_library` gates only
-   reuse; `image_library_min_score` provisional 0.34, see `scripts/preview_library_matches.py`'s contact sheets in
-   `reports/`): before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`) by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py` [`--dry-run`/`--limit N`] may
-   download the ~605 MB weights). `LibrarySession` copies a hit into `images/`, files every purchase with its
+   **Shared image library** (spec 9-25; `use_image_library` gates only reuse; `image_library_min_score`
+   0.34 provisional: `scripts/preview_library_matches.py`): before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`) by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py` downloads the ~605 MB weights). `LibrarySession` copies a hit into `images/`, files every purchase with its
    prompt regardless of the setting, disables itself on error. Reuse (`skip_lookup`) is off when the setting is
    off or Redo's "Generate new images"; a moved-aside picture is never offered again
    (`image_library_rejected.json`). `python -m lyricvideo.image_library stats`.
+   **Picture check** (`picture_check.py`): each picture a video uses (not EASY) is judged once by
+   `claude -p` on the Pro plan (no API key; opus); verdicts by content id in library.db. Bad -> `bad_images/`, out
+   of the library, re-bought (3 tries); can't check: held. Lettering never rejects.
 7. **render** (`assemble.py`/`layout.py`/`render.py`) -- lyrics (karaoke word sweep, Ken Burns), NOW/NEXT/timeline chord
    bar, Key/BPM badge, chord legend over the audio into `work_dir/<slug>.mp4`. Font: `--font`, else
    `Settings.font_path`, via `pipeline.resolve_font` (a missing file -> `default_font()` with a warning; candidates
@@ -340,8 +340,8 @@ at `Settings.youtube_upload_times` (AI songs: `youtube_ai_upload_times`, own cla
 `publish_lane`; blank = shared), capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private: at once.
 Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
-Sonnet drops unsuitable ones (alcohol, text, non-guitar), picks the most striking; a new one only if none are clean), kept as `thumbnail_bg.png`; full title (<=100 px, one
-word 150) left of every chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
+Sonnet picks the most striking suitable one; a new one only if none are clean), kept as `thumbnail_bg.png`; full title left of every
+chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
 soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
 A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
 (`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts; N.C. over music
@@ -373,7 +373,7 @@ claimed (`_claim_posting`; its buttons off via `_DraftQueueView.set_busy`), rele
 and refreshes the label; Approve checks `is_video_public()`. An approved engagement comment's thread is marked seen;
 Dismissing one marks `engagement_comment_posted`.
 Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
-`parent_id`, drafted with `context`); Check Now shows a result; old counts ignored once; `youtube_auto_approve_replies` posts ordinary drafts after
+`parent_id`, drafted with `context`); Check Now shows a result; `youtube_auto_approve_replies` posts ordinary drafts after
 `youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`). Every sent reply goes to Posted Replies (`youtube_posted_replies.json`,
 `record_posted_reply`, with `reply_id`); Save Edit there calls `update_comment` (50 units);
 replies sent since it was last opened (`load_posted_seen_at`) show ● NEW + an 'N new' count.

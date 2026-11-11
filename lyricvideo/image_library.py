@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS reuses (
     song_slug TEXT NOT NULL,
     reused_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS picture_checks (
+    id TEXT PRIMARY KEY,
+    verdict TEXT NOT NULL,
+    problem TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    checked_at TEXT NOT NULL
+);
 """
 
 
@@ -163,6 +170,26 @@ class ImageLibrary:
         )
         self._db.commit()
 
+    def check_verdict(self, image_id: str) -> tuple[str, str] | None:
+        """("good"|"bad", problem) for a picture the picture check (picture_check.py) already judged -- keyed by content
+        id, so it holds for any copy of that picture in any song, in the library or not -- else None."""
+        row = self._db.execute("SELECT verdict, problem FROM picture_checks WHERE id = ?", (image_id,)).fetchone()
+        return None if row is None else (row[0], row[1])
+
+    def record_check(self, image_id: str, verdict: str, problem: str = "", model: str = "") -> None:
+        self._db.execute(
+            "INSERT OR REPLACE INTO picture_checks (id, verdict, problem, model, checked_at) VALUES (?, ?, ?, ?, ?)",
+            (image_id, verdict, problem, model, _now()),
+        )
+        self._db.commit()
+
+    def remove(self, image_id: str) -> None:
+        """Takes a (bad) picture out of the library for good: its row and its PNG. Its check verdict stays on file."""
+        self._db.execute("DELETE FROM images WHERE id = ?", (image_id,))
+        self._db.commit()
+        self.image_path(image_id).unlink(missing_ok=True)
+        self._ids = self._matrix = None             # reload the matrix on the next match
+
     def stats(self) -> dict:
         def one(sql: str) -> int:
             return int(self._db.execute(sql).fetchone()[0])
@@ -171,6 +198,8 @@ class ImageLibrary:
             "images": one("SELECT COUNT(*) FROM images"),
             "with_prompt": one("SELECT COUNT(*) FROM images WHERE prompt != ''"),
             "reuses": one("SELECT COUNT(*) FROM reuses"),
+            "checked_good": one("SELECT COUNT(*) FROM picture_checks WHERE verdict = 'good'"),
+            "checked_bad": one("SELECT COUNT(*) FROM picture_checks WHERE verdict = 'bad'"),
         }
 
     def close(self) -> None:
@@ -192,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         f"  reused {stats['reuses']} times -- about ${stats['reuses'] * REPLICATE_PRICE_PER_IMAGE_USD:.2f} "
         "of Replicate images not bought"
     )
+    print(f"  picture check: {stats['checked_good']} marked good, {stats['checked_bad']} bad (in bad_images/)")
     return 0
 
 

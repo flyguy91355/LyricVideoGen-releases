@@ -5290,3 +5290,20 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   and replaced from hand-written prompts, then re-rendered (old video in `redo_backup_20261111-075611`), about 5c.
 - Not done here: the 6 bad pictures and others like them stay in the shared library (530 of 10,946 library prompts
   mention hands, fingers or palms), and a picture check before use was proposed to the owner, priced separately.
+
+## HISTORY 11-11 (later): every picture checked before use, on the owner's Pro plan
+
+- Owner: "check each image if were using it again. thats all images bought or stored. if its a bad image i want it
+  transfered to a bad images folder... if [a library image] has been checked and good, they need to be marked as
+  good, so we dont recheck". Then, on Fire Escape Confession: one picture "looks unreal and his neck looks broke" (a
+  prompt asking "head tilted back" -- flux-schnell drew it snapped); replaced from a written prompt and re-rendered.
+- Checker trials on pictures judged by eye: the paid API with my first wording (lettering, odd objects counted)
+  threw out 22 of 59 good pictures (Haiku 5.5) and 45 of 59 (Sonnet 5.5) -- the wording, not the models. The owner
+  asked why not his Pro plan; `claude -p` with his login works (no API key in the environment, `--safe-mode`, Read
+  only). Lettering dropped as a reason (owner: re-buying over wording costs too much). Sonnet and Haiku passed the
+  broken neck as "a real neck can do that"; adding "a pose that looks broken, painful or unreal to a viewer" made
+  Sonnet catch it. Sonnet on 117 judged pictures: ~15 of 18 real problems after correcting my own labels (it found 4
+  I had missed, e.g. a detached second hand in Fire Escape's "I'm still here"), 2-3 of ~98 good thrown out; Opus
+  also caught the two armless hands Sonnet missed. Owner: "start out with opus" (`PICTURE_CHECK_MODEL`), and if a
+  picture can't be checked, hold the song. Paid-equivalent per picture as Claude Code reports it: Opus ~$0.039,
+  Sonnet ~$0.014 (from the Pro allowance, not money); known-good pictures are never sent again.

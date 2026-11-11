@@ -149,3 +149,16 @@ def _isolate_redo_log(tmp_path_factory, monkeypatch):
 def _isolate_image_library(tmp_path_factory, monkeypatch):
     """Tests must never read or write the owner's real ~/PlayAlongVideoProductionImages library."""
     monkeypatch.setenv("PLAYALONG_IMAGE_LIBRARY", str(tmp_path_factory.mktemp("imagelib")))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_picture_checks(monkeypatch):
+    """No test ever starts Claude Code (picture_check.py runs it on the owner's Pro plan): every picture comes back good
+    unless a test installs its own answer."""
+    import json as _json
+
+    monkeypatch.setattr("lyricvideo.picture_check._claude_executable", lambda: "claude")
+    monkeypatch.setattr(
+        "lyricvideo.picture_check._run_claude",
+        lambda args, cwd: _json.dumps({"structured_output": {"verdict": "good", "problem": ""}}),
+    )

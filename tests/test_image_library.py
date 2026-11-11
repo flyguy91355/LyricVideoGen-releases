@@ -141,7 +141,7 @@ def test_stats_counts_images_prompts_and_reuses(tmp_path):
     library.add(_png(tmp_path / "b.png", (2, 2, 2)), _vec(0, 1))
     library.record_reuse(a, "some-song")
 
-    assert library.stats() == {"images": 2, "with_prompt": 1, "reuses": 1}
+    assert library.stats() == {"images": 2, "with_prompt": 1, "reuses": 1, "checked_good": 0, "checked_bad": 0}
 
 
 def test_the_stats_command_reports_the_savings(monkeypatch, tmp_path, capsys):

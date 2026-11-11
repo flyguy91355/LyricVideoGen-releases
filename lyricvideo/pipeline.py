@@ -43,7 +43,7 @@ from .chord_theory import (  # noqa: F401 -- ordered_unique_chords re-exported: 
 )
 from .cleared_log import record_cleared, record_removed
 from .redo_log import note_redo_finished, note_redo_started
-from .models import ChordTrack, LyricLine, Song, Word, display_slug, load_song, save_song
+from .models import ChordTrack, LyricLine, Song, Word, display_slug, line_hash, load_song, save_song
 from .separate import separate_vocals, stems_look_complete
 from .precision import blend, choose_alignment, match_words
 from .sync import decide_alignment, sync_agreement
@@ -952,6 +952,156 @@ def _hold_for_key(work_dir: Path, final_path: Path, concern: str) -> None:
     raise HeldBeforeVideo(concern)
 
 
+def _make_song_images(work_dir: Path, images_dir: Path, song: Song, settings, fresh_images: bool,
+                      only_texts: set[str] | None = None) -> list[tuple[Path, str]]:
+    """The images stage: a picture for every lyric line and instrumental caption, buying only what is missing.
+    Returns (picture, line text) for each, in timeline order. Run again by _checked_song_images to replace bad ones;
+    `only_texts` limits it to those lines (a render-only start replaces only what the picture check removed)."""
+    # Reuse already-paid-for images from any prior images_backup_*/ archive
+    # before spending on a new one (unchanged convention).
+    backup_dirs = sorted(work_dir.glob("images_backup_*"))
+    _carry_respelled_chord_pictures(images_dir, song, backup_dirs)
+    captions = instrumental_image_captions(song.lines, song.chord_track, song_end_time(song))
+    line_texts = [line.text for line in song.lines]
+    if only_texts is not None:
+        line_texts = [t for t in line_texts if t in only_texts]
+        captions = [c for c in captions if c in only_texts]
+    missing = _missing_images(line_texts + captions, images_dir, backup_dirs)
+    images_dir.mkdir(exist_ok=True)
+    library = None
+    if missing:
+        anthropic_client = anthropic.Anthropic()
+        replicate_token = os.environ.get("REPLICATE_API_TOKEN", "")
+        if not replicate_token:
+            raise RuntimeError(
+                "REPLICATE_API_TOKEN is not set -- add it to the .env file at the repo root "
+                "(see .env.example). The images stage can't generate backgrounds without it."
+            )
+        full_lyrics = "\n".join(l.text for l in song.lines)
+        song_gist = summarize_song_gist(anthropic_client, full_lyrics)
+        # The shared library of already-bought images (Settings.use_image_library; None whenever it is off or
+        # unavailable, in which case every line below behaves exactly as before). Not wrapped in try/finally: on
+        # an error the session is simply dropped and freed with the frame, like every other per-run object.
+        library = open_library_session(
+            settings, song_slug=work_dir.name, song_title=song.title, images_dir=images_dir,
+            fresh_images=fresh_images,
+        )
+    else:
+        # Every picture already exists (a Redo, Batch regenerate or Render Anyway that reuses its images): no Claude
+        # client, no Replicate token and no song-gist call are needed -- each lookup below is a cache hit.
+        print("Every background image for this song already exists; none are bought.")
+        anthropic_client, replicate_token, song_gist = None, "", ""
+    image_paths = []
+    texts: list[str] = []
+    # last_real_image lets a failed generation immediately reuse the most
+    # recent REAL image instead of ever writing a flat color to disk --
+    # a content-filter rejection in particular repeats identically on
+    # every retry, so waiting on substitute_fallback_images()'s later
+    # pass to fix it up risked a plain-color frame reaching the finished
+    # video if anything ever prevented that pass from running (owner
+    # incident, 2026-09-18). substitute_fallback_images() still runs
+    # afterward and can improve on this with a chronologically closer
+    # neighbor once the whole song's images are known.
+    last_real_image: Path | None = None
+    for text in line_texts:
+        path = get_or_generate_image(
+            anthropic_client, replicate_token, song_gist, text, images_dir,
+            extra_cache_dirs=backup_dirs, previous_image=last_real_image, library=library,
+        )
+        image_paths.append(path)
+        texts.append(text)
+        if not is_fallback_image(path):
+            last_real_image = path
+    # Instrumental-gap images (2026-09-09 owner request): one per distinct
+    # caption the render's own image timeline can look up, so the
+    # background follows the chord instead of freezing on the last-sung
+    # line's image. The caption list comes from the very same gap/segment
+    # walk build_image_timeline() performs (layout.instrumental_image_
+    # captions), never a separate approximation of it -- the earlier
+    # midpoint-based rule here skipped chords that only overlapped a gap's
+    # edge, leaving the render to show a flat placeholder for them.
+    for caption in captions:
+        path = get_or_generate_image(
+            anthropic_client, replicate_token, song_gist, caption, images_dir,
+            extra_cache_dirs=backup_dirs, previous_image=last_real_image, library=library,
+        )
+        image_paths.append(path)
+        texts.append(caption)
+        if not is_fallback_image(path):
+            last_real_image = path
+    # A flat placeholder color would visibly break the finished video even
+    # though a generation failure never crashes the pipeline -- substitute
+    # a real neighboring image in for any fallback, as an absolute last
+    # resort only after every real generation attempt has already failed.
+    substitute_fallback_images(image_paths)
+    if library is not None:
+        print(library.summary_line())
+        library.close()
+    if image_paths and all(is_fallback_image(path) for path in image_paths):
+        # Nothing real to substitute: the video would be flat colour from start to end (and could auto-upload).
+        raise RuntimeError(
+            "Every background image failed to generate (check REPLICATE_API_TOKEN and the Replicate account's "
+            "credit), so the video was not rendered. Run the song again once image generation works -- the "
+            "plain-colour placeholders are generated again then."
+        )
+    return list(zip(image_paths, texts))
+
+
+PICTURES_NOT_CHECKED_PREFIX = "Pictures not checked yet:"
+_PICTURE_CHECK_ROUNDS = 3
+
+
+def _hold_for_pictures(work_dir: Path, final_path: Path, reason: str) -> None:
+    """Stops the run before the video when the pictures could not be checked (picture_check.PictureCheckUnavailable:
+    Claude Code missing, not signed in, or the Pro limit reached). Owner, 2026-11-11: "Hold the song" -- nothing
+    unchecked is rendered or uploaded. Like a key hold: not recorded as finished, an earlier video is moved aside, and
+    Render Anyway makes the video once checks work again."""
+    concern = f"{PICTURES_NOT_CHECKED_PREFIX} {reason} -- use Render Anyway once Claude Code can check them."
+    _retire_previous_video(final_path)
+    _write_held_marker(work_dir, concern)
+    raise HeldBeforeVideo(concern)
+
+
+def _pictures_on_disk(images_dir: Path, song: Song) -> list[tuple[Path, str]]:
+    """The pictures a render will use that already exist, with their line text (a render-only start buys nothing)."""
+    captions = instrumental_image_captions(song.lines, song.chord_track, song_end_time(song))
+    found = []
+    for text in [line.text for line in song.lines] + captions:
+        path = images_dir / f"{line_hash(text)}.png"
+        if path.is_file():
+            found.append((path, text))
+    return found
+
+
+def _checked_song_images(work_dir: Path, images_dir: Path, song: Song, settings, fresh_images: bool,
+                         final_path: Path, render_only: bool = False) -> None:
+    """Makes the song's pictures and checks every one before the video (picture_check.py): a bad picture is moved to
+    the library's bad_images folder and its line gets a new one, which is checked too -- up to _PICTURE_CHECK_ROUNDS
+    tries per line. A line still without a good picture after that shows its nearest good picture (the render's own
+    rule for a missing picture). Pictures already judged good are never sent again."""
+    from .picture_check import PictureCheckUnavailable, check_song_pictures
+
+    only: set[str] | None = None
+    for attempt in range(1, _PICTURE_CHECK_ROUNDS + 1):
+        if render_only and attempt == 1:
+            pictures = _pictures_on_disk(images_dir, song)
+        else:
+            pictures = _make_song_images(work_dir, images_dir, song, settings, fresh_images, only_texts=only)
+        try:
+            removed, summary = check_song_pictures(pictures, song.title, work_dir)
+        except PictureCheckUnavailable as e:
+            _hold_for_pictures(work_dir, final_path, str(e))
+        print(summary.line())
+        if not removed:
+            return
+        if render_only:         # buy replacements for the removed pictures only, never for lines that had none
+            gone = set(removed)
+            only = {text for path, text in pictures if path in gone}
+        if attempt == _PICTURE_CHECK_ROUNDS:
+            print(f"WARNING: {len(removed)} line(s) still had a bad picture after {_PICTURE_CHECK_ROUNDS} tries; "
+                  "they show their nearest good picture.")
+
+
 def _make_thumbnail_after_render(work_dir: Path, settings) -> None:
     """The video's custom thumbnail (thumbnail.py), made once beside it (a Redo or re-render keeps the one it has) when
     Settings.generate_thumbnails is on and the keys are there. Never raises: a missing thumbnail is made at upload."""
@@ -1610,86 +1760,12 @@ def run_pipeline(
 
     if start_idx <= STAGES.index("images") <= end_idx:
         report("images")
-        # Reuse already-paid-for images from any prior images_backup_*/ archive
-        # before spending on a new one (unchanged convention).
-        backup_dirs = sorted(work_dir.glob("images_backup_*"))
-        _carry_respelled_chord_pictures(images_dir, song, backup_dirs)
-        captions = instrumental_image_captions(song.lines, song.chord_track, song_end_time(song))
-        missing = _missing_images([line.text for line in song.lines] + captions, images_dir, backup_dirs)
-        images_dir.mkdir(exist_ok=True)
-        library = None
-        if missing:
-            anthropic_client = anthropic.Anthropic()
-            replicate_token = os.environ.get("REPLICATE_API_TOKEN", "")
-            if not replicate_token:
-                raise RuntimeError(
-                    "REPLICATE_API_TOKEN is not set -- add it to the .env file at the repo root "
-                    "(see .env.example). The images stage can't generate backgrounds without it."
-                )
-            full_lyrics = "\n".join(l.text for l in song.lines)
-            song_gist = summarize_song_gist(anthropic_client, full_lyrics)
-            # The shared library of already-bought images (Settings.use_image_library; None whenever it is off or
-            # unavailable, in which case every line below behaves exactly as before). Not wrapped in try/finally: on
-            # an error the session is simply dropped and freed with the frame, like every other per-run object.
-            library = open_library_session(
-                settings, song_slug=work_dir.name, song_title=song.title, images_dir=images_dir,
-                fresh_images=fresh_images,
-            )
-        else:
-            # Every picture already exists (a Redo, Batch regenerate or Render Anyway that reuses its images): no Claude
-            # client, no Replicate token and no song-gist call are needed -- each lookup below is a cache hit.
-            print("Every background image for this song already exists; none are bought.")
-            anthropic_client, replicate_token, song_gist = None, "", ""
-        image_paths = []
-        # last_real_image lets a failed generation immediately reuse the most
-        # recent REAL image instead of ever writing a flat color to disk --
-        # a content-filter rejection in particular repeats identically on
-        # every retry, so waiting on substitute_fallback_images()'s later
-        # pass to fix it up risked a plain-color frame reaching the finished
-        # video if anything ever prevented that pass from running (owner
-        # incident, 2026-09-18). substitute_fallback_images() still runs
-        # afterward and can improve on this with a chronologically closer
-        # neighbor once the whole song's images are known.
-        last_real_image: Path | None = None
-        for line in song.lines:
-            path = get_or_generate_image(
-                anthropic_client, replicate_token, song_gist, line.text, images_dir,
-                extra_cache_dirs=backup_dirs, previous_image=last_real_image, library=library,
-            )
-            image_paths.append(path)
-            if not is_fallback_image(path):
-                last_real_image = path
-        # Instrumental-gap images (2026-09-09 owner request): one per distinct
-        # caption the render's own image timeline can look up, so the
-        # background follows the chord instead of freezing on the last-sung
-        # line's image. The caption list comes from the very same gap/segment
-        # walk build_image_timeline() performs (layout.instrumental_image_
-        # captions), never a separate approximation of it -- the earlier
-        # midpoint-based rule here skipped chords that only overlapped a gap's
-        # edge, leaving the render to show a flat placeholder for them.
-        for caption in captions:
-            path = get_or_generate_image(
-                anthropic_client, replicate_token, song_gist, caption, images_dir,
-                extra_cache_dirs=backup_dirs, previous_image=last_real_image, library=library,
-            )
-            image_paths.append(path)
-            if not is_fallback_image(path):
-                last_real_image = path
-        # A flat placeholder color would visibly break the finished video even
-        # though a generation failure never crashes the pipeline -- substitute
-        # a real neighboring image in for any fallback, as an absolute last
-        # resort only after every real generation attempt has already failed.
-        substitute_fallback_images(image_paths)
-        if library is not None:
-            print(library.summary_line())
-            library.close()
-        if image_paths and all(is_fallback_image(path) for path in image_paths):
-            # Nothing real to substitute: the video would be flat colour from start to end (and could auto-upload).
-            raise RuntimeError(
-                "Every background image failed to generate (check REPLICATE_API_TOKEN and the Replicate account's "
-                "credit), so the video was not rendered. Run the song again once image generation works -- the "
-                "plain-colour placeholders are generated again then."
-            )
+        _checked_song_images(work_dir, images_dir, song, settings, fresh_images, final_path)
+    elif start_idx == STAGES.index("render") and end_idx >= start_idx and not easy_variant:
+        # A render-only start (Render Anyway on a song with a video, a respelled key) uses the pictures already on
+        # disk: they are checked too (owner, 2026-11-11: every picture "if were using it again"). An EASY CHORD
+        # version's pictures are copies of its song's, checked when the song was made.
+        _checked_song_images(work_dir, images_dir, song, settings, fresh_images, final_path, render_only=True)
 
     if start_idx <= STAGES.index("render") <= end_idx:
         report("render")

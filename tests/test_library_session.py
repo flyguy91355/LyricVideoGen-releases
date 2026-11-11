@@ -259,7 +259,7 @@ def test_a_library_bought_image_serves_a_second_song_end_to_end(tmp_path, monkey
         get_or_generate_image(_Claude(prompt), "tok", "gist", f"{slug} lyric", images_dir, library=session)
 
     assert bought == ["a red door at dusk"]                     # only song one paid for anything
-    assert library.stats() == {"images": 1, "with_prompt": 1, "reuses": 1}
+    assert library.stats() == {"images": 1, "with_prompt": 1, "reuses": 1, "checked_good": 0, "checked_bad": 0}
     assert len(list((tmp_path / "song-two" / "images").glob("*.png"))) == 1
 
 
