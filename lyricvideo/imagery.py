@@ -115,6 +115,19 @@ def summarize_song_gist(
     return _extract_text(response).strip()
 
 
+# flux-schnell draws a hand asked for on its own ("a grease-stained hand resting on the fender") as a cut-off hand, and
+# a "translucent overlay of an older hand" as a floating one (owner, 2026-11-11: "cut off hands laying on the fender").
+# Without this rule 27 of 30 test prompts for hand-heavy lines asked for hands and 3 of 10 pictures had a hand with no
+# arm; with it 0 of 10 (docs/CLAUDE_HISTORY.md, 2026-11-11).
+BODY_PART_RULE = (
+    "The image model draws a hand, arm or other body part shown on its own as a cut-off limb, and see-through "
+    "or ghostly people as floating pieces of bodies. So never ask for a hand, arm, finger or face by itself, for "
+    "translucent, ghostly or overlapping figures, or for one person's hands over another's. If a person belongs "
+    "in the picture, show the whole person (at least head and shoulders) doing what the line describes; "
+    "otherwise show the place and the objects. "
+)
+
+
 def build_image_prompt(
     anthropic_client,
     song_gist: str,
@@ -136,7 +149,7 @@ def build_image_prompt(
                     "Write ONE concise, vivid, purely visual image-generation prompt (no "
                     "camera jargon, no text-in-image requests) that captures the meaning/"
                     "imagery of this specific line, staying visually consistent with the "
-                    "song's overall theme above. Reply with ONLY the prompt text, nothing "
+                    "song's overall theme above. " + BODY_PART_RULE + "Reply with ONLY the prompt text, nothing "
                     "else."
                 ),
             }

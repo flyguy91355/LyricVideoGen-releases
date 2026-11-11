@@ -80,6 +80,25 @@ def test_build_image_prompt_extracts_and_strips_text():
     assert prompt == "a lonely lighthouse in a storm"
 
 
+def test_build_image_prompt_always_sends_the_body_part_rule():
+    """The rule that stops lone and ghostly hands (owner, 2026-11-11) is part of every per-line request."""
+    from lyricvideo.imagery import BODY_PART_RULE
+
+    sent = {}
+
+    class _Recording(_FakeMessages):
+        def create(self, **kwargs):
+            sent.update(kwargs)
+            return super().create(**kwargs)
+
+    client = _FakeAnthropicClient()
+    client.messages = _Recording("a tractor in a field")
+    build_image_prompt(client, "a song about a tractor", "His hands guiding mine until")
+    content = sent["messages"][0]["content"]
+    assert BODY_PART_RULE in content
+    assert "never ask for a hand, arm, finger or face by itself" in content
+
+
 def test_summarize_song_gist_extracts_and_strips_text():
     client = _FakeAnthropicClient(text="  a wistful song about missing an old friend  ")
     gist = summarize_song_gist(client, "full lyrics here")

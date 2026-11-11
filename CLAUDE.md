@@ -141,7 +141,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
 6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
    line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
    renders; a sliver adopts its neighbour's caption; `[Instrumental]` only for a chordless song), cached by content
-   hash. Instrumental pictures are filed under the chord NAME; `layout.enharmonic_instrumental_captions`/
+   hash. Prompts never ask for a lone or ghostly body part (`BODY_PART_RULE`). Instrumental pictures are filed under the chord NAME; `layout.enharmonic_instrumental_captions`/
    `fill_missing_instrumental_images` copy an existing one to a respelled or capo name (run_pipeline's
    `_carry_respelled_chord_pictures`, before images and before render: no spend). Pictures already in `images/` or
    `images_backup_*/` (decodable, not placeholders) are counted first; none missing -> no Claude client and no
@@ -151,11 +151,9 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image
    falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
    solid colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
-   **Shared image library** (spec 9-25, decoupled HISTORY 9-30/10-1: saving unconditional; `use_image_library` controls
-   only reuse; `image_library_min_score` provisional 0.34, see `scripts/preview_library_matches.py`'s contact
-   sheets in `reports/`): before buying, look in
-   `~/PlayAlongVideoProductionImages/` (`image_library.py`)
-   by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py` [`--dry-run`/`--limit N`] may
+   **Shared image library** (spec 9-25, HISTORY 9-30/10-1: saving unconditional, `use_image_library` gates only
+   reuse; `image_library_min_score` provisional 0.34, see `scripts/preview_library_matches.py`'s contact sheets in
+   `reports/`): before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`) by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py` [`--dry-run`/`--limit N`] may
    download the ~605 MB weights). `LibrarySession` copies a hit into `images/`, files every purchase with its
    prompt regardless of the setting, disables itself on error. Reuse (`skip_lookup`) is off when the setting is
    off or Redo's "Generate new images"; a moved-aside picture is never offered again
@@ -310,7 +308,7 @@ upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the 
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
 `scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, never the working tree),
 re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits.
-The owner runs this checkout directly (commits reach them at once); releases keep the banner/changelog meaningful.
+The owner runs this checkout directly; releases keep the banner/changelog meaningful.
 
 ## YouTube upload + channel management
 
@@ -415,6 +413,6 @@ cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scr
 ```
 
 `tests/conftest.py` gives each test a throwaway HOME/USERPROFILE, set before any import (XDG_CACHE_HOME stays real):
-the suite never touches the real `~/.playalongvideoproduction`. Its font fixture lists Windows fonts too. Real-window tests
+the suite never touches the real `~/.playalongvideoproduction`. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
 Tests write only under `tmp_path`.

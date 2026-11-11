@@ -5269,3 +5269,24 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   ("Singer-Songwriter / Folk Rock", "60s Pop Rock / British Invasion"). Checked on 11 songs before use (Take It Easy:
   Country Rock, Classic Rock, Soft Rock, Rock; the bluegrass AI band: Bluegrass, Country, Folk).
   `scripts/reorganize_playlists.py` moves the channel over within a per-run quota budget (uploads cost ~1,600 a day each).
+
+## HISTORY 11-11: cut-off hands in song pictures; prompts no longer ask for a lone or ghostly body part
+
+- Owner, watching the AI song "Clutch and Second Gear": "cut off hands laying on the fender... bizarre and a turn off
+  to people watching". Looking at all 43 pictures found 9 bad ones: hands with no arm on a hood or fender, a hand
+  growing out of a fender, warped fingers, an arm coming out of a seat, a tractor with its back wheel loose.
+- 8 of the 9 prompts asked for exactly that. Six pictures were library reuses from the AI song "Hands Like My
+  Father's" ("a grease-stained hand resting on the fender": flux-schnell draws the hand alone); two were bought for
+  this song ("a faint translucent overlay of an older hand guiding from behind"). The ninth (the tractor) came from a
+  normal prompt. A plain re-roll of a hand line asked for the same ghost hand again. The song gists also lean on hands
+  ("tactile imagery of hands on a wheel"), and `build_image_prompt` said nothing about what the picture model draws badly.
+- Test (scratchpad, ~21c): 10 hand-heavy lines from both songs, 3 prompts each with the old wording vs the old wording
+  plus `BODY_PART_RULE`; same model and call. Old: 27/30 prompts asked for hands, 10/30 for ghostly/overlapping
+  figures; new: 4/30 mention hands, always on a whole visible person, 0 ghostly. One picture per line: old 3 of 10 had
+  a hand with no arm (a 4th doubtful), new 0 of 10 (a farmer at the wheel, grandfather and child steering, a mechanic
+  leaning into the hood).
+- The song itself: the 9 moved to `images_prior_*` (so `image_library_rejected.json` never offers them again), 9
+  re-bought with `fresh_images=True`, two of those still wrong (made-up lettering on a cap, a second hand with no arm)
+  and replaced from hand-written prompts, then re-rendered (old video in `redo_backup_20261111-075611`), about 5c.
+- Not done here: the 6 bad pictures and others like them stay in the shared library (530 of 10,946 library prompts
+  mention hands, fingers or palms), and a picture check before use was proposed to the owner, priced separately.
