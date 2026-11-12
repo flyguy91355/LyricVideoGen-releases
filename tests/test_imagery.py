@@ -99,6 +99,27 @@ def test_build_image_prompt_always_sends_the_body_part_rule():
     assert "never ask for a hand, arm, finger or face by itself" in content
 
 
+def test_build_image_prompt_always_sends_the_age_rule():
+    """'She was seventeen' was written as 'a teenage girl' and drawn as a girl of about 9 (owner, 2026-11-12): every
+    per-line request says never to write teen words and to show such people as adults in their twenties."""
+    from lyricvideo.imagery import AGE_RULE
+
+    sent = {}
+
+    class _Recording(_FakeMessages):
+        def create(self, **kwargs):
+            sent.update(kwargs)
+            return super().create(**kwargs)
+
+    client = _FakeAnthropicClient()
+    client.messages = _Recording("a young woman on a lakeshore")
+    build_image_prompt(client, "a summer romance by a lake", "She was seventeen and she was far from in-between")
+    content = sent["messages"][0]["content"]
+    assert AGE_RULE in content
+    assert "never write teen, teenage, teenager" in content
+    assert "in their twenties" in content
+
+
 def test_summarize_song_gist_extracts_and_strips_text():
     client = _FakeAnthropicClient(text="  a wistful song about missing an old friend  ")
     gist = summarize_song_gist(client, "full lyrics here")

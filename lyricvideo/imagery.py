@@ -127,6 +127,15 @@ BODY_PART_RULE = (
     "otherwise show the place and the objects. "
 )
 
+# flux-schnell draws "a teenage girl" as a girl of about 9 (owner, 2026-11-12: All Summer Long's "She was seventeen"
+# line showed "a very young girl, maybe 9"): every All Summer Long prompt with teen/teenage/teenagers drew a child,
+# every "young man"/"young woman" one an adult.
+AGE_RULE = (
+    "The image model draws anyone called a teen, teenager or teenage boy or girl as a young child. So never write "
+    "teen, teenage, teenager or adolescent: when the lyrics give someone an age under 20 or call them a teenager, "
+    "show a young man or woman in their twenties. "
+)
+
 
 def build_image_prompt(
     anthropic_client,
@@ -149,7 +158,7 @@ def build_image_prompt(
                     "Write ONE concise, vivid, purely visual image-generation prompt (no "
                     "camera jargon, no text-in-image requests) that captures the meaning/"
                     "imagery of this specific line, staying visually consistent with the "
-                    "song's overall theme above. " + BODY_PART_RULE + "Reply with ONLY the prompt text, nothing "
+                    "song's overall theme above. " + BODY_PART_RULE + AGE_RULE + "Reply with ONLY the prompt text, nothing "
                     "else."
                 ),
             }

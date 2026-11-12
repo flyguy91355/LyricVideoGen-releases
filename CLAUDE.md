@@ -141,10 +141,10 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
 6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
    line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
    renders; a sliver adopts its neighbour's caption; `[Instrumental]` only for a chordless song), cached by content
-   hash. Prompts never ask for a lone or ghostly body part (`BODY_PART_RULE`). Instrumental pictures are filed under the chord NAME; `layout.enharmonic_instrumental_captions`/
-   `fill_missing_instrumental_images` copy an existing one to a respelled or capo name (run_pipeline's
-   `_carry_respelled_chord_pictures`, before images and before render: no spend). Pictures already in `images/` or
-   `images_backup_*/` (decodable, not placeholders) are counted first; none missing -> no Claude client and no
+   hash. Prompts never ask for a lone or ghostly body part (`BODY_PART_RULE`) or a teen (`AGE_RULE`). Instrumental pictures are filed under the chord NAME; `layout.enharmonic_instrumental_captions`/
+   `fill_missing_instrumental_images` copy an existing one to a respelled or capo name (
+   `_carry_respelled_chord_pictures`, before images and render: no spend). Pictures already in `images/` or
+   `images_backup_*/` (decodable, not placeholders) are counted first; none missing -> no Claude client or
    `REPLICATE_API_TOKEN` needed (else a missing token is a clear RuntimeError). A cached placeholder or undecodable
    file is a cache miss (writes atomic; Replicate polling rides out errors).
    `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image

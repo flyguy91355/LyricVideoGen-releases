@@ -5307,3 +5307,18 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   also caught the two armless hands Sonnet missed. Owner: "start out with opus" (`PICTURE_CHECK_MODEL`), and if a
   picture can't be checked, hold the song. Paid-equivalent per picture as Claude Code reports it: Opus ~$0.039,
   Sonnet ~$0.014 (from the Pro allowance, not money); known-good pictures are never sent again.
+
+## HISTORY 11-12: a teen in the lyrics drawn as a young child
+
+- Owner, on All Summer Long: "talks about a 17 year old girl, yet the images show a very young girl, maybe 9, this
+  is inappropriate for the song" -- the picture at "She was seventeen" (only that one to change, owner).
+- Cause: the per-line prompt said "a teenage girl"; flux-schnell draws teen/teenage/teenager as a child. In that song
+  every prompt with a teen word (9) drew children of about 9-12, every "young man"/"young woman" prompt an adult.
+  2651 of the 10,998 library pictures have a saved prompt; 112 of those name teens or children (Sweet Little Sixteen,
+  Fight For Your Right, Cream, ...; some are innocent family scenes, e.g. Three Strands).
+- Fix: `AGE_RULE` in `build_image_prompt` -- never write teen words; an age under 20 or "teenager" in the lyrics is
+  shown as a young man or woman in their twenties. Test (scratchpad, ~4c): the 9 lines re-written, 0 teen words, all
+  "in their twenties"; 3 pictures for "She was seventeen" all showed a young woman.
+- The song: the old picture recorded bad (model "owner") so the render-only path moved it to `bad_images/` and out of
+  the library, bought one new picture (library reuse off for that run only), checked it, re-rendered (old video in
+  `redo_backup_20261112-091320`).
