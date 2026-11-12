@@ -101,7 +101,8 @@ def test_build_image_prompt_always_sends_the_body_part_rule():
 
 def test_build_image_prompt_always_sends_the_age_rule():
     """'She was seventeen' was written as 'a teenage girl' and drawn as a girl of about 9 (owner, 2026-11-12): every
-    per-line request says never to write teen words and to show such people as adults in their twenties."""
+    per-line request says a teen is a young adult in their early twenties, a young child keeps their real age and only
+    an innocent scene, and no child shares a picture with romance, drink or smoking."""
     from lyricvideo.imagery import AGE_RULE
 
     sent = {}
@@ -116,8 +117,9 @@ def test_build_image_prompt_always_sends_the_age_rule():
     build_image_prompt(client, "a summer romance by a lake", "She was seventeen and she was far from in-between")
     content = sent["messages"][0]["content"]
     assert AGE_RULE in content
-    assert "never write teen, teenage, teenager" in content
-    assert "in their twenties" in content
+    assert "as a young woman or young man in their early twenties" in content
+    assert '("a 6-year-old girl") and show them only in an innocent everyday scene' in content
+    assert "Never show a child with romance" in content
 
 
 def test_summarize_song_gist_extracts_and_strips_text():

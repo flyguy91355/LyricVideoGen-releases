@@ -5322,3 +5322,18 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
 - The song: the old picture recorded bad (model "owner") so the render-only path moved it to `bad_images/` and out of
   the library, bought one new picture (library reuse off for that run only), checked it, re-rendered (old video in
   `redo_backup_20261112-091320`).
+- That was wrong (owner: "there was NOTHING wrong with the image... [what was wrong was] that image of a adolesnt in
+  with making love"): the picture was fine, only its place in this song was not. It went back into the library with
+  its good verdict (prompt saved only to its first 400 characters: the deleted row could not be recovered).
+  `bad_images/` and a "bad" verdict are for broken pictures only; a picture wrong for one song is taken out of that
+  song, never out of the library.
+- The first `AGE_RULE` (v2.0.119: any age under 20 -> in their twenties) was too blunt (owner: "if the song is about a
+  6 year old... your going to put 20 something in there? make no sense. the prompt has to be better and more
+  thourgh"). Test (scratchpad, ~17c): the same scene with only the person's words changed -- "a teenage girl" drew a
+  child of ~10, "a 17-year-old girl" ~11-12, "a 17-year-old young woman" ~14, so a teen age cannot be drawn; "a
+  6-year-old girl" drew a girl of 6. The rule now: a child under 13 keeps the real age, innocent scenes only; 13-19 or
+  "teenager" is a young woman/man in their early twenties (owner: "yes like young adults early 20s"); no age = adults;
+  never a child with romance, a couple, drink, smoking, drugs, a party or revealing clothes (adults or just the place
+  there). On 11 lines from 6 songs: Three Strands' daughter and Cream's "shorty" stayed children in plain scenes, "She
+  was seventeen" and "Sweet little sixteen" became young women, "Tight dresses and lipstick" and "Started smoking
+  woolies at sixteen" showed no child (objects; a man in his twenties), "Party" adults.

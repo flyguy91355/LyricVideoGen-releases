@@ -141,18 +141,18 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
 6. **images** (`imagery.py`) -- one Claude gist call (`summarize_song_gist`), then a Replicate image per unique lyric
    line and per instrumental caption (`layout.instrumental_image_captions()`, the same walk `build_image_timeline()`
    renders; a sliver adopts its neighbour's caption; `[Instrumental]` only for a chordless song), cached by content
-   hash. Prompts never ask for a lone or ghostly body part (`BODY_PART_RULE`) or a teen (`AGE_RULE`). Instrumental pictures are filed under the chord NAME; `layout.enharmonic_instrumental_captions`/
+   hash. Prompts never ask for a lone or ghostly body part (`BODY_PART_RULE`); teens shown in early 20s, children only innocent (`AGE_RULE`). Instrumental pictures are filed under the chord NAME; `layout.enharmonic_instrumental_captions`/
    `fill_missing_instrumental_images` copy an existing one to a respelled or capo name (
    `_carry_respelled_chord_pictures`, before images and render: no spend). Pictures already in `images/` or
    `images_backup_*/` (decodable, not placeholders) are counted first; none missing -> no Claude client or
-   `REPLICATE_API_TOKEN` needed (else a missing token is a clear RuntimeError). A cached placeholder or undecodable
+   `REPLICATE_API_TOKEN` needed (else a missing token is a RuntimeError). A cached placeholder or undecodable
    file is a cache miss (writes atomic; Replicate polling rides out errors).
-   `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; only a first image
+   `get_or_generate_image` tries 3x, then reuses the song's last real image (`last_real_image`; a first image
    falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
-   solid colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
+   colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
    **Shared image library** (spec 9-25; `use_image_library` gates only reuse; `image_library_min_score`
-   0.34 provisional: `scripts/preview_library_matches.py`): before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`) by local CLIP (`clip_embedder.py`; only `scripts/import_image_library.py` downloads the ~605 MB weights). `LibrarySession` copies a hit into `images/`, files every purchase with its
-   prompt regardless of the setting, disables itself on error. Reuse (`skip_lookup`) is off when the setting is
+   0.34 provisional: `scripts/preview_library_matches.py`): before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`) by local CLIP (`clip_embedder.py`; ~605 MB weights only via `scripts/import_image_library.py`). `LibrarySession` copies a hit into `images/`, files every purchase with its
+   prompt whatever the setting, disables itself on error. No reuse (`skip_lookup`) with the setting
    off or Redo's "Generate new images"; a moved-aside picture is never offered again
    (`image_library_rejected.json`). `python -m lyricvideo.image_library stats`.
    **Picture check** (`picture_check.py`): each picture a video uses (not EASY) is judged once by

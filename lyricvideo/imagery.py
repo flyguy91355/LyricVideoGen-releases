@@ -128,12 +128,19 @@ BODY_PART_RULE = (
 )
 
 # flux-schnell draws "a teenage girl" as a girl of about 9 (owner, 2026-11-12: All Summer Long's "She was seventeen"
-# line showed "a very young girl, maybe 9"): every All Summer Long prompt with teen/teenage/teenagers drew a child,
-# every "young man"/"young woman" one an adult.
+# line showed "a very young girl, maybe 9"). Same scene, only the person's words changed: "a teenage girl" ~10,
+# "a 17-year-old girl" ~11-12, "a 17-year-old young woman" ~14; "a young woman in her early twenties" an adult, and
+# "a 6-year-old girl" a girl of 6. So a young child keeps their real age, a teen is drawn as a young adult (owner: "like
+# young adults early 20s"), and no child ever shares a picture with romance, drink, smoking or a party
+# (docs/CLAUDE_HISTORY.md, 2026-11-12).
 AGE_RULE = (
-    "The image model draws anyone called a teen, teenager or teenage boy or girl as a young child. So never write "
-    "teen, teenage, teenager or adolescent: when the lyrics give someone an age under 20 or call them a teenager, "
-    "show a young man or woman in their twenties. "
+    "People's ages: the image model draws a teen, a teenage girl or boy, and even \"a 17-year-old girl\" as a child of "
+    "about 10. So write a child under 13 with the age as a number (\"a 6-year-old girl\") and show them only in an "
+    "innocent everyday scene. Write anyone the song makes 13 to 19, or calls a teenager, as a young woman or young man "
+    "in their early twenties, never with the age or the words teen, teenage, girl or boy. When the song gives no age, "
+    "people are adults (a song's \"girl\" or \"boy\" is a young woman or man) unless the line is plainly about a young "
+    "child. Never show a child with romance, a couple, kissing, sex, alcohol, smoking, drugs, a party or revealing "
+    "clothes: show adults in their twenties there, or only the place and the objects. "
 )
 
 
