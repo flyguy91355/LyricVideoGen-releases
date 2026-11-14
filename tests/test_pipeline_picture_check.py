@@ -122,3 +122,99 @@ def test_a_render_only_start_never_buys_a_picture_that_was_simply_missing(tmp_pa
     run_pipeline(Path("audio.mp3"), work, start_stage="render")
 
     assert len(bought) == before
+
+
+def _forget_verdicts():
+    """As if the song was made before the picture check existed (2026-11-11): no picture of it was ever judged."""
+    from lyricvideo.image_library import ImageLibrary
+
+    lib = ImageLibrary()
+    lib._db.execute("DELETE FROM picture_checks")
+    lib._db.commit()
+    lib.close()
+
+
+def test_a_video_made_before_the_check_is_held_at_upload_for_a_bad_picture_then_fixed_by_render_anyway(
+        tmp_path, monkeypatch):
+    """Owner, 2026-11-13 (Quarters and Dimes, made 11-07): "a cut off hand on a truck fender.. i thought we got rid of
+    that stuff?" -- a video made before the check had never had its pictures looked at."""
+    from lyricvideo.gui import _stage_to_resume
+    from lyricvideo.models import load_song
+    from lyricvideo.owner_verified import mark_verified
+    from lyricvideo.pipeline import BAD_PICTURES_PREFIX, hold_for_bad_pictures_before_upload, review_concern
+
+    _patch_common(monkeypatch, tmp_path)
+    work = tmp_path / "work"
+    bought = _real_pictures(monkeypatch)
+    run_pipeline(Path("audio.mp3"), work)
+    _forget_verdicts()
+    video = work / "test-song.mp4"
+    video.write_bytes(b"the old video")
+    mark_verified(work)                                     # the owner approved its lyrics and timing
+    asked = _verdict_by_colour(monkeypatch)
+
+    concern = hold_for_bad_pictures_before_upload(work, load_song(work / "lyrics_timed.json"))
+
+    assert concern.startswith(BAD_PICTURES_PREFIX) and repr(bought[0]) in concern and "Render Anyway" in concern
+    assert len(asked) == len(set(bought))                   # every picture looked at once
+    assert not video.exists() and (work / "test-song.previous.mp4").exists()    # out of Pending and Upload
+    assert json.loads((work / HELD_MARKER).read_text())["reason"] == concern
+    assert (work / "images" / f"{line_hash(bought[0])}.png").exists()           # moved out only by the render below
+    assert review_concern(work) == concern                  # Flagged says why, though the song is verified
+
+    asked.clear()
+    run_pipeline(Path("audio.mp3"), work, start_stage=_stage_to_resume(work))   # Render Anyway
+
+    assert bought.count(bought[0]) == 2                     # the bad picture bought again, nothing else
+    assert len(asked) == 1                                  # only the replacement is checked
+    assert not (work / HELD_MARKER).exists()
+    assert hold_for_bad_pictures_before_upload(work, load_song(work / "lyrics_timed.json")) == ""
+    assert len(asked) == 1
+
+
+def test_pictures_that_cannot_be_checked_at_upload_change_nothing(tmp_path, monkeypatch):
+    from lyricvideo.models import load_song
+    from lyricvideo.picture_check import PictureCheckUnavailable
+    from lyricvideo.pipeline import hold_for_bad_pictures_before_upload
+
+    _patch_common(monkeypatch, tmp_path)
+    work = tmp_path / "work"
+    _real_pictures(monkeypatch, first_color=(1, 2, 3))
+    run_pipeline(Path("audio.mp3"), work)
+    _forget_verdicts()
+    video = work / "test-song.mp4"
+    video.write_bytes(b"the old video")
+    monkeypatch.setattr("lyricvideo.picture_check._run_claude",
+                        lambda args, cwd: json.dumps({"is_error": True, "result": "Claude usage limit reached"}))
+
+    with pytest.raises(PictureCheckUnavailable, match="usage limit"):
+        hold_for_bad_pictures_before_upload(work, load_song(work / "lyrics_timed.json"))
+    assert video.exists() and not (work / HELD_MARKER).exists()
+
+
+def test_a_render_that_throws_out_the_thumbnails_picture_makes_a_new_thumbnail(tmp_path, monkeypatch):
+    from lyricvideo.image_library import ImageLibrary, content_id
+    from lyricvideo.thumbnail import THUMBNAIL_BG_FILE, THUMBNAIL_FILE, THUMBNAIL_OWN_FILE
+
+    _patch_common(monkeypatch, tmp_path)
+    work = tmp_path / "work"
+    bought = _real_pictures(monkeypatch, first_color=(1, 2, 3))
+    run_pipeline(Path("audio.mp3"), work)
+    first, second = (work / "images" / f"{line_hash(t)}.png" for t in bought[:2])
+    for path in (work / THUMBNAIL_FILE, work / THUMBNAIL_OWN_FILE):
+        path.write_text("1")
+    Image.open(first).convert("RGB").save(work / THUMBNAIL_BG_FILE)          # ensure_thumbnail re-saves its pick
+    lib = ImageLibrary()
+    lib.record_check(content_id(second), "bad", "warped fingers", "opus")       # not the thumbnail's picture
+    lib.close()
+
+    run_pipeline(Path("audio.mp3"), work, start_stage="render")
+    assert (work / THUMBNAIL_FILE).exists()                 # its picture was fine: kept
+
+    lib = ImageLibrary()
+    lib.record_check(content_id(first), "bad", "a hand with no arm", "opus")
+    lib.close()
+    run_pipeline(Path("audio.mp3"), work, start_stage="render")
+
+    assert not (work / THUMBNAIL_FILE).exists() and not (work / THUMBNAIL_BG_FILE).exists()
+    assert not (work / THUMBNAIL_OWN_FILE).exists()

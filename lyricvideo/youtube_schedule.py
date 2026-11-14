@@ -382,6 +382,34 @@ class IncompleteVideo(RuntimeError):
         self.cut_short = cut_short
 
 
+class BadPictures(RuntimeError):
+    """A picture in the video is bad (picture_check.py): the song was held -- its video set aside, the reason in Flagged
+    for Lyrics Review, where Render Anyway (an EASY CHORD version: Rebuild EASY version) replaces the picture and makes
+    the video again. Nothing was spent or sent."""
+
+
+class PicturesNotChecked(RuntimeError):
+    """The video's pictures could not be checked right now (Claude Code missing, signed out, or the Pro limit reached):
+    nothing was uploaded and nothing changed; it is tried again later."""
+
+
+def check_pictures_before_upload(work_dir: Path, song, label: str) -> None:
+    """Owner, 2026-11-13: nothing goes out with a picture nobody checked -- a video made before the picture check
+    existed (2026-11-11) is checked here (pipeline.hold_for_bad_pictures_before_upload). Raises BadPictures (the song
+    is now held) or PicturesNotChecked."""
+    from .picture_check import PictureCheckUnavailable
+    from .pipeline import hold_for_bad_pictures_before_upload
+
+    try:
+        concern = hold_for_bad_pictures_before_upload(work_dir, song)
+    except PictureCheckUnavailable as e:
+        raise PicturesNotChecked(
+            f"{label} was not uploaded: its pictures could not be checked yet ({e}); it is tried again later."
+        ) from None
+    if concern:
+        raise BadPictures(f"{label} was not uploaded and is held in Flagged for Lyrics Review. {concern}")
+
+
 def is_cut_short(picture_seconds: float, audio_seconds: float | None) -> bool:
     """True when a video's picture ends more than MAX_PICTURE_SHORTFALL_SECONDS before its audio (the two numbers
     assemble.rendered_stream_seconds reads). Shared with scripts/find_truncated_videos.py."""
@@ -491,6 +519,8 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
     # paid description call and before any YouTube call (IncompleteVideo).
     song_label = f"{work_dir.parent.name}/easychords" if work_dir.name == "easychords" else work_dir.name
     check_video_complete(video_path, song_label)
+    # Every picture the video shows was checked, here if not before (BadPictures holds the song; PicturesNotChecked waits).
+    check_pictures_before_upload(work_dir, song, song_label)
     metadata_title = capo_info["original_title"] if capo_info else song.title
     ai_song = is_ai_generated(work_dir)
     title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics, original=ai_song)

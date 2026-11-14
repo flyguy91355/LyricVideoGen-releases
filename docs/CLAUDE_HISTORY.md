@@ -5337,3 +5337,27 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   there). On 11 lines from 6 songs: Three Strands' daughter and Cream's "shorty" stayed children in plain scenes, "She
   was seventeen" and "Sweet little sixteen" became young women, "Tight dresses and lipstick" and "Started smoking
   woolies at sixteen" showed no child (objects; a man in his twenties), "Party" adults.
+
+## HISTORY 11-13: videos made before the picture check still had cut-off hands; every upload checks them now
+
+- Owner, on the AI song "Quarters and Dimes" (made 11-07, not uploaded): "near the end ... theres a cut off hand on a
+  truck fender.. i thought we got rid of that stuff?" -- then "or hands might have been 2".
+- Cause: the picture at "Quarters and dimes brought me here" was one of the armless-hand pictures bought on 11-05 for
+  "Hands Like My Father's" and reused through the library. On 11-11 those were moved out of Clutch and Second Gear only
+  (the entry above: "Not done here: the 6 bad pictures ... stay in the shared library"), and the picture check made that
+  day runs only when a video is made: every video made before 11-11 kept pictures nobody checked. The same four hand
+  pictures were in Parked at the Edge of Gone (owner-verified, next in the AI upload lane), Torque and Rust, and Hands
+  Like My Father's itself (on YouTube since 11-06). Of the 36 pending uploads, 1215 picture copies had never been
+  checked; 2 were already known bad (Pale Blue Eyes and its EASY version).
+- The songs: a render-only start (every picture checked on the Pro plan, bad ones replaced and checked, the video made
+  again; old videos in `redo_backup_*`). Quarters and Dimes: 8 bad of 38 (the fender hand, a hand out of a jacket
+  sleeve, warped fingers, a third hand, a ghost at the cash register, a strained pose); Parked at the Edge of Gone: 6
+  then 2 of the replacements (hands on the hood, a couple merged into a car, a two-faced woman, broken cars).
+- Fix (owner: yes): `schedule_upload` checks the pictures of the video it is about to send
+  (`pipeline.hold_for_bad_pictures_before_upload`, `picture_check.bad_pictures_in`: verdicts only, nothing moved). Bad
+  -> the video set aside and the song held (`BAD_PICTURES_PREFIX`; Flagged shows it even for a verified song); Render
+  Anyway (an EASY version: Rebuild EASY version) moves the picture out, buys a new one and makes the video again.
+  Can't check -> `PicturesNotChecked`, nothing changes, retried after the auto-retry's 6 h. An EASY CHORD version's
+  render now checks its pictures too (copies of an unchecked song's), and a thumbnail drawn on a picture the check
+  throws out is deleted so a new one is made.
+- Not done: Hands Like My Father's (on YouTube with four hand pictures) is the owner's call.

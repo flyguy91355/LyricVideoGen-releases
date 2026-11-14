@@ -496,6 +496,9 @@ def review_concern(song_dir: Path) -> str:
     facts = _song_facts(song_dir)
     if facts is None:
         return ""
+    held = _held_reason(song_dir) if held_before_video(song_dir) else ""
+    if held.startswith((BAD_PICTURES_PREFIX, PICTURES_NOT_CHECKED_PREFIX)):
+        return held                 # stopped for its pictures: that is what to fix, even in a song the owner verified
     stale = easy_variant_problem(Path(song_dir))     # "" for anything but an out-of-date EASY CHORD version
     if stale:
         return f"{EASY_STALE_PREFIX} {stale} Use Rebuild EASY version."
@@ -1073,12 +1076,77 @@ def _pictures_on_disk(images_dir: Path, song: Song) -> list[tuple[Path, str]]:
     return found
 
 
+BAD_PICTURES_PREFIX = "Bad picture in the video:"
+
+
+def hold_for_bad_pictures_before_upload(work_dir: Path, song: Song) -> str:
+    """Owner, 2026-11-13 (Quarters and Dimes: "a cut off hand on a truck fender.. i thought we got rid of that stuff?"): a
+    video made before the picture check existed (2026-11-11) still carries pictures nobody checked. Before it uploads,
+    every picture it uses is judged -- a verdict already in the library, else checked now on the owner's Pro plan
+    (picture_check.bad_pictures_in). Returns "" when all are good. When one is bad, the song is held like any song stopped
+    before its video: its video is set aside (out of Pending and Upload) and the hold's reason is written, which shows in
+    Flagged; Render Anyway (an EASY CHORD version: Rebuild EASY version) replaces the picture and makes the video again.
+    Returns that reason. Raises picture_check.PictureCheckUnavailable when a picture could not be checked and none was
+    found bad: nothing is changed, and the upload is tried again later."""
+    from .picture_check import bad_pictures_in
+
+    work_dir = Path(work_dir)
+    pictures = _pictures_on_disk(work_dir / "images", song)
+    bad = bad_pictures_in(pictures) if pictures else []
+    if not bad:
+        return ""
+    shown = "; ".join(f"{text!r} ({problem[:100] + '...' if len(problem) > 100 else problem})" for text, problem in bad)
+    easy = work_dir.name == EASY_DIR
+    fix = "Use Rebuild EASY version." if easy else "Use Render Anyway to replace it and make the video again."
+    concern = f"{BAD_PICTURES_PREFIX} {shown} -- {fix}"
+    _set_aside_videos(work_dir)
+    if easy:
+        _hold_easy_version(work_dir, concern)
+    else:
+        _write_held_marker(work_dir, concern)
+    return concern
+
+
+def _pixels(path: Path) -> bytes | None:
+    from PIL import Image
+
+    try:
+        with Image.open(path) as img:
+            return img.convert("RGB").tobytes()
+    except Exception:
+        return None
+
+
+def _drop_thumbnail_on_removed_pictures(work_dir: Path, removed_ids: set[str]) -> None:
+    """A thumbnail drawn on one of the song's own pictures (thumbnail_job.ensure_thumbnail keeps it as thumbnail_bg.png)
+    that the picture check just threw out is deleted, with its EASY CHORD version's thumbnail, so a new one is made
+    (after this render, or at upload) -- a render otherwise keeps the thumbnail it has."""
+    from .image_library import image_library_dir
+    from .picture_check import BAD_IMAGES_DIRNAME
+    from .thumbnail import THUMBNAIL_BG_FILE, THUMBNAIL_FILE, THUMBNAIL_OWN_FILE
+
+    work_dir = Path(work_dir)
+    background = work_dir / THUMBNAIL_BG_FILE
+    if not removed_ids or not (work_dir / THUMBNAIL_OWN_FILE).exists() or not background.is_file():
+        return
+    shown = _pixels(background)
+    bad_dir = image_library_dir() / BAD_IMAGES_DIRNAME
+    if shown is None or not any(_pixels(bad_dir / f"{image_id}.png") == shown for image_id in removed_ids):
+        return
+    for path in (work_dir / THUMBNAIL_FILE, background, work_dir / THUMBNAIL_OWN_FILE,
+                 work_dir / EASY_DIR / THUMBNAIL_FILE):
+        path.unlink(missing_ok=True)
+    print("The thumbnail was made from a picture the check threw out; a new one is made.")
+
+
 def _checked_song_images(work_dir: Path, images_dir: Path, song: Song, settings, fresh_images: bool,
                          final_path: Path, render_only: bool = False) -> None:
     """Makes the song's pictures and checks every one before the video (picture_check.py): a bad picture is moved to
     the library's bad_images folder and its line gets a new one, which is checked too -- up to _PICTURE_CHECK_ROUNDS
     tries per line. A line still without a good picture after that shows its nearest good picture (the render's own
-    rule for a missing picture). Pictures already judged good are never sent again."""
+    rule for a missing picture). Pictures already judged good are never sent again. A thumbnail drawn on a picture
+    thrown out is made again (_drop_thumbnail_on_removed_pictures)."""
+    from .image_library import content_id
     from .picture_check import PictureCheckUnavailable, check_song_pictures
 
     only: set[str] | None = None
@@ -1087,11 +1155,13 @@ def _checked_song_images(work_dir: Path, images_dir: Path, song: Song, settings,
             pictures = _pictures_on_disk(images_dir, song)
         else:
             pictures = _make_song_images(work_dir, images_dir, song, settings, fresh_images, only_texts=only)
+        ids = {Path(path): content_id(path) for path, _text in pictures if Path(path).is_file()}
         try:
             removed, summary = check_song_pictures(pictures, song.title, work_dir)
         except PictureCheckUnavailable as e:
             _hold_for_pictures(work_dir, final_path, str(e))
         print(summary.line())
+        _drop_thumbnail_on_removed_pictures(work_dir, {ids[Path(p)] for p in removed if Path(p) in ids})
         if not removed:
             return
         if render_only:         # buy replacements for the removed pictures only, never for lines that had none
@@ -1761,10 +1831,11 @@ def run_pipeline(
     if start_idx <= STAGES.index("images") <= end_idx:
         report("images")
         _checked_song_images(work_dir, images_dir, song, settings, fresh_images, final_path)
-    elif start_idx == STAGES.index("render") and end_idx >= start_idx and not easy_variant:
-        # A render-only start (Render Anyway on a song with a video, a respelled key) uses the pictures already on
-        # disk: they are checked too (owner, 2026-11-11: every picture "if were using it again"). An EASY CHORD
-        # version's pictures are copies of its song's, checked when the song was made.
+    elif start_idx == STAGES.index("render") and end_idx >= start_idx:
+        # A render-only start (Render Anyway on a song with a video, a respelled key, an EASY CHORD version) uses the
+        # pictures already on disk: they are checked too (owner, 2026-11-11: every picture "if were using it again"). An
+        # EASY version's pictures are copies of its song's -- already known good when the song was made after
+        # 2026-11-11, but a song made before then was never checked (owner, 2026-11-13), and a bad copy is replaced here.
         _checked_song_images(work_dir, images_dir, song, settings, fresh_images, final_path, render_only=True)
 
     if start_idx <= STAGES.index("render") <= end_idx:

@@ -106,7 +106,7 @@ from .pipeline import review_concern, waits_to_be_watched
 from .ai_generated import WATCH_FIRST_REASON, is_ai_generated
 from .fetch_lyrics import LyricsSourceDown
 from .youtube_comment_state import MAX_DRAFT_FAILURES, clear_draft_failures, mark_comment_seen, record_draft_failure
-from .youtube_schedule import AlreadyUploaded, IncompleteVideo, upload_in_progress
+from .youtube_schedule import AlreadyUploaded, BadPictures, IncompleteVideo, PicturesNotChecked, upload_in_progress
 from .youtube_state import (
     STATE_FILENAME, atomic_write_text, mark_engagement_comment_posted, read_json_state, uploaded_song_dirs,
 )
@@ -887,6 +887,8 @@ def _maybe_upload_to_youtube(work_dir: Path, settings: Settings, work_root: Path
                 )
     except IncompleteVideo as e:
         print(f"WARNING: {work_dir.name} was not uploaded -- the video must be made again: {e}", file=sys.stderr)
+    except (BadPictures, PicturesNotChecked) as e:
+        print(f"WARNING: {e}", file=sys.stderr)
     except Exception as e:
         if is_quota_exceeded_error(e):
             save_quota_blocked_until(
@@ -960,6 +962,11 @@ def _retry_pending_uploads(
             # Not an upload failure: the video itself must be made again (cut short, no audio, missing). Nothing was sent
             # or paid for; the auto-retry backs off from it like any failed song.
             results["failed"].append((slug, f"the video must be made again (Redo, or Rebuild EASY version): {e}"))
+            continue
+        except (BadPictures, PicturesNotChecked) as e:
+            # Nothing sent or paid for: a bad picture holds the song (Flagged: Render Anyway), and one that could not be
+            # checked (the Pro limit) waits for the auto-retry's backoff like any failed song.
+            results["failed"].append((slug, str(e)))
             continue
         except Exception as e:
             results["failed"].append((slug, f"{type(e).__name__}: {e}"))

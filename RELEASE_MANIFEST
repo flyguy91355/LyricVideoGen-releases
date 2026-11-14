@@ -226,6 +226,7 @@ tests/test_update_support_description.py
 tests/test_update_version.py
 tests/test_upload_guard_find_truncated.py
 tests/test_upload_guard_truncated.py
+tests/test_upload_picture_check.py
 tests/test_venv.py
 tests/test_verify_lyrics.py
 tests/test_vocal_onset.py

@@ -391,3 +391,40 @@ def test_the_backfill_list_scan_labels_rows_and_counts_songs_waiting_for_a_key(t
     assert data["songs"] == ["ready", "stale"]
     assert "out of date" in data["labels"]["stale"]
     assert data["note"] == "1 more wait for a settled key"
+
+
+def test_an_easy_version_never_keeps_a_bad_picture_copied_from_its_song(tmp_path, renders, monkeypatch):
+    """Owner, 2026-11-13: a song made before the picture check (2026-11-11) hands its EASY version pictures nobody
+    checked; Rebuild EASY version replaces a bad one instead of copying it straight back into the video."""
+    from PIL import Image
+
+    from lyricvideo.image_library import ImageLibrary, content_id
+    from lyricvideo.models import line_hash
+
+    song_dir = _make_song(tmp_path / "work")
+    text = load_song(song_dir / "lyrics_timed.json").lines[0].text
+    hand = song_dir / "images" / f"{line_hash(text)}.png"
+    Image.new("RGB", (16, 9), (200, 0, 0)).save(hand)
+    lib = ImageLibrary()
+    lib.record_check(content_id(hand), "bad", "a hand with no arm on a truck fender", "opus")
+    lib.close()
+    bought = []
+
+    def fake_get(anthropic_client, token, gist, line_text, images_dir, **kwargs):
+        path = Path(images_dir) / f"{line_hash(line_text)}.png"
+        Image.new("RGB", (16, 9), (10, 120, 10)).save(path)
+        bought.append(line_text)
+        return path
+
+    monkeypatch.setattr(pipeline, "get_or_generate_image", fake_get)
+    monkeypatch.setattr(pipeline, "summarize_song_gist", lambda *a, **k: "a gist")
+    monkeypatch.setattr(pipeline, "anthropic", SimpleNamespace(Anthropic=lambda: object()))
+    monkeypatch.setenv("REPLICATE_API_TOKEN", "fake-token")
+
+    build_capo_variant(song_dir, settings=Settings())
+
+    easy_copy = song_dir / "easychords" / "images" / hand.name
+    assert bought == [text]
+    assert Image.open(easy_copy).convert("RGB").getpixel((0, 0)) == (10, 120, 10)
+    assert renders[-1]["out_path"].parent == song_dir / "easychords"
+    assert not (song_dir / "easychords" / HELD_MARKER).exists()

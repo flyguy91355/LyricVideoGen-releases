@@ -155,9 +155,9 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    prompt whatever the setting, disables itself on error. No reuse (`skip_lookup`) with the setting
    off or Redo's "Generate new images"; a moved-aside picture is never offered again
    (`image_library_rejected.json`). `python -m lyricvideo.image_library stats`.
-   **Picture check** (`picture_check.py`): each picture a video uses (not EASY) is judged once by
+   **Picture check** (`picture_check.py`): each picture a video uses (EASY copies too) is judged once by
    `claude -p` on the Pro plan (no API key; opus); verdicts by content id in library.db. Bad -> `bad_images/`, out
-   of the library, re-bought (3 tries); can't check: held. Lettering never rejects.
+   of the library, re-bought (3 tries), a thumbnail on it remade; can't check: held. Lettering never rejects.
 7. **render** (`assemble.py`/`layout.py`/`render.py`) -- lyrics (karaoke word sweep, Ken Burns), NOW/NEXT/timeline chord
    bar, Key/BPM badge, chord legend over the audio into `work_dir/<slug>.mp4`. Font: `--font`, else
    `Settings.font_path`, via `pipeline.resolve_font` (a missing file -> `default_font()` with a warning; candidates
@@ -328,9 +328,9 @@ Claude's: `build_play_along_title()` `"{title} - {artist} - (Play Along Lyrics &
 unknown) / `build_easy_chord_title`, fitted to 100 chars with no '<'/'>' (the suffix stays; artist dropped first, then
 an ellipsis).
 `youtube_schedule.schedule_upload()` is the single upload path (auto and manual). It refuses a missing, unreadable,
-audio-less or cut-short video with `IncompleteVideo` (`.cut_short`, `.video_path`; cut short = picture >1 s shorter
-than audio per `assemble.rendered_stream_seconds`) -- like the key, stale-EASY and bad-title checks, before the Claude
-call and any YouTube call; the GUI logs 'the video must be made again', never renaming the file. It uploads one
+audio-less or cut-short (picture >1 s shorter than audio) video with `IncompleteVideo` -- like the key, stale-EASY,
+bad-title and picture checks (pictures never checked are checked now: bad -> held, `BAD_PICTURES_PREFIX`; can't ->
+`PicturesNotChecked`), before the Claude call and any YouTube call; the GUI logs 'the video must be made again'. It uploads one
 at a time (`_UPLOAD_LOCK`, `upload_in_progress()`); `only_if_not_uploaded=True` raises `AlreadyUploaded` when a
 `youtube_state.json` EXISTS (even empty/cut off); a state write failing after the upload raises naming the video_id.
 Public -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the live
@@ -340,7 +340,7 @@ at `Settings.youtube_upload_times` (AI songs: `youtube_ai_upload_times`, own cla
 `publish_lane`; blank = shared), capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private: at once.
 Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
-Sonnet picks the most striking suitable one; a new one only if none are clean), kept as `thumbnail_bg.png`; full title left of every
+Sonnet picks the most striking clean one, else a new one), kept as `thumbnail_bg.png`; full title left of every
 chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
 soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
 A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
@@ -358,7 +358,7 @@ Upload Selected / Upload Anyway during a run or the tick's auto-retry say 'Uploa
 (a Batch/tick finish never re-enables them mid-run); the tick just skips. Every pending or auto upload goes
 through `_upload_within_todays_cap` (`_UPLOAD_SLOT_LOCK`: re-check state, cap,
 `schedule_upload(only_if_not_uploaded=True)`, `record_upload`); `AlreadyUploaded` is a skip (in the results).
-`_maybe_upload_to_youtube(work_dir, settings, root)` gates auto-upload (enabled, connected, never uploaded --
+`_maybe_upload_to_youtube` gates auto-upload (enabled, connected, never uploaded --
 verified live by `video_exists()`, failing CLOSED, so a deleted video re-uploads; flagged songs skipped) from
 `_run_worker` and each Batch item; failures only warn. With an AI lane, waiting AI songs (`_waiting_ai_songs`) upload
 first (tick order; before a band song's, 11-01). A failed auto-retry waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).

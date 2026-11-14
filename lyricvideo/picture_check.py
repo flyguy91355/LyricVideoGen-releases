@@ -134,63 +134,95 @@ def quarantine(path: Path, image_id: str, problem: str, song_title: str, line_te
     return target
 
 
+def _by_content(pictures: Iterable[tuple[Path, str]]) -> dict[str, list[tuple[Path, str]]]:
+    """content id -> every (picture, line text) holding it: the same picture under several lines is judged once."""
+    copies: dict[str, list[tuple[Path, str]]] = {}
+    for path, line_text in pictures:
+        path = Path(path)
+        if path.is_file():
+            copies.setdefault(content_id(path), []).append((path, line_text))
+    return copies
+
+
+def _judge(copies: dict[str, list[tuple[Path, str]]], library: ImageLibrary, check: Callable[[Path], Verdict],
+           summary: CheckSummary) -> tuple[dict[str, str], PictureCheckUnavailable | None]:
+    """(content id -> problem for every bad picture, the first PictureCheckUnavailable). A picture already judged is never
+    sent again; every new verdict is recorded in the library, also when another picture could not be checked."""
+    bad: dict[str, str] = {}
+    todo: list[tuple[Path, str, str]] = []
+    for image_id, places in copies.items():
+        known = library.check_verdict(image_id)
+        if known is not None and known[0] == "good":
+            summary.known_good += 1
+        elif known is not None:
+            bad[image_id] = known[1]
+        else:
+            todo.append((places[0][0], places[0][1], image_id))
+
+    def one(item):
+        try:
+            return check(item[0])
+        except PictureCheckUnavailable as e:
+            return e
+
+    with ThreadPoolExecutor(_PARALLEL_CHECKS) as pool:
+        results = list(pool.map(one, todo))
+    unavailable: PictureCheckUnavailable | None = None
+    for (path, line_text, image_id), result in zip(todo, results):
+        if isinstance(result, PictureCheckUnavailable):
+            unavailable = unavailable or result
+            continue
+        summary.checked += 1
+        library.record_check(image_id, "good" if result.good else "bad", result.problem, PICTURE_CHECK_MODEL)
+        if not result.good:
+            bad[image_id] = result.problem
+            print(f"Bad picture for {line_text!r}: {result.problem}")
+    return bad, unavailable
+
+
 def check_song_pictures(pictures: Iterable[tuple[Path, str]], song_title: str, work_dir: Path | None = None,
                         library: ImageLibrary | None = None,
                         check: Callable[[Path], Verdict] = check_picture) -> tuple[list[Path], CheckSummary]:
     """Checks each (picture, line text) the video will use and moves every bad one out. Returns the pictures removed
     (their lines need new ones) and the counts. A picture already judged is never sent again: good ones are skipped, a
-    known-bad one (say, copied back from an old backup) is moved out at once. Raises PictureCheckUnavailable (after
-    recording every verdict that did come back) when any picture could not be checked."""
+    known-bad one (say, copied back from an old backup) is moved out. Raises PictureCheckUnavailable (after recording
+    every verdict that did come back, and moving out every bad picture found) when any picture could not be checked."""
     own = library is None
     library = library or ImageLibrary()
     summary = CheckSummary()
     removed: list[Path] = []
     try:
-        copies: dict[str, list[tuple[Path, str]]] = {}      # the same picture under several lines is judged once
-        for path, line_text in pictures:
-            path = Path(path)
-            if path.is_file():
-                copies.setdefault(content_id(path), []).append((path, line_text))
-
-        def throw_out(image_id: str, problem: str) -> None:
+        copies = _by_content(pictures)
+        bad, unavailable = _judge(copies, library, check, summary)
+        for image_id, problem in bad.items():
             (first, line_text), *rest = copies[image_id]
             quarantine(first, image_id, problem, song_title, line_text, library, work_dir)
             for other, _ in rest:
                 other.unlink(missing_ok=True)
             removed.extend(p for p, _ in copies[image_id])
             summary.bad += 1
-
-        todo: list[tuple[Path, str, str]] = []
-        for image_id, places in copies.items():
-            known = library.check_verdict(image_id)
-            if known is not None and known[0] == "good":
-                summary.known_good += 1
-            elif known is not None:
-                throw_out(image_id, known[1])
-            else:
-                todo.append((places[0][0], places[0][1], image_id))
-        unavailable: PictureCheckUnavailable | None = None
-
-        def one(item):
-            try:
-                return check(item[0])
-            except PictureCheckUnavailable as e:
-                return e
-
-        with ThreadPoolExecutor(_PARALLEL_CHECKS) as pool:
-            results = list(pool.map(one, todo))
-        for (path, line_text, image_id), result in zip(todo, results):
-            if isinstance(result, PictureCheckUnavailable):
-                unavailable = unavailable or result
-                continue
-            summary.checked += 1
-            library.record_check(image_id, "good" if result.good else "bad", result.problem, PICTURE_CHECK_MODEL)
-            if not result.good:
-                throw_out(image_id, result.problem)
-                print(f"Bad picture for {line_text!r}: {result.problem}")
         if unavailable is not None:
             raise unavailable
         return removed, summary
+    finally:
+        if own:
+            library.close()
+
+
+def bad_pictures_in(pictures: Iterable[tuple[Path, str]], library: ImageLibrary | None = None,
+                    check: Callable[[Path], Verdict] = check_picture) -> list[tuple[str, str]]:
+    """(line text, problem) for every bad picture among the (picture, line text) of a video that is already made -- known
+    from the library or checked now. Nothing is moved: the render that replaces a bad picture (Render Anyway, Rebuild EASY
+    version) finds it known-bad and moves it out then (check_song_pictures). When no picture is bad but one could not be
+    checked, raises PictureCheckUnavailable (after recording every verdict that did come back)."""
+    own = library is None
+    library = library or ImageLibrary()
+    try:
+        copies = _by_content(pictures)
+        bad, unavailable = _judge(copies, library, check, CheckSummary())
+        if not bad and unavailable is not None:
+            raise unavailable
+        return [(copies[image_id][0][1], problem) for image_id, problem in bad.items()]
     finally:
         if own:
             library.close()

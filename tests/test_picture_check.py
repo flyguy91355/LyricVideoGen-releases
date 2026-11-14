@@ -150,3 +150,44 @@ def test_unavailable_keeps_the_verdicts_that_did_come_back(tmp_path):
         pc.check_song_pictures([(good, "a"), (stuck, "b")], "Song", library=lib, check=check)
     assert lib.check_verdict(content_id(good)) == ("good", "")
     assert lib.check_verdict(content_id(stuck)) is None and stuck.exists()
+
+
+def test_bad_pictures_in_a_made_video_are_found_and_recorded_but_never_moved(tmp_path):
+    """Before an upload (owner, 2026-11-13): a video made before the check is judged; the render that replaces a bad
+    picture moves it out, not the check."""
+    lib = ImageLibrary(tmp_path / "lib")
+    hand = _png(tmp_path / "s" / "images" / "h.png", color=(200, 0, 0))
+    fine = _png(tmp_path / "s" / "images" / "f.png")
+    twin = _png(tmp_path / "s" / "images" / "t.png", color=(200, 0, 0))
+    asked = []
+
+    def check(path):
+        asked.append(path.name)
+        return pc.Verdict(False, "a hand with no arm") if path.name in ("h.png", "t.png") else pc.Verdict(True)
+
+    bad = pc.bad_pictures_in([(hand, "Quarters and dimes brought me here"), (fine, "fine"), (twin, "again")],
+                             library=lib, check=check)
+
+    assert bad == [("Quarters and dimes brought me here", "a hand with no arm")]
+    assert sorted(asked) == ["f.png", "h.png"]                  # the same picture under two lines is judged once
+    assert hand.exists() and twin.exists() and fine.exists()
+    assert lib.check_verdict(content_id(hand)) == ("bad", "a hand with no arm")
+    assert pc.bad_pictures_in([(hand, "x"), (fine, "y")], library=lib, check=check) == [("x", "a hand with no arm")]
+    assert sorted(asked) == ["f.png", "h.png"]                  # known verdicts are never sent again
+
+
+def test_bad_pictures_in_waits_when_a_picture_cannot_be_checked_unless_one_is_already_bad(tmp_path):
+    lib = ImageLibrary(tmp_path / "lib")
+    good = _png(tmp_path / "s" / "images" / "g.png")
+    stuck = _png(tmp_path / "s" / "images" / "u.png", color=(1, 2, 3))
+    hand = _png(tmp_path / "s" / "images" / "h.png", color=(200, 0, 0))
+
+    def check(path):
+        if path.name == "u.png":
+            raise pc.PictureCheckUnavailable("Pro limit reached")
+        return pc.Verdict(path.name != "h.png", "a hand with no arm" if path.name == "h.png" else "")
+
+    with pytest.raises(pc.PictureCheckUnavailable, match="Pro limit"):
+        pc.bad_pictures_in([(good, "a"), (stuck, "b")], library=lib, check=check)
+    assert lib.check_verdict(content_id(good)) == ("good", "")         # what came back is kept
+    assert pc.bad_pictures_in([(stuck, "b"), (hand, "c")], library=lib, check=check) == [("c", "a hand with no arm")]
