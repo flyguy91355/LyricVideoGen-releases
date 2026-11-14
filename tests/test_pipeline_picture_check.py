@@ -218,3 +218,58 @@ def test_a_render_that_throws_out_the_thumbnails_picture_makes_a_new_thumbnail(t
 
     assert not (work / THUMBNAIL_FILE).exists() and not (work / THUMBNAIL_BG_FILE).exists()
     assert not (work / THUMBNAIL_OWN_FILE).exists()
+
+
+def test_the_upload_remakes_a_video_made_before_the_check_with_a_new_picture(tmp_path, monkeypatch):
+    """Owner, 2026-11-13: "if a bad pic is found then its replaced and then it rendered anyways, without me doing it..
+    then i will review after" -- what Render Anyway does, done by the upload itself."""
+    from lyricvideo.models import load_song
+    from lyricvideo.owner_verified import mark_verified, verification
+    from lyricvideo.pipeline import hold_for_bad_pictures_before_upload, remake_video_with_new_pictures
+
+    _patch_common(monkeypatch, tmp_path)
+    work = tmp_path / "work"
+    bought = _real_pictures(monkeypatch)
+    run_pipeline(Path("audio.mp3"), work)
+    _forget_verdicts()
+    mark_verified(work)
+    (work / "test-song.mp4").write_bytes(b"the old video")
+    asked = _verdict_by_colour(monkeypatch)
+    rendered = []
+
+    def render(lines, chords, images_dir, audio_path, final_path, *a, **k):
+        rendered.append(sorted(images_dir.glob("*.png")))
+        Path(final_path).write_bytes(b"the new video")
+
+    monkeypatch.setattr("lyricvideo.pipeline.assemble_video", render)
+
+    concern = hold_for_bad_pictures_before_upload(work, load_song(work / "lyrics_timed.json"), remaking=True)
+    assert "being replaced" in json.loads((work / HELD_MARKER).read_text())["reason"] == concern
+    asked.clear()
+    remake_video_with_new_pictures(work, None)
+
+    assert bought.count(bought[0]) == 2 and len(asked) == 1          # only the bad picture bought again and checked
+    assert rendered and all(Image.open(p).convert("RGB").getpixel((0, 0)) != BAD for p in rendered[-1])
+    assert (work / "test-song.mp4").read_bytes() == b"the new video" and not (work / HELD_MARKER).exists()
+    assert verification(work) is not None                           # the owner's approval of the lyrics still stands
+    assert hold_for_bad_pictures_before_upload(work, load_song(work / "lyrics_timed.json")) == ""
+
+
+def test_a_video_started_while_another_is_being_made_waits_for_it(tmp_path, monkeypatch):
+    """A remake inside an upload runs while the window looks idle: a Generate started then waits, never runs beside it."""
+    import threading
+
+    from lyricvideo import pipeline
+
+    _patch_common(monkeypatch, tmp_path)
+    done = []
+    pipeline._ONE_VIDEO_AT_A_TIME.acquire()                         # the upload's remake is running
+    try:
+        other = threading.Thread(target=lambda: done.append(run_pipeline(Path("audio.mp3"), tmp_path / "work")))
+        other.start()
+        other.join(timeout=1.0)
+        assert other.is_alive() and not done
+    finally:
+        pipeline._ONE_VIDEO_AT_A_TIME.release()
+    other.join(timeout=60)
+    assert done

@@ -383,9 +383,10 @@ class IncompleteVideo(RuntimeError):
 
 
 class BadPictures(RuntimeError):
-    """A picture in the video is bad (picture_check.py): the song was held -- its video set aside, the reason in Flagged
-    for Lyrics Review, where Render Anyway (an EASY CHORD version: Rebuild EASY version) replaces the picture and makes
-    the video again. Nothing was spent or sent."""
+    """A picture in the video is bad (picture_check.py) and no video with a new one could be made right away (the
+    remake failed, or its new picture was bad too): the song is held -- its video set aside, the reason in Flagged for
+    Lyrics Review, where Render Anyway (an EASY CHORD version: Rebuild EASY version) makes it again. Nothing was spent on
+    its description and nothing was sent."""
 
 
 class PicturesNotChecked(RuntimeError):
@@ -393,21 +394,43 @@ class PicturesNotChecked(RuntimeError):
     nothing was uploaded and nothing changed; it is tried again later."""
 
 
-def check_pictures_before_upload(work_dir: Path, song, label: str) -> None:
+def check_pictures_before_upload(work_dir: Path, song, label: str, settings=None, remake: bool = False) -> bool:
     """Owner, 2026-11-13: nothing goes out with a picture nobody checked -- a video made before the picture check
-    existed (2026-11-11) is checked here (pipeline.hold_for_bad_pictures_before_upload). Raises BadPictures (the song
-    is now held) or PicturesNotChecked."""
+    existed (2026-11-11) is checked here (pipeline.hold_for_bad_pictures_before_upload). False when every picture is
+    good. When one is bad and `remake`, the song is held while its video is made again with a new picture
+    (pipeline.remake_video_with_new_pictures; owner: "its replaced and then it rendered anyways, without me doing it..
+    then i will review after") and True is returned: the caller checks that new video from the start, then uploads it.
+    Raises BadPictures (the song stays held) when it was not remade or the remake failed, and PicturesNotChecked."""
+    from .batch import release_memory
     from .picture_check import PictureCheckUnavailable
-    from .pipeline import hold_for_bad_pictures_before_upload
+    from .pipeline import HeldBeforeVideo, held_before_video, hold_for_bad_pictures_before_upload, remake_video_with_new_pictures
 
     try:
-        concern = hold_for_bad_pictures_before_upload(work_dir, song)
+        concern = hold_for_bad_pictures_before_upload(work_dir, song, remaking=remake)
     except PictureCheckUnavailable as e:
         raise PicturesNotChecked(
             f"{label} was not uploaded: its pictures could not be checked yet ({e}); it is tried again later."
         ) from None
-    if concern:
+    if not concern:
+        return False
+    if not remake:
         raise BadPictures(f"{label} was not uploaded and is held in Flagged for Lyrics Review. {concern}")
+    print(f"{label}: {concern}")
+    try:
+        remake_video_with_new_pictures(work_dir, settings)
+    except HeldBeforeVideo as e:
+        raise BadPictures(f"{label} was not uploaded and is held in Flagged for Lyrics Review. {e.concern}") from None
+    except Exception as e:
+        raise BadPictures(
+            f"{label} was not uploaded and is held in Flagged for Lyrics Review: making its video again with a new picture "
+            f"failed ({type(e).__name__}: {e}). {concern}"
+        ) from None
+    finally:
+        release_memory()
+    if held_before_video(work_dir):     # e.g. an EASY CHORD version that could not be built (its reason was printed)
+        raise BadPictures(f"{label} was not uploaded and is held in Flagged for Lyrics Review. {concern}")
+    print(f"{label}: its video was made again with new pictures; it is checked again and uploaded now.")
+    return True
 
 
 def is_cut_short(picture_seconds: float, audio_seconds: float | None) -> bool:
@@ -468,8 +491,10 @@ def schedule_upload(
     deliberate re-upload) raises AlreadyUploaded instead of sending a song
     that another run finished uploading while this one waited. Every cheap
     check -- the settled key, a stale EASY CHORD version, a title YouTube
-    would refuse, a missing or cut-short video (IncompleteVideo) -- runs
-    before the paid Claude description call and before any YouTube call."""
+    would refuse, a missing or cut-short video (IncompleteVideo), the
+    pictures -- runs before the paid Claude description call and before any
+    YouTube call. A video with a bad picture is made again first, with a new
+    one, and then checked from the start (check_pictures_before_upload)."""
     work_dir = Path(work_dir)
     with _UPLOAD_LOCK:
         # The FILE decides, not whether it parses: an empty or cut-off youtube_state.json still means the song went out
@@ -479,7 +504,8 @@ def schedule_upload(
         return _schedule_upload_locked(youtube_client, anthropic_client, work_dir, settings, now)
 
 
-def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, settings, now: datetime | None) -> str:
+def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, settings, now: datetime | None,
+                            remake_bad_pictures: bool = True) -> str:
     from .ai_generated import is_ai_generated
     from .banned import SongBanned, is_banned
     if is_banned(work_dir):
@@ -519,8 +545,10 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
     # paid description call and before any YouTube call (IncompleteVideo).
     song_label = f"{work_dir.parent.name}/easychords" if work_dir.name == "easychords" else work_dir.name
     check_video_complete(video_path, song_label)
-    # Every picture the video shows was checked, here if not before (BadPictures holds the song; PicturesNotChecked waits).
-    check_pictures_before_upload(work_dir, song, song_label)
+    # Every picture the video shows was checked, here if not before. A bad one is replaced and the video made again, once;
+    # that new video then goes through every check above again (BadPictures: held; PicturesNotChecked: waits).
+    if check_pictures_before_upload(work_dir, song, song_label, settings, remake=remake_bad_pictures):
+        return _schedule_upload_locked(youtube_client, anthropic_client, work_dir, settings, now, remake_bad_pictures=False)
     metadata_title = capo_info["original_title"] if capo_info else song.title
     ai_song = is_ai_generated(work_dir)
     title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics, original=ai_song)

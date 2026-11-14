@@ -5352,7 +5352,8 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
 - The songs: a render-only start (every picture checked on the Pro plan, bad ones replaced and checked, the video made
   again; old videos in `redo_backup_*`). Quarters and Dimes: 8 bad of 38 (the fender hand, a hand out of a jacket
   sleeve, warped fingers, a third hand, a ghost at the cash register, a strained pose); Parked at the Edge of Gone: 6
-  then 2 of the replacements (hands on the hood, a couple merged into a car, a two-faced woman, broken cars).
+  then 2 of the replacements (hands on the hood, a couple merged into a car, a two-faced woman, broken cars). Torque and
+  Rust: 6 bad, all replacements good.
 - Fix (owner: yes): `schedule_upload` checks the pictures of the video it is about to send
   (`pipeline.hold_for_bad_pictures_before_upload`, `picture_check.bad_pictures_in`: verdicts only, nothing moved). Bad
   -> the video set aside and the song held (`BAD_PICTURES_PREFIX`; Flagged shows it even for a verified song); Render
@@ -5360,4 +5361,13 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   Can't check -> `PicturesNotChecked`, nothing changes, retried after the auto-retry's 6 h. An EASY CHORD version's
   render now checks its pictures too (copies of an unchecked song's), and a thumbnail drawn on a picture the check
   throws out is deleted so a new one is made.
-- Not done: Hands Like My Father's (on YouTube with four hand pictures) is the owner's call.
+- Hands Like My Father's (on YouTube with four hand pictures): owner, "we will leave hands like my fathers, its
+  already published".
+- Then the owner: "if a bad pic is found then its replaced and then it rendered anyways, without me doing it.. then i
+  will review after". `check_pictures_before_upload` now does Render Anyway's work itself
+  (`pipeline.remake_video_with_new_pictures`: the images stage for a song, `build_capo_variant` for an EASY version),
+  the song held while it runs ("if this stays, that did not finish"); the new video goes through every upload check
+  again and uploads (Private with its `publishAt`, as always). Once only: a new picture bad again, a failed remake or
+  new pictures that can't be checked leave the song held, as before. The remake runs inside the upload while the
+  window looks idle, so `run_pipeline` now makes one video at a time per process (`_ONE_VIDEO_AT_A_TIME`, re-entrant
+  for the EASY build inside a song's run): a Generate started meanwhile waits and says so.

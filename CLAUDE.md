@@ -2,8 +2,8 @@
 
 Generates synced lyric+chord "play along" videos from nothing but an audio file:
 karaoke-style scrolling lyrics (forced-aligned to the real vocal stem) and a
-NOW/NEXT/timeline chord bar (chords detected directly from the audio, never a
-tab/chord sheet) composited over AI-generated Ken-Burns backgrounds that change
+NOW/NEXT/timeline chord bar (chords detected from the audio, never a
+chord sheet) composited over AI-generated Ken-Burns backgrounds that change
 per lyric line -- and per chord during instrumental gaps. `deep_review/` retries
 the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `docs/CLAUDE_HISTORY.md`.
 
@@ -20,7 +20,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
   Song" resets the form; the work dir falls back to the file name until identify finishes. Left column: form/Generate/Redo/log/progress; right: YouTube status/Connect, "⚙ Settings",
   comment panels.
   - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
-    googleapiclient, tensorflow, crema (e.g. gui's `_LazyAnthropic`, assemble's `_load_moviepy`).
+    googleapiclient, tensorflow, crema (gui's `_LazyAnthropic`, assemble's `_load_moviepy`).
   - Quit: X and
     Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
     Update runs (closing kills it; no resume). `_shut_down` withdraws the window at once, then destroys it; `_closing`
@@ -115,7 +115,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    accents, reads `&` as "and", else gives the `*` token. Display text never changes.
    `line_onsets.snap_to_vocals` (10-31): a line's first word moves up to 0.6 s EARLIER to the voice's rise out of a dip.
 5. **detect_chords** (`detect_chords.py`, `chord_theory.py`) -- `crema` (CNN/CRNN, ISC) on `no_vocals.wav`, collapsed
-   to 5 qualities by `_simplify_chord_label()` (every pumpp `3567s` quality mapped explicitly; `minmaj7` -> minor
+   to 5 qualities by `_simplify_chord_label()` (every pumpp `3567s` quality mapped; `minmaj7` -> minor
    triad); returns sharp labels and key "". Needs old TF/Keras/sklearn -- **`.venv` is Python 3.11**; see
    `requirements.txt` pins. A resume past this stage whose song has no chords runs it (and the key settle) first;
    `gui._stage_to_resume`: no chords -> detect_chords, chords + video -> render, chords + key decision -> images.
@@ -240,7 +240,7 @@ one (equal odds), Claude's About (`plan_scheduled_song`); `scheduled_songs.json`
 Re-runs a finished song through current code from `"fetch_lyrics"` (lyrics/chords fresh), reusing its stems and
 `song_info.json` (`list_redoable_songs()`/`load_redo_inputs()`, preferring the local audio copy). `load_song()`
 tolerates pre-merge files (reads only current `Word` fields; no `"chord_track"` -> empty). "Generate new images"
-(default off) runs `prepare_images_for_fresh_regeneration()`: `images/` moves to `images_prior_<time>/`, deliberately
+(default off) runs `prepare_images_for_fresh_regeneration()`: `images/` moves to `images_prior_<time>/`,
 NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the video + `lyrics_timed.json` into
 `redo_backup_<time>/`; `redo_log.py` records the redo (redone songs on YouTube still need replacing).
 
@@ -308,7 +308,7 @@ upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the 
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
 `scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, never the working tree),
 re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits.
-The owner runs this checkout directly; releases keep the banner/changelog meaningful.
+The owner runs this checkout; releases keep the banner meaningful.
 
 ## YouTube upload + channel management
 
@@ -329,8 +329,9 @@ unknown) / `build_easy_chord_title`, fitted to 100 chars with no '<'/'>' (the su
 an ellipsis).
 `youtube_schedule.schedule_upload()` is the single upload path (auto and manual). It refuses a missing, unreadable,
 audio-less or cut-short (picture >1 s shorter than audio) video with `IncompleteVideo` -- like the key, stale-EASY,
-bad-title and picture checks (pictures never checked are checked now: bad -> held, `BAD_PICTURES_PREFIX`; can't ->
-`PicturesNotChecked`), before the Claude call and any YouTube call; the GUI logs 'the video must be made again'. It uploads one
+bad-title and picture checks (unchecked pictures checked now: bad -> replaced, video remade (`_ONE_VIDEO_AT_A_TIME`),
+all checks again; fails: held, `BAD_PICTURES_PREFIX`; can't -> `PicturesNotChecked`), before the Claude call and any
+YouTube call; the GUI logs 'must be made again'. It uploads one
 at a time (`_UPLOAD_LOCK`, `upload_in_progress()`); `only_if_not_uploaded=True` raises `AlreadyUploaded` when a
 `youtube_state.json` EXISTS (even empty/cut off); a state write failing after the upload raises naming the video_id.
 Public -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the live

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import importlib
 import json
 import logging
@@ -1079,15 +1080,16 @@ def _pictures_on_disk(images_dir: Path, song: Song) -> list[tuple[Path, str]]:
 BAD_PICTURES_PREFIX = "Bad picture in the video:"
 
 
-def hold_for_bad_pictures_before_upload(work_dir: Path, song: Song) -> str:
+def hold_for_bad_pictures_before_upload(work_dir: Path, song: Song, remaking: bool = False) -> str:
     """Owner, 2026-11-13 (Quarters and Dimes: "a cut off hand on a truck fender.. i thought we got rid of that stuff?"): a
     video made before the picture check existed (2026-11-11) still carries pictures nobody checked. Before it uploads,
     every picture it uses is judged -- a verdict already in the library, else checked now on the owner's Pro plan
     (picture_check.bad_pictures_in). Returns "" when all are good. When one is bad, the song is held like any song stopped
     before its video: its video is set aside (out of Pending and Upload) and the hold's reason is written, which shows in
     Flagged; Render Anyway (an EASY CHORD version: Rebuild EASY version) replaces the picture and makes the video again.
-    Returns that reason. Raises picture_check.PictureCheckUnavailable when a picture could not be checked and none was
-    found bad: nothing is changed, and the upload is tried again later."""
+    `remaking`: the upload is about to do that itself (remake_video_with_new_pictures), and the reason says so -- it stays
+    only if that does not finish. Returns that reason. Raises picture_check.PictureCheckUnavailable when a picture could
+    not be checked and none was found bad: nothing is changed, and the upload is tried again later."""
     from .picture_check import bad_pictures_in
 
     work_dir = Path(work_dir)
@@ -1097,7 +1099,11 @@ def hold_for_bad_pictures_before_upload(work_dir: Path, song: Song) -> str:
         return ""
     shown = "; ".join(f"{text!r} ({problem[:100] + '...' if len(problem) > 100 else problem})" for text, problem in bad)
     easy = work_dir.name == EASY_DIR
-    fix = "Use Rebuild EASY version." if easy else "Use Render Anyway to replace it and make the video again."
+    if remaking:
+        fix = ("it is being replaced and the video made again now; if this stays, that did not finish -- use "
+               + ("Rebuild EASY version." if easy else "Render Anyway."))
+    else:
+        fix = "Use Rebuild EASY version." if easy else "Use Render Anyway to replace it and make the video again."
     concern = f"{BAD_PICTURES_PREFIX} {shown} -- {fix}"
     _set_aside_videos(work_dir)
     if easy:
@@ -1105,6 +1111,21 @@ def hold_for_bad_pictures_before_upload(work_dir: Path, song: Song) -> str:
     else:
         _write_held_marker(work_dir, concern)
     return concern
+
+
+def remake_video_with_new_pictures(work_dir: Path, settings: Settings | None) -> None:
+    """Owner, 2026-11-13: "if a bad pic is found then its replaced and then it rendered anyways, without me doing it..
+    then i will review after". What Render Anyway does for a song held by hold_for_bad_pictures_before_upload, done at
+    once: the song's video is made again from its images stage (the bad picture, already known bad, is moved out and a
+    new one bought and checked; nothing else is bought), with the owner's Settings; an EASY CHORD version is rebuilt
+    from its song (build_capo_variant), its bad copy replaced the same way. The render removes the hold. Raises what the
+    run raises (HeldBeforeVideo when the new pictures could not be checked); a song whose run fails stays held."""
+    work_dir = Path(work_dir)
+    if work_dir.name == EASY_DIR:
+        build_capo_variant(work_dir.parent, settings=settings)
+        return
+    audio_path, title = load_redo_inputs(work_dir)
+    run_pipeline(audio_path, work_dir, title, start_stage="images", settings=settings)
 
 
 def _pixels(path: Path) -> bytes | None:
@@ -1446,6 +1467,27 @@ def _carry_respelled_chord_pictures(images_dir: Path, song: Song, source_dirs: l
         print(f"Reused {len(filled)} chord picture(s) bought under the chord's other spelling.")
 
 
+# One video is made at a time in this process. Owner, 2026-11-13: a bad picture found at upload is replaced and the video
+# made again inside the upload (youtube_schedule.check_pictures_before_upload), while the window looks idle -- a Generate
+# started meanwhile waits for it instead of running beside it on this 4-core, 15 GB machine. Re-entrant: an EASY CHORD
+# version is made inside its song's own run.
+_ONE_VIDEO_AT_A_TIME = threading.RLock()
+
+
+def _one_video_at_a_time(run):
+    @functools.wraps(run)
+    def wrapper(*args, **kwargs):
+        if not _ONE_VIDEO_AT_A_TIME.acquire(blocking=False):
+            print("Another video is being made (a bad picture replaced before its upload); this one starts when it is done.")
+            _ONE_VIDEO_AT_A_TIME.acquire()
+        try:
+            return run(*args, **kwargs)
+        finally:
+            _ONE_VIDEO_AT_A_TIME.release()
+    return wrapper
+
+
+@_one_video_at_a_time
 def run_pipeline(
     audio_path: Path,
     work_dir: Path,
