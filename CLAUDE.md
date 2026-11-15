@@ -153,7 +153,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    falls back to plain colour); `substitute_fallback_images` swaps remaining placeholders (`is_fallback_image`: one
    colour) for the nearest real one; all placeholders -> RuntimeError, nothing renders.
    **Shared image library** (spec 9-25; `use_image_library` gates only reuse; `image_library_min_score`
-   0.34 provisional: `scripts/preview_library_matches.py`): before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`) by local CLIP (`clip_embedder.py`; ~605 MB weights only via `scripts/import_image_library.py`). `LibrarySession` copies a hit into `images/`, files every purchase with its
+   0.34 provisional: `scripts/preview_library_matches.py`): before buying, look in `~/PlayAlongVideoProductionImages/` (`image_library.py`) by local CLIP (`clip_embedder.py`; ~605 MB weights via `scripts/import_image_library.py` only). `LibrarySession` copies a hit into `images/`, files every purchase with its
    prompt whatever the setting, disables itself on error. No reuse (`skip_lookup`) with the setting
    off or Redo's "Generate new images"; a moved-aside picture is never offered again
    (`image_library_rejected.json`). `python -m lyricvideo.image_library stats`.
@@ -306,10 +306,10 @@ removes allow-listed regular files the previous applied release shipped and this
 `.release_manifest`, gitignored). `gui.py` checks once on launch, off Tk; a banner opens a centered
 modal with the notes, Apply Update (its confirm is
 parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused during a render or
-upload, one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply; `_poll_update_queue` handles each message alone and always reschedules.
+upload, one at a time (`_update_apply_in_progress`); Close/X only HIDE it during an apply; `_poll_update_queue` handles each message alone, always reschedules.
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
 `scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, not the working tree),
-re-applies `chmod +x` to `100755` paths; with `apply.py` it guards against a stale release reverting newer commits.
+re-applies `chmod +x` to `100755` paths; with `apply.py` it stops a stale release reverting newer commits.
 The owner runs this checkout; releases keep the banner meaningful.
 
 ## YouTube upload + channel management
@@ -317,10 +317,9 @@ The owner runs this checkout; releases keep the banner meaningful.
 Design `2026-09-10-youtube-upload-design.md` (why `publishAt`, not a local queue).
 `youtube_state.py`: each song's `youtube_state.json` (`video_id`, `uploaded_at`, `title`, `engagement_comment_posted`)
 beside its `lyrics_timed.json`; `uploaded_song_dirs(work_root)` / `mark_engagement_comment_posted(work_root, id)`
-include nested `<song>/easychords`. One that exists but cannot be read counts as uploaded everywhere (fail closed).
+include nested `<song>/easychords`. One that exists but can't be read counts as uploaded everywhere (fail closed).
 `youtube.py` wraps the Data API v3 (`upload_video`, `list_new_comments`, `post_reply`, playlists,
-`post_top_level_comment` = `commentThreads().insert`), each taking an injected client (faked in tests);
- `Comment.author_channel_id`. `upload_video` retries a dropped connection or 5xx up to 8x on the SAME
+`post_top_level_comment` = `commentThreads().insert`), each with an injected client (faked in tests). `upload_video` retries a dropped connection or 5xx up to 8x on the SAME
 resumable request (`bytes */N` recovers what YouTube stored); 4xx (quota, uploadLimitExceeded, invalidTitle) raise at
 once; `is_quota_exceeded_error` also knows HTTP 403 `quotaExceeded`.
 `youtube_metadata.py`: every Claude call has thinking off and is retried; `generate_video_metadata` (description/tags)
@@ -335,7 +334,7 @@ bad-title and picture checks (unchecked pictures checked now: bad -> replaced, v
 all checks again; fails: held, `BAD_PICTURES_PREFIX`; can't -> `PicturesNotChecked`), before the Claude call and any
 YouTube call; the GUI logs 'must be made again'. It uploads one
 at a time (`_UPLOAD_LOCK`, `upload_in_progress()`); `only_if_not_uploaded=True` raises `AlreadyUploaded` when a
-`youtube_state.json` EXISTS (even empty/cut off); a state write failing after the upload raises naming the video_id.
+`youtube_state.json` EXISTS (even empty/cut off); a state write failing after it raises naming the video_id.
 Public -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the live
 schedule (`reserved_publish_datetimes()`: uploads list + our youtube_state ids: it misses some, 11-01; one claim
 per video), each slot localized on its date (DST),
@@ -343,9 +342,9 @@ at `Settings.youtube_upload_times` (AI songs: `youtube_ai_upload_times`, own cla
 `publish_lane`; blank = shared), capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private: at once.
 Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
-Sonnet picks the most striking clean one, else a new one), kept as `thumbnail_bg.png`; full title left of every
-chord diagram; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
-soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py`.
+Sonnet picks the best clean one, else a new one), kept as `thumbnail_bg.png`; full title left of every
+chord diagram; a long artist: 2 full-size lines (11-15); EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
+soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py` (`--redraw-long-artists`).
 A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
 (`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts; N.C. over music
 filled (`chord_gaps.py`, AI songs only for now).

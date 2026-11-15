@@ -191,3 +191,47 @@ def test_a_generated_picture_clears_the_own_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(th, "generate_line_image", lambda tok, p, out, **k: Image.new("RGB", (1280, 720), (100, 100, 100)).save(out))
     th.generate_thumbnail(tmp_path, object(), "tok", title="t", artist="a", lyrics="x", candidates=1)
     assert not (tmp_path / th.THUMBNAIL_OWN_FILE).exists()
+
+
+# owner, 2026-11-15: a long artist on two lines at full size, for the thumbnails already on YouTube too
+LONG = "Bob Seger & The Silver Bullet Band"
+
+
+def test_redraw_draws_again_from_the_saved_picture_even_when_one_exists(tmp_path, monkeypatch):
+    make_song(tmp_path, title="Against the Wind", artist=LONG)
+    Image.new("RGB", (1280, 720), (200, 120, 60)).save(tmp_path / THUMBNAIL_BG_FILE)
+    (tmp_path / THUMBNAIL_FILE).write_bytes(b"old")
+    monkeypatch.setattr(job, "generate_thumbnail", lambda *a, **k: (_ for _ in ()).throw(AssertionError("bought")))
+    monkeypatch.setattr(job, "pick_song_image", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked Claude")))
+    out = job.redraw_thumbnail(tmp_path)
+    assert out == tmp_path / THUMBNAIL_FILE and out.read_bytes() != b"old"
+    with Image.open(out) as img:
+        assert img.size == (1280, 720)
+
+
+def test_redraw_of_an_easy_folder_uses_its_songs_picture_and_badge(tmp_path, monkeypatch):
+    song, easy = tmp_path / "s", tmp_path / "s" / "easychords"
+    make_song(song, artist=LONG)
+    make_song(easy, artist=LONG)
+    (easy / "easy_chord_capo.json").write_text(json.dumps({"capo_fret": 2, "shape_key": "D"}), encoding="utf-8")
+    Image.new("RGB", (1280, 720), (200, 120, 60)).save(song / THUMBNAIL_BG_FILE)
+    got = {}
+    real = job.compose_from_saved_background
+    monkeypatch.setattr(job, "compose_from_saved_background", lambda *a, **k: (got.update(k, source=a[1]), real(*a, **k))[1])
+    assert job.redraw_thumbnail(easy) == easy / THUMBNAIL_FILE
+    assert got["source"] == song and got["sub_tag"] == "EASY CHORDS · CAPO 2"
+
+
+def test_redraw_without_a_saved_picture_makes_nothing(tmp_path):
+    make_song(tmp_path, artist=LONG)
+    assert job.redraw_thumbnail(tmp_path) is None
+
+
+def test_only_folders_whose_artist_shrank_and_are_not_done_need_the_redraw(tmp_path):
+    long_one, short_one = tmp_path / "a", tmp_path / "b"
+    make_song(long_one, artist=LONG)
+    make_song(short_one, artist="Neil Young")
+    assert job.needs_artist_redraw(long_one) and not job.needs_artist_redraw(short_one)
+    job.mark_artist_redrawn(long_one, "vid123")
+    assert not job.needs_artist_redraw(long_one)                       # a re-run continues where it stopped
+    assert json.loads((long_one / "thumbnail_set.json").read_text())["video_id"] == "vid123"

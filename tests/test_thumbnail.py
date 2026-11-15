@@ -203,6 +203,44 @@ def test_a_short_multi_word_title_stacks_on_two_lines():
     assert lines == ["DEAD", "FLOWERS"]
 
 
+def test_a_long_artist_keeps_the_full_size_on_two_lines():
+    # owner, 2026-11-15: "Bob Seger & The Silver Bullet Band" had shrunk to 44 px on one line -- same size as the rest
+    font, lines = th.layout_artist(_draw(), "BOB SEGER & THE SILVER BULLET BAND", 400, None)
+    assert font.size == th.ARTIST_SIZE and lines == ["BOB SEGER & THE", "SILVER BULLET BAND"]
+    assert all(_draw().textlength(l, font=font) <= th.ARTIST_MAX_WIDTH for l in lines)
+
+
+def test_a_short_artist_stays_on_one_line_at_full_size():
+    font, lines = th.layout_artist(_draw(), "NEIL YOUNG", 400, None)
+    assert font.size == th.ARTIST_SIZE and lines == ["NEIL YOUNG"]
+
+
+def test_the_artist_never_runs_off_the_bottom():
+    top = 600                                                    # under a three-line title: two full-size lines won't fit
+    font, lines = th.layout_artist(_draw(), "BOB SEGER & THE SILVER BULLET BAND", top, None)
+    assert top + len(lines) * int(font.size * 1.05) <= th.ARTIST_BOTTOM
+    assert all(_draw().textlength(l, font=font) <= th.ARTIST_MAX_WIDTH for l in lines)
+
+
+def test_one_very_long_word_still_shrinks_to_fit():
+    font, lines = th.layout_artist(_draw(), "SUPERCALIFRAGILISTICEXPIALIDOCIOUSBAND", 400, None)
+    assert lines == ["SUPERCALIFRAGILISTICEXPIALIDOCIOUSBAND"] and font.size < th.ARTIST_SIZE
+    assert _draw().textlength(lines[0], font=font) <= th.ARTIST_MAX_WIDTH
+
+
+def test_compose_draws_a_long_artist_on_two_lines(tmp_path, monkeypatch):
+    drawn = []
+    real = th.ImageDraw.ImageDraw.text
+
+    def spy(self, xy, text, *a, **kw):
+        drawn.append((text, kw.get("font").size if kw.get("font") else None))
+        return real(self, xy, text, *a, **kw)
+
+    monkeypatch.setattr(th.ImageDraw.ImageDraw, "text", spy)
+    th.compose_thumbnail(solid((90, 90, 120)), "Against the Wind", "Bob Seger & The Silver Bullet Band", tmp_path / "t.jpg")
+    assert ("BOB SEGER & THE", th.ARTIST_SIZE) in drawn and ("SILVER BULLET BAND", th.ARTIST_SIZE) in drawn
+
+
 def test_long_titles_still_wrap_and_shrink_unchanged():
     font, lines, size = th.layout_title(_draw(), "SORRY SEEMS TO BE THE HARDEST WORD", 600, 390, None)
     assert " ".join(lines) == "SORRY SEEMS TO BE THE HARDEST WORD" and size <= th.TITLE_MAX_SIZE

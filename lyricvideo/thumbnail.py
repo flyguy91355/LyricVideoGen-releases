@@ -284,6 +284,30 @@ def _wrap(draw, text: str, font, max_width: int) -> list[str]:
     return lines + [cur] if cur else lines
 
 
+ARTIST_SIZE = 84                # the artist line's size, whatever its length (owner, 2026-11-15)
+ARTIST_MAX_WIDTH = 800
+ARTIST_BOTTOM = 700             # the artist never runs past this (the frame is 720 tall)
+
+
+def layout_artist(draw, text: str, top: int, font_path: str | None):
+    """(font, lines): the artist at ARTIST_SIZE, on two lines when one would be too wide (owner, 2026-11-15: "Bob Seger &
+    The Silver Bullet Band" had shrunk to 44 px on one line; "make it the same as the rest, just do 2 lines"). Smaller
+    only when a line still doesn't fit the width or the lines would run past ARTIST_BOTTOM."""
+    words = text.split()
+    size = ARTIST_SIZE
+    while True:
+        font = _bold_font(size, font_path)
+        lines = [text]
+        if draw.textlength(text, font=font) > ARTIST_MAX_WIDTH and len(words) > 1:
+            k = min(range(1, len(words)), key=lambda k: max(draw.textlength(" ".join(words[:k]), font=font),
+                                                           draw.textlength(" ".join(words[k:]), font=font)))
+            lines = [" ".join(words[:k]), " ".join(words[k:])]
+        fits = all(draw.textlength(line, font=font) <= ARTIST_MAX_WIDTH for line in lines)
+        if (fits and top + len(lines) * int(size * 1.05) <= ARTIST_BOTTOM) or size <= 40:
+            return font, lines
+        size -= 4
+
+
 TITLE_MAX_SIZE = 100            # owner, 2026-10-04: 210 then 140 were too big; Sorry Seems (86 px) is the model
 
 
@@ -329,10 +353,11 @@ def compose_thumbnail(
         y += int(size * 1.02)
     artist_text = (artist or "").upper().strip()
     if artist_text:
-        afont = _bold_font(84, font_path)
-        while draw.textlength(artist_text, font=afont) > 800 and afont.size > 40:
-            afont = _bold_font(afont.size - 4, font_path)
-        draw.text((54, y + 14), artist_text, font=afont, fill=_ARTIST_YELLOW, stroke_width=5, stroke_fill=(0, 0, 0))
+        afont, artist_lines = layout_artist(draw, artist_text, y + 14, font_path)
+        ay = y + 14
+        for line in artist_lines:
+            draw.text((54, ay), line, font=afont, fill=_ARTIST_YELLOW, stroke_width=5, stroke_fill=(0, 0, 0))
+            ay += int(afont.size * 1.05)
 
     tag_font = _bold_font(54, font_path)
     width = draw.textlength(tag, font=tag_font)

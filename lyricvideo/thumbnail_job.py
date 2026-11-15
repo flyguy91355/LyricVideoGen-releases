@@ -10,7 +10,8 @@ from pathlib import Path
 
 from .models import load_song, original_song_dir
 from .thumbnail import (
-    THUMBNAIL_FILE, THUMBNAIL_OWN_FILE, compose_from_saved_background, compose_thumbnail, generate_thumbnail, pick_song_image, THUMBNAIL_BG_FILE,
+    ARTIST_MAX_WIDTH, ARTIST_SIZE, THUMBNAIL_FILE, THUMBNAIL_OWN_FILE, THUMBNAIL_SET_FILE, _bold_font, compose_from_saved_background,
+    compose_thumbnail, generate_thumbnail, pick_song_image, THUMBNAIL_BG_FILE,
 )
 
 log = logging.getLogger("playalongvideoproduction")
@@ -103,3 +104,50 @@ def ensure_thumbnail(
     except Exception as e:
         log.warning("Could not make a thumbnail for %s: %s: %s", work_dir.name, type(e).__name__, e)
         return None
+
+
+def _shown_title_and_artist(work_dir: Path) -> tuple[str, str]:
+    """What the folder's thumbnail shows: an EASY CHORD folder its song's title, and its own artist else its song's."""
+    title, artist = _title_and_artist(work_dir)
+    song_dir = Path(original_song_dir(work_dir))
+    if song_dir != Path(work_dir):
+        song_title, song_artist = _title_and_artist(song_dir)
+        title, artist = song_title or title, artist or song_artist
+    return title, artist
+
+
+def redraw_thumbnail(work_dir: Path, *, font_path: str | None = None, show_chords: bool = True) -> Path | None:
+    """Draws the folder's thumbnail.jpg AGAIN from the picture it already has (thumbnail_bg.png; an EASY CHORD folder: its
+    song's) with the current lettering -- no new picture, no Claude call, no cost. None when there is no saved picture or
+    no title. Used to give videos already on YouTube a layout fix (owner, 2026-11-15: a long artist on two lines)."""
+    work_dir = Path(work_dir)
+    title, artist = _shown_title_and_artist(work_dir)
+    if not title:
+        return None
+    song_dir = Path(original_song_dir(work_dir))
+    sub_tag = _easy_badge(work_dir) if song_dir != work_dir else None
+    return compose_from_saved_background(work_dir, song_dir, title=title, artist=artist, font_path=font_path,
+                                         chord_labels=_chord_labels(work_dir) if show_chords else None, sub_tag=sub_tag)
+
+
+_REDRAWN_KEY = "artist_two_lines"
+
+
+def needs_artist_redraw(work_dir: Path, font_path: str | None = None) -> bool:
+    """True when the folder's thumbnail was made with its artist shrunk onto one line (too wide at ARTIST_SIZE) and has
+    not been redrawn and set again yet (thumbnail_set.json records it, so a re-run continues where it stopped)."""
+    from PIL import Image, ImageDraw
+    _title, artist = _shown_title_and_artist(Path(work_dir))
+    text = (artist or "").upper().strip()
+    if not text:
+        return False
+    if ImageDraw.Draw(Image.new("RGB", (8, 8))).textlength(text, font=_bold_font(ARTIST_SIZE, font_path)) <= ARTIST_MAX_WIDTH:
+        return False
+    try:
+        return not json.loads((Path(work_dir) / THUMBNAIL_SET_FILE).read_text(encoding="utf-8")).get(_REDRAWN_KEY)
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+def mark_artist_redrawn(work_dir: Path, video_id: str) -> None:
+    (Path(work_dir) / THUMBNAIL_SET_FILE).write_text(json.dumps({"video_id": video_id, _REDRAWN_KEY: True}), encoding="utf-8")
