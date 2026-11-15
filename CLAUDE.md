@@ -296,25 +296,25 @@ its Tk lacks Xft and breaks the GUI font.
 
 ## Update Available Feature
 
-Spec `docs/superpowers/specs/2026-09-08-update-available-design.md`. `VERSION` is the last release applied to this
+Spec `2026-09-08-update-available-design.md`. `VERSION` is the last release applied to this
 checkout (never hand-edited or bumped per commit). `lyricvideo/update/`: `version.py`, `release_client.py` (httpx)
-against the public, unlisted `flyguy91355/LyricVideoGen-releases` (pre-rename name, kept), and `apply.py`
+against the public, unlisted `flyguy91355/LyricVideoGen-releases`, and `apply.py`
 -- allows `lyricvideo/`, `deep_review/`, `scripts/`, `tests/`, `docs/`, `requirements.txt`, `CLAUDE.md`, a bare
 top-level `*.py`/`*.sh`/`*.bat`; denies (always wins) `.env`, `songs/`, `work/`, `.venv/`. `cut_release.sh` ships that
-same set (`tests/test_update_manifest.py` keeps them in step) plus `RELEASE_MANIFEST`; `copy_updatable_files` then
+same set (`test_update_manifest.py` keeps them in step) plus `RELEASE_MANIFEST`; `copy_updatable_files` then
 removes allow-listed regular files the previous applied release shipped and this one does not (install-root
-`.release_manifest`, gitignored). `gui.py` checks once on launch (background thread); a banner opens a centered
+`.release_manifest`, gitignored). `gui.py` checks once on launch, off Tk; a banner opens a centered
 modal dialog with the notes, Apply Update (its confirm is
 parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused while a video is made or an
 upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply; `_poll_update_queue` handles each message alone and always reschedules.
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
-`scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, never the working tree),
-re-applies `chmod +x` to `100755` paths, and with `apply.py` guards against a stale release reverting newer commits.
+`scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, not the working tree),
+re-applies `chmod +x` to `100755` paths; with `apply.py` it guards against a stale release reverting newer commits.
 The owner runs this checkout; releases keep the banner meaningful.
 
 ## YouTube upload + channel management
 
-Design `docs/superpowers/specs/2026-09-10-youtube-upload-design.md` (why `publishAt`, not a local queue).
+Design `2026-09-10-youtube-upload-design.md` (why `publishAt`, not a local queue).
 `youtube_state.py`: each song's `youtube_state.json` (`video_id`, `uploaded_at`, `title`, `engagement_comment_posted`)
 beside its `lyrics_timed.json`; `uploaded_song_dirs(work_root)` / `mark_engagement_comment_posted(work_root, id)`
 include nested `<song>/easychords`. One that exists but cannot be read counts as uploaded everywhere (fail closed).
@@ -392,6 +392,7 @@ atomic writes (`youtube_state.atomic_write_text`); an unreadable one is moved to
 paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` keeps exactly one, first.
 `scripts/backfill_channel_organization.py` (`-h`; audited keys: `key_notes_2026-09-26.json`) re-applies it;
 `scripts/reorganize_playlists.py` (plan; `--apply` once a day, resumes) applies the 11-05 rules.
+`branding/push_channel_branding.py`: banner+About; no 'perfect sync' tagline (11-15).
 
 ## deep_review
 
