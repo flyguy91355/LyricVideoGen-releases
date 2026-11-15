@@ -304,9 +304,9 @@ top-level `*.py`/`*.sh`/`*.bat`; denies (always wins) `.env`, `songs/`, `work/`,
 same set (`test_update_manifest.py` keeps them in step) plus `RELEASE_MANIFEST`; `copy_updatable_files` then
 removes allow-listed regular files the previous applied release shipped and this one does not (install-root
 `.release_manifest`, gitignored). `gui.py` checks once on launch, off Tk; a banner opens a centered
-modal dialog with the notes, Apply Update (its confirm is
-parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused while a video is made or an
-upload runs, one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply; `_poll_update_queue` handles each message alone and always reschedules.
+modal with the notes, Apply Update (its confirm is
+parented to `self._update_dialog_window`) then Relaunch Now. Apply Update is refused during a render or
+upload, one at a time (`_update_apply_in_progress`); Close/X only HIDE the dialog during an apply; `_poll_update_queue` handles each message alone and always reschedules.
 `self.top_frame` (the banner's `before=` anchor) must be `.pack()`-managed. Cut a release with
 `scripts/cut_release.sh <version-tag> <notes-file>`: it exports committed `HEAD` (`git show`, not the working tree),
 re-applies `chmod +x` to `100755` paths; with `apply.py` it guards against a stale release reverting newer commits.
@@ -392,7 +392,7 @@ atomic writes (`youtube_state.atomic_write_text`); an unreadable one is moved to
 paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` keeps exactly one, first.
 `scripts/backfill_channel_organization.py` (`-h`; audited keys: `key_notes_2026-09-26.json`) re-applies it;
 `scripts/reorganize_playlists.py` (plan; `--apply` once a day, resumes) applies the 11-05 rules.
-`branding/push_channel_branding.py`: banner+About; no 'perfect sync' tagline (11-15).
+`branding/push_channel_branding.py`: banner+About; logo by hand in Customization > Profile; no 'perfect sync'.
 
 ## deep_review
 
