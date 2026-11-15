@@ -5371,3 +5371,20 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   new pictures that can't be checked leave the song held, as before. The remake runs inside the upload while the
   window looks idle, so `run_pipeline` now makes one video at a time per process (`_ONE_VIDEO_AT_A_TIME`, re-entrant
   for the EASY build inside a song's run): a Generate started meanwhile waits and says so.
+
+## 2026-11-14 -- An AI song's section sung again (Collect Call Home)
+
+- Owner: "collect call home lost all its lyrics about 1:45 in". MiniMax was given bridge, solo, chorus and sang bridge,
+  chorus, solo, bridge, chorus: the lyric file had each line once, the aligner put them on the second copy, and 103-141 s
+  of loud singing showed nothing. The audio check had said so ("about 44 sung words in a row aren't in these lyrics");
+  the arbiter, shown words that ARE in the file, took the second copy for the recognizer looping (missing_section
+  false) and confirmed (source "sidecar+ai-confirmed").
+- Every AI song checked: one more, Cracked Bowl Kitchen (on YouTube, nS6AE0VOEzQ), sang an extra chorus after the
+  bridge -- 114-129 s and 148-153 s blank. Band songs the arbiter confirmed with a long unexplained run were almost all
+  recognizer junk (loops, a talking intro), so band songs are unchanged.
+- Fix: `pipeline._build_repeat_adder` (AI songs, ai_song.json's section tags via `song_maker.section_line_ranges`)
+  hands `fetch_lyric_lines_verified` an `add_repeats`: `lyric_audio_match.add_sung_repeats` adds another copy of whole
+  sections (never part of one, never the recognizer's words) where it explains the longest unexplained sung run best;
+  used only when the new lines leave no run over 12 words and no new run of unheard lines (source "sidecar+repeats").
+  Last Light on Maple Street showed why pile-ups are dropped first (`drop_piled_up_words`): the recognizer wrote two
+  whole verses again at 171.06 s, every word 0 s long -- copying them in would have shown verses nobody sang.

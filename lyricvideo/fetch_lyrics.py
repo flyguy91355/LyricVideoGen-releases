@@ -29,7 +29,9 @@ from typing import Callable
 import requests
 
 from .lyric_accuracy import UNCLEAR_REPLY_CONCERN, check_lyric_accuracy
-from .lyric_audio_match import AudioMatch, audio_match_badness, audio_match_passes, describe_mismatch
+from .lyric_audio_match import (
+    MAX_UNEXPLAINED_SUNG_WORDS, MAX_UNSUPPORTED_RUN, AudioMatch, audio_match_badness, audio_match_passes, describe_mismatch,
+)
 from .lyric_arbiter import Arbitration, describe_arbitration
 from .lrclib_local import find_records, local_db
 from .lyric_reconcile import SUGGESTION_FILENAME
@@ -632,6 +634,7 @@ def fetch_lyric_lines_verified(
     arbiter: Callable[[list[str], AudioMatch], Arbitration | None] | None = None,
     times_out: dict | None = None,
     trim: Callable[[list[str], list[float] | None], tuple[list[str], list[float] | None, list[str]]] | None = None,
+    add_repeats: Callable[[list[str]], tuple[list[str], list[tuple[int, int]]] | None] | None = None,
 ) -> tuple[list[str], str, str]:
     """Like fetch_lyric_lines(), but tries every real source in
     _ACCURACY_CHECK_SOURCES in order, checking each, and returns as soon as
@@ -665,7 +668,13 @@ def fetch_lyric_lines_verified(
     `trim(lines, times) -> (lines, times, dropped)` (optional) removes lines that are not part of the audio (a
     provider's credits: lyric_audio_match.drop_unsung_leading_lines / drop_unsung_trailing_lines) from EACH candidate
     before it is checked, so a candidate is judged -- and its concern numbers its lines -- exactly as it will be saved
-    (issue #7 review). A trim that raises leaves that candidate as it was."""
+    (issue #7 review). A trim that raises leaves that candidate as it was.
+
+    `add_repeats(lines) -> (lines, added) | None` (optional; our AI songs: pipeline._build_repeat_adder) gives the
+    sidecar's lines another copy of each section the music model sang again; used (source "sidecar+repeats") only
+    when the sidecar fails the audio check and the new lines match the singing better. 'Collect Call Home', 2026-11-14:
+    the bridge and a chorus sung twice, written once -- the AI judge took the second copy for the recognizer looping,
+    and the video showed no lyrics for 38 s of singing."""
     def finish(lines, source, concern, times):
         if times_out is not None:
             times_out["line_times"] = times if times and len(times) == len(lines) else None
@@ -710,6 +719,22 @@ def fetch_lyric_lines_verified(
             continue
         if audio_check is not None:
             match = audio_check(lines)
+            if not audio_match_passes(match) and source == "sidecar" and add_repeats is not None:
+                try:
+                    repeated = add_repeats(lines)
+                except Exception as e:  # the lyrics as written are judged as before
+                    log.warning("Could not look for sections sung again: %s: %s", type(e).__name__, e)
+                    repeated = None
+                if repeated is not None:
+                    new_match = audio_check(repeated[0])
+                    # They must explain the singing -- no long unexplained run left, no new run of unheard lines; a
+                    # wrong copy can still score "less bad" by splitting the unexplained run with a few stray matches.
+                    if (new_match.worst_heard_gap <= MAX_UNEXPLAINED_SUNG_WORDS
+                            and new_match.worst_run <= max(match.worst_run, MAX_UNSUPPORTED_RUN)
+                            and audio_match_badness(new_match) < audio_match_badness(match)):
+                        log.info("Sung again, added to the lyrics: %s", "; ".join(
+                            f"lines {a}-{b} ({repeated[0][a - 1]!r} .. {repeated[0][b - 1]!r})" for a, b in repeated[1]))
+                        lines, times, match, source = list(repeated[0]), None, new_match, "sidecar+repeats"
             if audio_match_passes(match):
                 return finish(lines, source, "", times)
             badness = audio_match_badness(match)

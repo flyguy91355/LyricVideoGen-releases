@@ -19,18 +19,18 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
   new one (an identify-filled title is replaced, a typed one kept). "New
   Song" resets the form; the work dir falls back to the file name until identify finishes. Left column: form/Generate/Redo/log/progress; right: YouTube status/Connect, "⚙ Settings",
   comment panels.
-  - Startup is lazy: `import lyricvideo.gui` (~0.5 s) loads none of torch, torchaudio, moviepy, anthropic,
+  - Startup is lazy: `import lyricvideo.gui` loads none of torch, torchaudio, moviepy, anthropic,
     googleapiclient, tensorflow, crema (gui's `_LazyAnthropic`, assemble's `_load_moviepy`).
   - Quit: X and
     Relaunch Now ask first (`_confirm_quit_if_busy`) while a Generate/Redo/Batch, any YouTube upload or an Apply
-    Update runs (closing kills it; no resume). `_shut_down` withdraws the window at once, then destroys it; `_closing`
+    Update runs (closing kills it; no resume). `_shut_down` withdraws, then destroys the window; `_closing`
     stops new scans.
   - Work folders (`batch.work_dir_for`, `holds_other_recording(folder, artist, audio_path=None)`): a folder holding
     this very file's copy (same name+size) is this song; else one whose `song_info.json` artist is known and differs
-    (`artist_key`; a word-subset is the same act) holds another recording, and the file gets `<title-artist>`
-    (`<title-file stem>` if the artist is unknown), then -2, -3... Generate then asks Yes = new folder / No = replace
+    (`artist_key`; a word-subset is one act) holds another recording, and the file gets `<title-artist>`
+    (`<title-file stem>` if no artist), then -2, -3... Generate then asks Yes = new folder / No = replace
     (backed up) / Cancel; Yes also backs up a folder that holds this recording, and generating over the same song
-    backs up its video and timing first. Generate/Redo refuse up front, naming the path, when the audio is gone.
+    backs up its video and timing first. Generate/Redo refuse (naming the path) when the audio is gone.
   - **Batch: Process a Folder** (`batch.py`): every audio file in a folder, in turn. One prompt: Yes = skip done songs
     / No = regenerate all (each backed up like Redo) / Cancel (Esc, X). An erroring file is logged and skipped. In one
     Batch a folder already given to the SAME known artist's file is shared (two rips are never made or uploaded
@@ -74,15 +74,17 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    edition vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
    `lyric_lines.json`/`Song`. lrclib = our copy of its DB dump first (`lrclib_local.py`,
    `~/PlayAlongVideoProductionLyrics/`), else lrclib.net; `majority_words` keeps the words most records
-   share (11-01) before the vote. lrclib.net failing (5xx/429/no connection, retried), no copy -> `LyricsSourceDown`: no other site (10-31: NetEase's were
-   wrong songs) but a sidecar; Batch stops. Pass = matching what faster-whisper HEARS in the vocal stem (medium,
+   share (11-01) before the vote. lrclib.net down (5xx/429/offline, retried), no copy -> `LyricsSourceDown`: only a
+   sidecar (NetEase gave wrong songs, 10-31); Batch stops. An AI song's sidecar gets a copy of each
+   whole section MiniMax sang again (`_build_repeat_adder`, `add_sung_repeats`, pile-ups dropped; "sidecar+repeats",
+   11-14). Pass = matching what faster-whisper HEARS (medium,
    VAD off): >=70% in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing
-   vocals ignored). Section markers aren't lyrics (`_clean_timed_rows`: "[Verse 1]" rows, "(Chorus)",
-   "Chorus:", "(x2)"/"Repeat chorus"; a leading "[..]" tag stripped). Unsung lead/tail credit lines are trimmed per
-   candidate before the check (`trim=`, from `pipeline._build_unsung_trim`: line times, Whisper words, vocal
-   loudness) only when none of their words were heard. `artist_matches` compares whole words. None passing keeps the
+   vocals ignored). Section markers aren't lyrics (`_clean_timed_rows`: "[Verse 1]", "(Chorus)",
+   "Chorus:", "(x2)", "Repeat chorus"; a leading "[..]" stripped). Unsung lead/tail credit lines are trimmed per
+   candidate first (`trim=`, `pipeline._build_unsung_trim`: line times, Whisper words, loudness) only when
+   none of their words were heard. `artist_matches` compares whole words. None passing keeps the
    least-bad match flagged (no auto-upload). Claude then JUDGES unmatched stretches (`lyric_arbiter.py`: recognizer
-   failures -> accepted), confirming only if coverage with those ranges excused (`coverage_excusing`) is still >=70%;
+   failures -> accepted) only if coverage with them excused (`coverage_excusing`) stays >=70%;
    its fix (`lyric_reconcile.py`) is only SAVED as `lyrics_suggested.txt`. Whisper unavailable -> a Claude text check
    (thinking off; unclear/blank/error = a concern). LRC timestamps discarded.
    `python -m lyricvideo.verify_lyrics -h` re-checks finished songs: owner-typed lyrics (source "owner") are never
@@ -112,7 +114,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `held_before_video.json` (`REDO_STOPPED_REASON`) holds it until a render: a Redo that dies mid-run shows in
    Flagged with Render Anyway, never in Pending/Upload. MMS_FA knows only a-z and `'`:
    `_normalize_word_for_alignment` spells numbers out ("31" -> "thirtyone", "10,000" -> "tenthousand"), folds
-   accents, reads `&` as "and", else gives the `*` token. Display text never changes.
+   accents, reads `&` as "and", else gives the `*` token. Display text is unchanged.
    `line_onsets.snap_to_vocals` (10-31): a line's first word moves up to 0.6 s EARLIER to the voice's rise out of a dip.
 5. **detect_chords** (`detect_chords.py`, `chord_theory.py`) -- `crema` (CNN/CRNN, ISC) on `no_vocals.wav`, collapsed
    to 5 qualities by `_simplify_chord_label()` (every pumpp `3567s` quality mapped; `minmaj7` -> minor
@@ -186,7 +188,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      `render.draw_countdown()`. `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`).
    - Like/Subscribe (`render.draw_like_subscribe`, 10-4; `like_subscribe_state`): a cursor clicks Subscribe, bell
      rings; in the count-in and the last `like_subscribe_lead_seconds` (10).
-   - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrinking; spacing uses real block heights
+   - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrunk; spacing uses real block heights
      (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()`: past a line's plausible end "current" advances to the next line as an unsung preview,
      blank after the last; previews show only `Settings.lyric_preview_lead_seconds` (3.0) ahead. `scroll_progress`
      uses `_plausible_line_end()`; word highlight keys on each word's start.
@@ -281,7 +283,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   `self.settings` updates live. Each field shows its default
   (`_default_text`); each slider has a box (`_parse_clamped_float`; unedited text is
   ignored; opacity boxes are percent) driven off a trace on its Tk variable, not `CTkSlider`'s `command`;
-  `on_value_change` fires only on a real change. Labels must stay short (one long label broke the panel; `_add()`) and say what they set.
+  `on_value_change` fires only on a real change. Labels stay short (a long one broke the panel; `_add()`) and say what they set.
   Font row: file name + 'Auto' (clears it). Category shows labels, stores `youtube_category_id`. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
   and raises OSError; `load()`/`from_dict()` default a non-object file and any wrong-typed value (with a warning).
 
@@ -413,7 +415,7 @@ never silently replaced.
 cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scripts/python.exe
 ```
 
-`tests/conftest.py` gives each test a throwaway HOME/USERPROFILE, set before any import (XDG_CACHE_HOME stays real):
+`tests/conftest.py` gives each test a throwaway HOME/USERPROFILE, set before any import (not XDG_CACHE_HOME):
 the suite never touches the real `~/.playalongvideoproduction`. Real-window tests
 create their root with `_new_ctk_root(ctk)`.
 Tests write only under `tmp_path`.

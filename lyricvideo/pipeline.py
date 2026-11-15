@@ -25,7 +25,7 @@ from .align import align_words, align_words_anchored, prepare_alignment, vocal_l
 from .anchors import HeardWord, combine_anchors, drop_words_in_silence, line_anchors
 from .assemble import assemble_video
 from .combine import combine_alignment
-from .ai_generated import WATCH_FIRST_REASON, created_song, is_ai_generated
+from .ai_generated import AI_SONG_FILE, WATCH_FIRST_REASON, created_song, is_ai_generated
 from .chord_gaps import fill_gaps_from_audio
 from .line_onsets import snap_to_vocals
 from .detect_chords import detect_chords
@@ -36,7 +36,10 @@ from .imagery import get_or_generate_image, is_fallback_image, substitute_fallba
 from .layout import instrumental_image_captions
 from .library_session import open_library_session
 from .lyric_arbiter import arbitrate
-from .lyric_audio_match import drop_unsung_leading_lines, drop_unsung_trailing_lines, score_lyrics_against_transcript
+from .lyric_audio_match import (
+    add_sung_repeats, drop_piled_up_words, drop_unsung_leading_lines, drop_unsung_trailing_lines,
+    score_lyrics_against_transcript,
+)
 from .lyric_reconcile import SUGGESTION_FILENAME, reconcile_lyrics
 from .owner_lyrics import owner_lyrics_lines
 from .chord_theory import (  # noqa: F401 -- ordered_unique_chords re-exported: every existing `pipeline.ordered_unique_chords` caller keeps working unchanged
@@ -781,6 +784,40 @@ def _build_arbiter(work_dir: Path, anthropic_client):
         return arbitrate(anthropic_client, lines, match, segments)
 
     return judge
+
+
+def _build_repeat_adder(work_dir: Path):
+    """For one of our own AI songs (ai_song.json), the lyrics fetch's `add_repeats`: its written lines with another copy
+    of each whole section the music model sang again (lyric_audio_match.add_sung_repeats), judged against what was
+    heard minus the recognizer's pile-ups (drop_piled_up_words: a copy written at one instant was never sung). None for
+    any other song. Lines that are not the song's own written lines (or a run of them) are left alone."""
+    try:
+        tagged = str(json.loads((Path(work_dir) / AI_SONG_FILE).read_text(encoding="utf-8")).get("lyrics") or "")
+    except (OSError, ValueError, AttributeError):
+        return None
+    from .song_maker import section_line_ranges, sung_lines
+
+    written, sections = sung_lines(tagged), section_line_ranges(tagged)
+    if not written or not sections:
+        return None
+
+    def add(lines):
+        lines = [line.strip() for line in lines]
+        starts = [i for i in range(len(written) - len(lines) + 1) if written[i:i + len(lines)] == lines]
+        if not lines or not starts:
+            return None
+        first = starts[0]
+        spans = [(max(a, first) - first, min(b, first + len(lines)) - first) for a, b in sections
+                 if a < first + len(lines) and b > first]
+        heard = " ".join(w["word"] for w in drop_piled_up_words(load_transcript_words(work_dir)))
+        result = add_sung_repeats(lines, spans, lambda candidate: score_lyrics_against_transcript(candidate, heard))
+        if result is not None:
+            print("The music model sang part of this song more times than its lyrics have it; added "
+                  + "; ".join(f"lines {a}-{b} ('{result[0][a - 1]}' .. '{result[0][b - 1]}')" for a, b in result[1])
+                  + " where they are sung again.")
+        return result
+
+    return add
 
 
 def _align_lyrics(vocals_path, work_dir, parsed_lines, flat_words, audio_duration, line_times=None, needed=None):
@@ -1706,10 +1743,14 @@ def run_pipeline(
             # Each candidate's credit lines are dropped BEFORE it is scored against the audio (L01), once the fetch
             # takes the trim; until then they are dropped below and the kept lines judged again (_concern_after_trim).
             trim_kwargs = {"trim": trim_unsung} if _accepts_keyword(fetch_lyric_lines_verified, "trim") else {}
+            # An AI song the music model sang a section of again gets another copy of it (_build_repeat_adder).
+            repeat_adder = _build_repeat_adder(work_dir) if audio_check is not None else None
+            repeat_kwargs = ({"add_repeats": repeat_adder} if repeat_adder is not None
+                             and _accepts_keyword(fetch_lyric_lines_verified, "add_repeats") else {})
             lines_text, lyrics_source, lyrics_concern = fetch_lyric_lines_verified(
                 audio_path, info_data["title"], info_data["artist"], info_data["duration"],
                 info_data.get("alt_titles"), lyrics_anthropic_client, audio_check=audio_check, reconcile=reconcile,
-                arbiter=arbiter, times_out=times_out, **trim_kwargs,
+                arbiter=arbiter, times_out=times_out, **trim_kwargs, **repeat_kwargs,
             )
         if owner_lines is None and not trim_kwargs and times_out.get("line_times"):
             # Credits arrive as fake lyric lines stamped before the first or after the last singing; "if its not part

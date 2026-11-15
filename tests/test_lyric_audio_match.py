@@ -317,3 +317,95 @@ def test_a_complete_version_that_narrowly_fails_is_less_bad_than_a_short_one_tha
 
     assert short_but_all_matching.coverage > complete_but_one_wrong_block.coverage    # the trap coverage falls into
     assert audio_match_badness(complete_but_one_wrong_block) < audio_match_badness(short_but_all_matching)
+
+
+# --- a section sung more times than the lyrics have it (MiniMax, 2026-11-14) -----------------------------------------
+
+def _sections_of(*blocks):
+    """(start, end) line ranges, end exclusive, of consecutive blocks of lines."""
+    ranges, at = [], 0
+    for block in blocks:
+        ranges.append((at, at + len(block)))
+        at += len(block)
+    return ranges
+
+
+def _check_for(heard):
+    return lambda lines: score_lyrics_against_transcript(lines, heard)
+
+
+def test_a_bridge_and_chorus_sung_again_are_added_to_the_lyrics():
+    """'Collect Call Home': the lyrics had the bridge and last chorus once, MiniMax sang them twice -- the video showed
+    nothing while the first copy was sung."""
+    from lyricvideo.lyric_audio_match import add_sung_repeats
+
+    written = V1 + CHORUS + V2 + CHORUS + BRIDGE + CHORUS
+    sung = V1 + CHORUS + V2 + CHORUS + BRIDGE + CHORUS + BRIDGE + CHORUS
+    check = _check_for(whisper_like(sung))
+    assert not audio_match_passes(check(written))
+
+    result = add_sung_repeats(written, _sections_of(V1, CHORUS, V2, CHORUS, BRIDGE, CHORUS), check)
+
+    assert result is not None
+    lines, added = result
+    assert lines == sung and audio_match_passes(check(lines))
+    assert len(added) == 1 and added[0][1] - added[0][0] + 1 == len(BRIDGE + CHORUS)
+
+
+def test_whole_sections_are_copied_even_where_the_recognizer_missed_the_end_of_one():
+    """The recognizer stopped hearing the extra chorus's last line as the solo began; the copy is still the whole
+    chorus, never a chorus cut short (a cut copy left two sung lines with nothing on screen)."""
+    from lyricvideo.lyric_audio_match import add_sung_repeats
+
+    written = V1 + CHORUS + V2 + CHORUS + BRIDGE + CHORUS
+    heard = V1 + CHORUS + V2 + CHORUS + BRIDGE + CHORUS[:-1] + BRIDGE + CHORUS
+    check = _check_for(whisper_like(heard))
+
+    result = add_sung_repeats(written, _sections_of(V1, CHORUS, V2, CHORUS, BRIDGE, CHORUS), check)
+
+    assert result is not None and result[0] == V1 + CHORUS + V2 + CHORUS + BRIDGE + CHORUS + BRIDGE + CHORUS
+
+
+def test_singing_that_is_not_one_of_the_songs_own_sections_is_not_added():
+    from lyricvideo.lyric_audio_match import add_sung_repeats
+
+    written = V1 + CHORUS + V2 + CHORUS
+    check = _check_for(whisper_like(V1 + CHORUS + OTHER_SONG + V2 + CHORUS))
+
+    assert add_sung_repeats(written, _sections_of(V1, CHORUS, V2, CHORUS), check) is None
+
+
+def test_lyrics_that_already_explain_the_singing_are_left_alone():
+    from lyricvideo.lyric_audio_match import add_sung_repeats
+
+    check = _check_for(whisper_like(SUNG_ORDER))
+
+    assert add_sung_repeats(SUNG_ORDER, _sections_of(V1, CHORUS, V2, CHORUS, BRIDGE, CHORUS), check) is None
+
+
+def test_a_chorus_sung_once_more_after_the_bridge_is_added():
+    """'Cracked Bowl Kitchen': one extra 8-line chorus between the bridge and the solo."""
+    from lyricvideo.lyric_audio_match import add_sung_repeats
+
+    chorus = CHORUS + ["we sail beyond the harbour wall", "where lighthouse keepers heed the call",
+                       "the gulls are crying overhead", "and every word we never said"]
+    written = V1 + chorus + V2 + chorus + BRIDGE + chorus
+    sung = V1 + chorus + V2 + chorus + BRIDGE + chorus + chorus
+    check = _check_for(whisper_like(sung))
+    assert not audio_match_passes(check(written))
+
+    result = add_sung_repeats(written, _sections_of(V1, chorus, V2, chorus, BRIDGE, chorus), check)
+
+    assert result is not None and result[0] == sung
+
+
+def test_words_piled_up_on_one_instant_are_not_taken_for_singing():
+    """'Last Light on Maple Street': the recognizer wrote two whole verses again at 171.06 s, every word 0 s long --
+    a copy nobody sang, which must never be added to the lyrics."""
+    from lyricvideo.lyric_audio_match import drop_piled_up_words
+
+    sung = [{"word": w, "start": 10.0 + i * 0.4, "end": 10.3 + i * 0.4} for i, w in enumerate("carry me home again".split())]
+    pile = [{"word": w, "start": 171.06, "end": 171.06} for w in "the river runs beside the old stone mill".split()]
+    after = [{"word": "light", "start": 172.0, "end": 172.4}]
+
+    assert drop_piled_up_words(sung + pile + after) == sung + after

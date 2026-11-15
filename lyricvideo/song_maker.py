@@ -194,6 +194,25 @@ def sung_lines(tagged_lyrics: str) -> list[str]:
     return [line.strip() for line in tagged_lyrics.splitlines() if line.strip() and not _SECTION.fullmatch(line.strip())]
 
 
+def section_line_ranges(tagged_lyrics: str) -> list[tuple[int, int]]:
+    """(first, end) indexes into sung_lines() -- end exclusive -- of each tagged section that has sung lines, in order;
+    lines before the first tag are a section too. MiniMax sometimes sings a section again (lyric_audio_match.
+    add_sung_repeats copies whole sections, never part of one)."""
+    ranges: list[tuple[int, int]] = []
+    start = count = 0
+    for raw in tagged_lyrics.splitlines():
+        line = raw.strip()
+        if _SECTION.fullmatch(line):
+            if count > start:
+                ranges.append((start, count))
+            start = count
+        elif line:
+            count += 1
+    if count > start:
+        ranges.append((start, count))
+    return ranges
+
+
 def _plan_problem(data: dict | None) -> str:
     if not data:
         return "no JSON"

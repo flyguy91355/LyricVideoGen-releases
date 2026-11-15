@@ -190,6 +190,7 @@ tests/test_owner_lyrics.py
 tests/test_owner_whisper.py
 tests/test_picture_check.py
 tests/test_pipeline.py
+tests/test_pipeline_ai_repeats.py
 tests/test_pipeline_picture_check.py
 tests/test_pipeline_stages_audio.py
 tests/test_pipeline_stages_images.py

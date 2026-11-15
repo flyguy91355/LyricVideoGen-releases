@@ -344,6 +344,80 @@ def coverage_excusing(match: AudioMatch, ranges: list[tuple[int, int]]) -> float
     return heard / total
 
 
+def drop_piled_up_words(words: list[dict], least: int = 4, within: float = 0.25) -> list[dict]:
+    """The recognizer's timed words ({word, start, end}) without any pile-up: `least` or more words starting inside
+    `within` seconds, which nobody sings. Real: 'Last Light on Maple Street' -- two whole verses written again at
+    171.06 s, every word 0 s long; 'the end of the road' five words in 0.2 s."""
+    keep = [True] * len(words)
+    i = 0
+    while i < len(words):
+        j = i
+        while j + 1 < len(words) and words[j + 1]["start"] - words[i]["start"] < within:
+            j += 1
+        if j - i + 1 >= least:
+            keep[i:j + 1] = [False] * (j - i + 1)
+            i = j + 1
+        else:
+            i += 1
+    return [w for w, ok in zip(words, keep) if ok]
+
+
+def add_sung_repeats(
+    lines: list[str], sections: list[tuple[int, int]], check, max_added: int = 3,
+) -> tuple[list[str], list[tuple[int, int]]] | None:
+    """When the singing goes through some of these lyrics' sections more times than they are written, another copy of
+    those WHOLE sections where the audio sings them: (new lines, the 1-based first/last line of each copy added), or None.
+
+    Why: MiniMax does not always sing what it is given -- 'Collect Call Home' (2026-11-14) sang its bridge and a chorus
+    again before the solo, the aligner put each written line on one copy, and the video showed no lyrics for 38 s of
+    singing. The audio check said so (44 sung words the lyrics lack); the AI judge took the second copy for the
+    recognizer looping. `sections` are (first, end) line indexes, end exclusive, in order (song_maker.
+    section_line_ranges); `check(lines)` scores lines against what was heard. Only the lyrics' own lines are copied, never
+    the recognizer's words, and only whole sections: a recognizer that stops hearing as a solo begins cannot cut a copy
+    short. A copy is kept when it explains the longest unexplained sung run best; the result is returned only when
+    no run longer than MAX_UNEXPLAINED_SUNG_WORDS is left."""
+    match = check(lines)
+    if match.worst_heard_gap <= MAX_UNEXPLAINED_SUNG_WORDS or not sections:
+        return None
+    current, spans, added = list(lines), list(sections), []
+    for _ in range(max_added):
+        gap_words = match.gap_text.split()
+        best = None
+        seen: set[tuple[str, ...]] = set()
+        for i in range(len(spans)):
+            for j in range(i, len(spans)):
+                block = current[spans[i][0]:spans[j][1]]
+                words = [w for line in block for w in _content(_tokens(line))]
+                if len(words) > 2.5 * len(gap_words):
+                    break
+                # Not what the unexplained run sings. Half the shorter side: the run can straddle a copy's edges.
+                if not words or len(_matched_pairs(words, gap_words)) < 0.5 * min(len(words), len(gap_words)):
+                    continue
+                for k in range(len(spans) + 1):
+                    at = spans[k][0] if k < len(spans) else len(current)
+                    candidate = current[:at] + block + current[at:]
+                    if tuple(candidate) in seen:
+                        continue
+                    seen.add(tuple(candidate))
+                    scored = check(candidate)
+                    # The fewest sung words left unexplained (a run under the limit can still be a missing bridge), then
+                    # the fewest lines left unheard, then the smallest copy: a needless copy right after its original
+                    # costs nothing in the score (an immediate repeat is excused, as recognizers often hear it once).
+                    rank = (scored.worst_heard_gap, scored.line_supported.count(False), len(block), -scored.coverage)
+                    if best is None or rank < best[0]:
+                        best = (rank, candidate, scored, i, j, k, at)
+        if best is None or best[2].worst_heard_gap >= match.worst_heard_gap:
+            return None
+        _rank, current, match, i, j, k, at = best
+        size = spans[j][1] - spans[i][0]
+        copies = [(at + a - spans[i][0], at + b - spans[i][0]) for a, b in spans[i:j + 1]]
+        spans = spans[:k] + copies + [(a + size, b + size) for a, b in spans[k:]]
+        added = [(a + size, b + size) if a > at else (a, b) for a, b in added] + [(at + 1, at + size)]  # 1-based
+        if match.worst_heard_gap <= MAX_UNEXPLAINED_SUNG_WORDS:
+            return current, sorted(added)
+    return None
+
+
 def _lines_heard(lines: list[str], heard) -> list[bool]:
     """Per lyric line: True when the recognizer heard any of it -- one of its own content words is matched in order, or
     the audio check supports it (a repeat inherits its first copy's support). A line with no word characters at all

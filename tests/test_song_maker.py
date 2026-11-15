@@ -247,3 +247,18 @@ def test_a_scheduled_song_is_marked_scheduled(tmp_path, quick):
 
     assert json.loads((made.work_dir / AI_SONG_FILE).read_text(encoding="utf-8"))["scheduled"] is True
     assert json.loads(roster_path.read_text(encoding="utf-8"))["artists"][0]["songs"][-1]["scheduled"] is True
+
+
+def test_section_line_ranges_number_the_sung_lines_of_each_tagged_section():
+    from lyricvideo.song_maker import section_line_ranges
+
+    tagged = "[Intro]\n\n[Verse]\none\ntwo\n\n[Chorus]\nthree\n[Solo]\n\n[Chorus]\nfour\nfive\n[Outro]\n"
+
+    assert sung_lines(tagged) == ["one", "two", "three", "four", "five"]
+    assert section_line_ranges(tagged) == [(0, 2), (2, 3), (3, 5)]
+
+
+def test_lines_before_the_first_tag_are_a_section_of_their_own():
+    from lyricvideo.song_maker import section_line_ranges
+
+    assert section_line_ranges("one\ntwo\n[Chorus]\nthree\n") == [(0, 2), (2, 3)]

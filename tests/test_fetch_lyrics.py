@@ -880,3 +880,68 @@ def test_tied_versions_and_records_of_another_length_all_stay_in_the_vote():
     records = [_synced(1, ["One version"]), _synced(2, ["Another version"]), _synced(3, ["A live take"], duration=300.0)]
 
     assert sorted(r["id"] for r in majority_words(records, 140.0)) == [1, 2, 3]
+
+
+# --- an AI song that sings a section again (MiniMax, 2026-11-14) ------------------------------------------------------
+
+_V = ["the river runs beside the old stone mill", "and morning fog lies heavy on the hill",
+      "a lantern swings above the wooden door", "i wait for you like i have waited before"]
+_BR = ["hold on hold on the storm will soon be past", "hold on hold on we finally found peace at last",
+       "the winter came and covered every road", "we traded all our dreams for heavy loads"]
+_CH = ["carry me home across the silver sea", "carry me home where i long to be",
+       "the stars will guide us through the night", "carry me home to the morning light"]
+
+
+def _sidecar_song(tmp_path, monkeypatch, written):
+    audio_path = tmp_path / "song.mp3"
+    audio_path.write_bytes(b"")
+    (tmp_path / "song.txt").write_text("\n".join(written), encoding="utf-8")
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_lrclib_hit", lambda *a, **k: None)
+    monkeypatch.setattr("lyricvideo.fetch_lyrics._fetch_syncedlyrics_hit", lambda *a, **k: None)
+    return audio_path
+
+
+def test_an_ai_songs_lyrics_get_the_sections_it_sings_again(tmp_path, monkeypatch):
+    written = _V + _CH + _BR + _CH
+    sung = _V + _CH + _BR + _CH + _BR + _CH
+    audio_path = _sidecar_song(tmp_path, monkeypatch, written)
+    seen = []
+
+    def add_repeats(lines):
+        seen.append(list(lines))
+        return sung, [(17, 24)]
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 100.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(sung),
+        add_repeats=add_repeats,
+    )
+
+    assert seen == [written]
+    assert (lines, source, concern) == (sung, "sidecar+repeats", "")
+
+
+def test_added_sections_that_match_the_singing_no_better_are_not_used(tmp_path, monkeypatch):
+    written = _V + _CH + _BR + _CH
+    sung = _V + _CH + _BR + _CH + _BR + _CH
+    audio_path = _sidecar_song(tmp_path, monkeypatch, written)
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 100.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(sung),
+        add_repeats=lambda lines: (lines + _WRONG_EDITION, [(17, 20)]),
+    )
+
+    assert (lines, source) == (written, "sidecar") and concern
+
+
+def test_lyrics_that_already_match_are_never_given_added_sections(tmp_path, monkeypatch):
+    audio_path = _sidecar_song(tmp_path, monkeypatch, _V + _CH)
+
+    def must_not_run(lines):
+        raise AssertionError("the lyrics already match the singing")
+
+    lines, source, concern = fetch_lyric_lines_verified(
+        audio_path, "T", "A", 100.0, [], _FakeAnthropicClient(), audio_check=_audio_check_for(_V + _CH),
+        add_repeats=must_not_run,
+    )
+
+    assert (lines, source, concern) == (_V + _CH, "sidecar", "")
