@@ -5419,3 +5419,11 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   and "getting the title credits sorted out" through, so the rule names them.
 - Posted replies read live (all 83): four still promise a change (Cinnamon Girl, War Pigs, New Kid In Town, the
   Rockin' Jukebox takedown reply on Storm); none says Storm is Elvis. Left for the owner.
+- Then the owner: "Yes, hold them" -- removal, copyright and credit requests wait for Approve like error reports. Cause:
+  a draft was "ordinary" (auto-posted) unless IS_ERROR_REPORT said YES, and that asks only about a mistake in the
+  video (chords, sync, lyrics); Rockin' Jukebox's "Please remove the video" drew NO every time. Now the same call also
+  answers NEEDS_OWNER (`NEEDS_OWNER_QUESTION`); only a plain NO lets a draft post itself (`PendingReply.needs_owner`;
+  None = drafted before the question, e.g. by an app not yet restarted: Approve only). Live, 3 tries each: the Rockin'
+  Jukebox comment, an ownership claim, a wrong-artist comment and a copyright-strike warning all held; praise, chord,
+  capo and request comments not held. "Not Elvis!! Probably just AI." first drew NO (the commenter is right), so the
+  question says "YES even when the commenter is right"; "This is Elvis right?" is now held too.

@@ -127,7 +127,7 @@ def test_draft_comment_reply_detects_error_report():
         "IS_ERROR_REPORT: YES\nREPLY: Thanks for catching that, I'll take a look!"
     )
 
-    reply, is_error_report = draft_comment_reply(client, "the chord at 1:30 looks wrong", "My Song")
+    reply, is_error_report, _needs_owner = draft_comment_reply(client, "the chord at 1:30 looks wrong", "My Song")
 
     assert is_error_report is True
     assert reply == "Thanks for catching that, I'll take a look!"
@@ -136,7 +136,7 @@ def test_draft_comment_reply_detects_error_report():
 def test_draft_comment_reply_detects_non_error_comment():
     client = _FakeAnthropicClient("IS_ERROR_REPORT: NO\nREPLY: Glad you liked it!")
 
-    reply, is_error_report = draft_comment_reply(client, "great video!", "My Song")
+    reply, is_error_report, _needs_owner = draft_comment_reply(client, "great video!", "My Song")
 
     assert is_error_report is False
     assert reply == "Glad you liked it!"
@@ -285,7 +285,7 @@ def test_draft_comment_reply_turns_thinking_off():
 def test_draft_comment_reply_retries_a_reply_with_no_text():
     client = _ScriptedClient([_THINKING_ONLY, "IS_ERROR_REPORT: NO\nREPLY: Thanks for playing along!"])
 
-    reply, is_error = draft_comment_reply(client, "nice video", "My Song")
+    reply, is_error, _needs_owner = draft_comment_reply(client, "nice video", "My Song")
 
     assert reply == "Thanks for playing along!" and is_error is False
     assert len(client.messages.calls) == 2
@@ -418,7 +418,7 @@ def test_a_reply_in_a_thread_is_drafted_with_the_conversation():
 
     from types import SimpleNamespace as N
     from lyricvideo.youtube_metadata import draft_comment_reply
-    reply, err = draft_comment_reply(N(messages=_Msgs()), "what capo?", "Song", context='Your reply: "thanks"')
+    reply, err, _needs_owner = draft_comment_reply(N(messages=_Msgs()), "what capo?", "Song", context='Your reply: "thanks"')
     assert reply == "capo 2!" and not err
     assert "replied in a comment thread" in seen["prompt"] and 'Your reply: "thanks"' in seen["prompt"]
 
@@ -522,3 +522,32 @@ def test_a_reply_with_no_description_note_is_given_none_to_quote():
     prompt = client.messages._prompt_text()
     assert "correction note" not in prompt.split("Facts about this video")[1].split("A video can't")[0]
     assert "Never say the description was changed" in prompt
+
+
+# --- a takedown, copyright or credit request is the owner's to answer (owner, 2026-11-25: "Yes, hold them") ------------
+# Rockin' Jukebox's "Please remove the video" on Storm in My Heart was auto-posted 11-23: the draft was "ordinary" because
+# the only question asked was whether the comment reported a mistake in the video (chords, sync, lyrics) -- it said NO.
+
+_REMOVAL = ("Hi, your video uses my full song \u201cStorm in My Heart,\u201d originally released on Rockin\u2019 Jukebox "
+            "Records. The title incorrectly credits the song to Elvis Presley. The vocals were generated with Suno.  "
+            "Please remove the video.")
+
+
+def test_a_reply_draft_is_asked_whether_the_comment_needs_the_owner():
+    client = _FakeAnthropicClient("IS_ERROR_REPORT: NO\nNEEDS_OWNER: YES\nREPLY: Thanks for reaching out.")
+
+    reply, is_error_report, needs_owner = draft_comment_reply(client, _REMOVAL, "Storm in My Heart", ai_song="other")
+
+    assert (reply, is_error_report, needs_owner) == ("Thanks for reaching out.", False, True)
+    prompt = client.messages._prompt_text()
+    question = prompt[prompt.index("NEEDS_OWNER:"):].split("\n")[0]
+    assert "taken down" in question and "copyright" in question and "ownership" in question
+    assert "credits" in question and "artist" in question and "title" in question
+    assert "YES even when the commenter is right" in question     # live: "Not Elvis!! Probably just AI." drew NO without it
+
+
+def test_only_a_plain_no_makes_a_draft_one_that_may_post_itself():
+    for answer, needs_owner in (("NEEDS_OWNER: NO\n", False), ("NEEDS_OWNER: YES\n", True), ("", True),
+                                ("NEEDS_OWNER: maybe\n", True)):
+        client = _FakeAnthropicClient(f"IS_ERROR_REPORT: NO\n{answer}REPLY: Thanks!")
+        assert draft_comment_reply(client, "nice video", "My Song")[2] is needs_owner, answer

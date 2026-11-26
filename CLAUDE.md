@@ -36,7 +36,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
     Batch a folder already given to the SAME known artist's file is shared (two rips are never made or uploaded
     twice); any other artist gets its own folder as above. Existing stems -> `BatchItem.resume_stage="fetch_lyrics"`.
     `release_memory()` (gc + Linux malloc_trim) after every song, pass or fail. The folder
-    path is never `.strip()`'d (`resolve_existing_folder()`, 9-10); the last folder lives in its own JSON
+    path is never `.strip()`'d (`resolve_existing_folder()`); the last folder lives in its own JSON
     (`load_last_batch_folder`/`save_last_batch_folder`) -- not a Settings field: `SettingsPanel.collect()` replaces
     `Settings` wholesale and would reset any field with no widget.
   - `render.py`/`detect_chords.py`/`assemble_video()` take plain keyword args for every Settings value (colors as RGB
@@ -254,7 +254,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   list acts on the highlighted row (double-click Watches); Remove hides it (`_drop_list_row`, no rescan), files
   untouched. Filled on first expand by one non-daemon scanner thread (`_refresh_song_list` -> `_start_list_load`;
   `_poll_list_results` applies on Tk; a generation counter drops stale results); `invalidate()` on an open section
-  rescans in the background; `_refresh_retry_upload_options` invalidates all six lists;
+  rescans in the background; `_refresh_retry_upload_options` invalidates all lists;
   Batch's `"batch_item_done"` refreshes them live. Pending and EASY CHORD are checklists (☑ column: click or Space;
   all start ticked; ticks survive refreshes).
 - **Scans** (`pipeline.list_*`) parse each `lyrics_timed.json` once per file version (keyed by folder + (inode,
@@ -265,16 +265,15 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   column plus ONE detail pane (`_review_panes`, `_show_flagged_details`;
   reason = `pipeline.review_concern`, else `held_before_video.json`'s own) whose buttons enable per song: Watch (else
   Play MP3), Whisper Text, Edit Lyrics (`lyrics_owner.txt`, reused by Redo), Redo, Render Anyway, Mark Verified, Upload
-  Anyway, Remove, Set Key (plain text, no emoji). A `<song>/easychords` row gets only Watch/Remove and Rebuild EASY
+  Anyway, Remove, Set Key (plain text). A `<song>/easychords` row gets only Watch/Remove and Rebuild EASY
   version (`_on_rebuild_easy_flagged`); the other handlers refuse it (`_refuse_easy_variant`).
 - **YouTube Comments** / **Pending Engagement Comments**: collapsible and lazy, each one list + one editor
   (`_DraftQueueView`); each reply names its video too (`PendingReply.video_title`); edits are kept per draft
   id across refreshes, Approve posts the edited text, the header shows "N waiting".
 - **Settings popup** (`_open_settings_window`): built once, then hidden/shown (`_show_settings_dialog`/
-  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set 50 ms x20: X11 needs it mapped); like the Update dialog; its confirms are
+  `_hide_settings_dialog`; `_grab_settings_dialog` retries grab_set: X11 needs it mapped); like the Update dialog; its confirms are
   parented to it (`_ask_over`, `SettingsPanel._confirm`). Closing with unsaved changes asks like Discard and reverts
-  `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`) is debounced
-  150 ms. A moved timing pass mark refreshes the lists once, on close
+  `self.settings` to the on-disk baseline. Its preview (`settings_preview.py`) is debounced. A moved timing pass mark refreshes the lists once, on close
   (`_apply_pass_mark_change`). Building a `SettingsPanel` is wrapped in `_suppress_settings_save` (`load_from()` fires
   `on_change` early).
 - **SettingsPanel** (`settings_panel.py`; `~/.playalongvideoproduction/settings.json`): writes disk ONLY via Save
@@ -283,7 +282,7 @@ NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the vi
   `self.settings` updates live. Each field shows its default
   (`_default_text`); each slider has a box (`_parse_clamped_float`; unedited text is
   ignored; opacity boxes are percent) driven off a trace on its Tk variable, not `CTkSlider`'s `command`;
-  `on_value_change` fires only on a real change. Labels stay short (a long one broke the panel; `_add()`) and say what they set.
+  `on_value_change` fires only on a real change. Labels stay short (a long one broke the panel; `_add()`).
   Font row: file name + 'Auto' (clears it). Category shows labels, stores `youtube_category_id`. "Reset to Defaults" repopulates in one on_change. `Settings.save()` is atomic
   and raises OSError; `load()`/`from_dict()` default a non-object file and any wrong-typed value (with a warning).
 
@@ -349,8 +348,8 @@ A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere (delet
 (`ai_generated.py`, our own AI songs): description invents no band facts; N.C. over music filled (`chord_gaps`).
 `AI_MADE_BY_OTHERS.txt`: someone else's AI song (Storm in My Heart), none of that. Both (`ai_song_kind`) upload with
 `containsSyntheticMedia`; reply/engagement (+ other's description) get `_ai_song_facts` (IS AI, never
-deny it); reply/engagement: `VIDEO_CANT_BE_CHANGED` (no fix/edit/take-down/re-upload vow; may say 'look into it', a
-description note, 'maybe try X'). A reply quotes the live description's real notes (`_description_notes`).
+deny it); reply/engagement: `VIDEO_CANT_BE_CHANGED` (no fix/edit/take-down/re-upload vow; 'look into it', a
+description note, 'maybe try X' are fine); replies quote the live description's notes (`_description_notes`).
 `scripts/find_truncated_videos.py` (dry run): cut-short mp4s; `--set-aside` -> `*.truncated.mp4` (skipped by name).
 `youtube_auth.py`: `connect()` (browser consent, `client_secret_*.json`) saves `youtube_token.json` (0600,
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
@@ -378,10 +377,11 @@ claimed (`_claim_posting`; its buttons off via `_DraftQueueView.set_busy`), rele
 and refreshes the label; Approve checks `is_video_public()`. An approved engagement comment's thread is marked seen;
 Dismissing one marks `engagement_comment_posted`.
 Replies: `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
-`parent_id`, drafted with `context`); `youtube_auto_approve_replies` posts ordinary drafts after
-`youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`). Sent replies go to Posted Replies (`youtube_posted_replies.json`,
+`parent_id`, drafted with `context`); `youtube_auto_approve_replies` posts a draft after
+`youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`), only one whose `needs_owner` is
+False (`NEEDS_OWNER_QUESTION`: takedown/copyright/credit; None = not asked). Sent replies go to Posted Replies (`youtube_posted_replies.json`,
 `record_posted_reply`, `reply_id`); Save Edit there calls `update_comment` (50 units);
-replies sent since it was last opened (`load_posted_seen_at`) show ● NEW + an 'N new' count.
+replies sent since it was last opened (`load_posted_seen_at`) show ● NEW + a count.
 **Channel organization** (spec 9-17, 11-05): after every `schedule_upload()` gui calls `youtube_playlists.
 organize_video()` (fails soft; idempotent): All, EASY/3/4, then artist playlists (only 2+ uploaded songs, EASY = same
 song; all their videos), then genres (`classify_genres`: <=3 of fixed `GENRES`, + Rock for rock-family; cached in the
@@ -400,10 +400,9 @@ paragraphs starting '📌 Song key:'/'📌 Correction' count; `apply_key_note` k
 
 `python -m deep_review` retries top-level songs flagged for lyrics or timing (`runner.list_songs_to_review`), cost-
 tracked (3 searches/attempt, 5-cent/song cap, skips 85%+ untouched). It never
-redoes an EASY variant (a fixed original re-renders its existing one), skips key-only songs (`waiting_for_key`, never a
-pass) and songs on verify_lyrics' unchecked hold (UNKNOWN). A lyric-text concern is never cleared by a timing pass
-(`diagnosis.is_lyric_text_concern`); all checks use `Settings.timing_pass_percent`. `--dry-run` writes nothing. A
-failed review restores `lyrics_owner.txt` byte for byte (also copied into the first `redo_backup_*`). Needs-human
+redoes an EASY variant (a fixed original re-renders its existing one), skips key-only songs (`waiting_for_key`) and songs on verify_lyrics' unchecked hold (UNKNOWN). A lyric-text concern is never cleared by a timing pass
+(`diagnosis.is_lyric_text_concern`); checks use `Settings.timing_pass_percent`. `--dry-run` writes nothing. A
+failed review restores `lyrics_owner.txt` byte for byte (copy in the first `redo_backup_*`). Needs-human
 markers are flat files (`<song>__easychords.txt`).
 
 ## Persistence invariants

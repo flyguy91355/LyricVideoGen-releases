@@ -443,8 +443,8 @@ def _scan_youtube_comments(gui) -> dict:
     gets its new comments read, a reply drafted and queued for the owner. Each comment is marked seen right after its
     draft is queued, so a failure later in the scan never drafts it again; a comment whose draft keeps failing is queued
     with an empty reply after MAX_DRAFT_FAILURES tries. A quota-exceeded error stops the scan and starts the cooldown. New replies in threads the channel already
-    answered are read too. With Settings.youtube_auto_approve_replies on, each ordinary draft is posted at once (error reports
-    and blank drafts still wait for Approve). Returns {"connected", "videos", "checked", "new", "posted", "stopped"}."""
+    answered are read too. With Settings.youtube_auto_approve_replies on, each ordinary draft is posted after a wait (error reports,
+    takedown/copyright/credit requests and blank drafts still wait for Approve). Returns {"connected", "videos", "checked", "new", "posted", "stopped"}."""
     summary = {"connected": False, "videos": 0, "checked": 0, "new": 0, "posted": 0, "stopped": False}
     credentials = youtube_auth.load_credentials()
     if credentials is None:
@@ -529,7 +529,7 @@ def _scan_youtube_comments(gui) -> dict:
                     anthropic_client = anthropic.Anthropic()
                 if notes is None:
                     notes = _description_notes(youtube_client, state.video_id)
-                draft, is_error_report = draft_comment_reply(
+                draft, is_error_report, needs_owner = draft_comment_reply(
                     anthropic_client, comment.text, state.title, context=str(getattr(comment, "context", "") or ""),
                     ai_song=ai_song_kind(work_dir),     # owner, 2026-11-25: replies called an AI song a real Elvis recording
                     description_notes=notes,
@@ -546,13 +546,14 @@ def _scan_youtube_comments(gui) -> dict:
                     continue
                 print(f"WARNING: drafting a reply to a comment on {slug} failed {failures} times; it is queued with an "
                       "empty reply for you to write.", file=sys.stderr)
-                draft, is_error_report = "", False
+                draft, is_error_report, needs_owner = "", False, None
             try:
                 if add_pending_reply(PendingReply(
                     comment_id=comment.comment_id, video_id=comment.video_id, author=comment.author,
                     comment_text=comment.text, draft_reply=draft, is_error_report=is_error_report,
                     video_title=state.title, parent_id=str(getattr(comment, "parent_id", "") or ""),
-                    post_after=_auto_post_time(settings, comment, draft, is_error_report),
+                    post_after=_auto_post_time(settings, comment, draft, is_error_report, needs_owner),
+                    needs_owner=needs_owner,
                 )):
                     added = True
                     summary["new"] += 1
@@ -581,11 +582,13 @@ def _quota_blocked_now() -> bool:
     return until is not None and until > datetime.now().astimezone()
 
 
-def _auto_post_time(settings, comment, draft: str, is_error_report: bool) -> str:
+def _auto_post_time(settings, comment, draft: str, is_error_report: bool, needs_owner: bool | None) -> str:
     """When a new draft may go out by itself: "" (Approve only) unless auto-post is on and it is an ordinary, non-blank
     draft; else the comment's own time plus a random wait of Settings.youtube_auto_reply_delay_hours to twice that
     (owner, 2026-10-16: "wouldnt be natural to reply right away")."""
     if not getattr(settings, "youtube_auto_approve_replies", False) or not draft.strip() or is_error_report:
+        return ""
+    if needs_owner is not False:    # a takedown/copyright/credit request, or not asked: Approve only (owner, 2026-11-25)
         return ""
     hours = max(0.0, float(getattr(settings, "youtube_auto_reply_delay_hours", 2.0) or 0.0))
     try:
@@ -605,7 +608,7 @@ def _post_due_auto_replies(gui, youtube_client, settings, stop_for_quota) -> int
     now = datetime.now().astimezone()
     posted = 0
     for reply in load_pending_replies():
-        if not reply.post_after or reply.is_error_report or not reply.draft_reply.strip():
+        if not reply.post_after or reply.is_error_report or reply.needs_owner is not False or not reply.draft_reply.strip():
             continue
         try:
             due = datetime.fromisoformat(reply.post_after)
@@ -3615,10 +3618,11 @@ class LyricVideoGUI:
         replies = load_pending_replies()
         rows = []
         for reply in replies:
-            badge = "⚠ " if reply.is_error_report else ""
+            badge = "⚠ " if reply.is_error_report or reply.needs_owner else ""
             video = reply.video_title or "(unknown video)"   # owner, 2026-10-03: show which song/video this is on
             heading = f"{video} -- {reply.author}: {reply.comment_text}" + (
-                " ⚠ possible error report" if reply.is_error_report else "")
+                " ⚠ possible error report" if reply.is_error_report else "") + (
+                " ⚠ takedown / copyright / credit request: only Approve posts it" if reply.needs_owner else "")
             preview = f"[{video}] {_one_line(reply.comment_text)}"
             rows.append((reply.comment_id, reply, f"{badge}{reply.author}", preview, heading, reply.draft_reply))
         self.replies_view.set_items(rows)

@@ -79,6 +79,9 @@ class PendingReply:
     # shows blank rather than failing to load (_load_items' cls(**item) needs every field optional-or-present)
     parent_id: str = ""     # a reply's thread id: the reply to it is posted THERE ("" = a top-level comment, posted to itself)
     post_after: str = ""    # auto-post: ISO time this draft goes out by itself (owner, 2026-10-16: never instantly); "" = Approve only
+    # youtube_metadata.NEEDS_OWNER_QUESTION (a takedown, copyright/ownership or credit request): only False may post itself;
+    # None = drafted before the question was asked (or never drafted), so it waits for Approve too (owner, 2026-11-25).
+    needs_owner: bool | None = None
 
 
 def _load_items(path: Path, cls):

@@ -45,6 +45,16 @@ VIDEO_CANT_BE_CHANGED = (
 )
 
 
+# Owner, 2026-11-25 ("Yes, hold them"): Rockin' Jukebox's "Please remove the video" on Storm in My Heart was auto-posted
+# 11-23 -- a draft counted as ordinary unless the comment reported a mistake in the video, and a takedown request is not
+# one. A comment this question says YES to waits for the owner's Approve whatever youtube_auto_approve_replies says.
+NEEDS_OWNER_QUESTION = (
+    "does it ask for the video to be taken down or removed, raise copyright or claim ownership of the song, recording or "
+    "video, or dispute or question the video's credits, artist or title (YES even when the commenter is right, e.g. "
+    "\"that's not really <the artist named>\")?"
+)
+
+
 def _ai_song_facts(ai_song: str) -> str:
     """What every viewer-facing prompt must know about an AI song (ai_generated.ai_song_kind); "" for any other song."""
     if ai_song == AI_OWN:
@@ -233,8 +243,9 @@ def generate_video_metadata(
 def draft_comment_reply(
     anthropic_client, comment_text: str, song_title: str, model: str = "claude-sonnet-5", context: str = "",
     ai_song: str = "", description_notes: str = "",
-) -> tuple[str, bool]:
-    """(reply draft, looks like an error report). `ai_song` is ai_generated.ai_song_kind of the video's song;
+) -> tuple[str, bool, bool]:
+    """(reply draft, looks like an error report, needs the owner). Needs the owner (NEEDS_OWNER_QUESTION; owner,
+    2026-11-25: "Yes, hold them") is True unless Claude answered a plain NO, so such a draft never posts itself. `ai_song` is ai_generated.ai_song_kind of the video's song;
     `description_notes` the correction notes really in its live description (key_note.description_correction_notes),
     which a reply about what they correct quotes; the prompt always carries VIDEO_CANT_BE_CHANGED. Thinking off and retried like generate_video_metadata (issue #7
     review, F084: with default thinking this returned no text 5 of 6 times for one song); raises MetadataGenError --
@@ -248,14 +259,17 @@ def draft_comment_reply(
         f'"{comment_text}"\n\n'
         "Facts about this video -- the reply must never contradict them:\n"
         f"{_ai_song_facts(ai_song)}{_description_notes_fact(description_notes)}{VIDEO_CANT_BE_CHANGED}\n\n"
-        "Reply with EXACTLY two lines, each prefixed with its label:\n"
+        "Reply with EXACTLY three lines, each prefixed with its label:\n"
         "IS_ERROR_REPORT: <YES or NO -- is this reporting a mistake in the video, "
         "like wrong chords, sync issues, or wrong lyrics?>\n"
+        f"NEEDS_OWNER: <YES or NO -- {NEEDS_OWNER_QUESTION}>\n"
         "REPLY: <a short, friendly, genuine-sounding reply, written as the channel owner>"
     )
-    fields = _ask_for_fields(anthropic_client, model, 300, prompt, ["IS_ERROR_REPORT", "REPLY"], ["REPLY"])
+    labels = ["IS_ERROR_REPORT", "NEEDS_OWNER", "REPLY"]
+    fields = _ask_for_fields(anthropic_client, model, 300, prompt, labels, ["REPLY"])
     is_error_report = fields["IS_ERROR_REPORT"].strip().upper().startswith("YES")
-    return fields["REPLY"].strip(), is_error_report
+    needs_owner = not fields["NEEDS_OWNER"].strip().upper().startswith("NO")    # no clear answer: it waits for Approve
+    return fields["REPLY"].strip(), is_error_report, needs_owner
 
 
 def classify_genres(

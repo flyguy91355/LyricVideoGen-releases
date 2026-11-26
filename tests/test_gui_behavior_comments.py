@@ -68,7 +68,7 @@ def test_a_queued_reply_remembers_which_video_its_comment_is_on(tmp_path, monkey
     _uploaded(tmp_path, "some-song", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, 1) for vid in ids})
     monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("c1", video_id)])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False, False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -85,7 +85,7 @@ def test_a_video_whose_comment_count_has_not_changed_costs_no_comment_read(tmp_p
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, counts[vid]) for vid in ids})
     read = []
     monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": read.append(video_id) or [])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False, False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())       # first check: reads the one with comments
     LyricVideoGUI._check_youtube_comments_worker(_stub())       # nothing changed: reads nothing
@@ -162,7 +162,7 @@ def test_a_failed_draft_keeps_the_comments_already_queued_and_is_retried_next_ch
         drafted.append(text)
         if text in fail:
             raise RuntimeError("overloaded")
-        return f"re: {text}", False
+        return f"re: {text}", False, False
 
     monkeypatch.setattr(gui, "draft_comment_reply", draft)
 
@@ -228,7 +228,7 @@ def test_the_channels_own_comments_are_never_drafted_a_reply(tmp_path, monkeypat
         _comment("mine", "vid-a", author_channel_id="UC-me"), _comment("theirs", "vid-a", author_channel_id="UC-fan"),
     ])
     drafted = []
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": drafted.append(text) or ("hi", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": drafted.append(text) or ("hi", False, False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -411,7 +411,7 @@ def test_a_reply_is_queued_with_its_thread_and_the_conversation_reaches_the_draf
         _comment("r1", "vid-a", "what capo?", parent_id="t1", context='Your reply: "thanks"')])
     got = {}
     monkeypatch.setattr(gui, "draft_comment_reply",
-                        lambda client, text, title, context="", ai_song="", description_notes="": got.update(context=context) or ("capo 2!", False))
+                        lambda client, text, title, context="", ai_song="", description_notes="": got.update(context=context) or ("capo 2!", False, False))
     LyricVideoGUI._check_youtube_comments_worker(_stub())
     [reply] = load_pending_replies()
     assert asked["own"] == "UC-me" and reply.parent_id == "t1" and "Your reply" in got["context"]
@@ -443,7 +443,7 @@ def test_check_now_reports_what_it_did(tmp_path, monkeypatch):
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
     monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("c", "vid-a")])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False, False))
     shown = []
     monkeypatch.setattr(gui.messagebox, "showinfo", lambda title, text: shown.append(text))
     LyricVideoGUI._check_youtube_comments_worker(_stub(), manual=True)
@@ -507,7 +507,7 @@ def test_auto_post_never_replies_at_once_it_schedules_a_natural_wait(tmp_path, m
     comments = [_comment("ok", "vid-a", "love it", published_at=just_now),
                 _comment("bug", "vid-a", "wrong chord", published_at=just_now)]
     posted, summary = _scheduled(tmp_path, monkeypatch, _auto_stub(), comments,
-                                 {"love it": ("thanks!", False), "wrong chord": ("we'll check", True)})
+                                 {"love it": ("thanks!", False, False), "wrong chord": ("we'll check", True, False)})
     assert posted == [] and summary["posted"] == 0                          # nothing goes out on the first check
     by_id = {r.comment_id: r for r in load_pending_replies()}
     wait = datetime.fromisoformat(by_id["ok"].post_after) - datetime.fromisoformat(just_now)
@@ -518,7 +518,7 @@ def test_auto_post_never_replies_at_once_it_schedules_a_natural_wait(tmp_path, m
 def test_a_reply_whose_wait_is_over_is_posted_to_its_thread_and_leaves_the_list(tmp_path, monkeypatch):
     from lyricvideo.youtube_comment_state import add_pending_reply
     add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="a", comment_text="q", draft_reply="capo 2!",
-                                   is_error_report=False, parent_id="t1", post_after="2026-01-01T00:00:00+00:00"))
+                                   is_error_report=False, parent_id="t1", post_after="2026-01-01T00:00:00+00:00", needs_owner=False))
     add_pending_reply(PendingReply(comment_id="later", video_id="vid-a", author="a", comment_text="q", draft_reply="hi",
                                    is_error_report=False, post_after="2099-01-01T00:00:00+00:00"))
     add_pending_reply(PendingReply(comment_id="manual", video_id="vid-a", author="a", comment_text="q", draft_reply="hi",
@@ -531,8 +531,8 @@ def test_a_reply_whose_wait_is_over_is_posted_to_its_thread_and_leaves_the_list(
 def test_auto_post_off_posts_nothing_and_schedules_nothing(tmp_path, monkeypatch):
     from lyricvideo.youtube_comment_state import add_pending_reply
     add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="a", comment_text="q", draft_reply="x",
-                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00"))
-    posted, _ = _scheduled(tmp_path, monkeypatch, _stub(), [_comment("ok", "vid-a")], {"nice one": ("thanks!", False)})
+                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00", needs_owner=False))
+    posted, _ = _scheduled(tmp_path, monkeypatch, _stub(), [_comment("ok", "vid-a")], {"nice one": ("thanks!", False, False)})
     assert posted == []
     assert {r.comment_id: r.post_after for r in load_pending_replies()}["ok"] == ""
 
@@ -540,7 +540,7 @@ def test_auto_post_off_posts_nothing_and_schedules_nothing(tmp_path, monkeypatch
 def test_a_failed_auto_post_stays_for_approve(tmp_path, monkeypatch):
     from lyricvideo.youtube_comment_state import add_pending_reply
     add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="a", comment_text="q", draft_reply="x",
-                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00"))
+                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00", needs_owner=False))
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {})
     monkeypatch.setattr(gui, "post_reply", lambda *a: (_ for _ in ()).throw(RuntimeError("network down")))
@@ -553,20 +553,20 @@ def test_the_wait_setting_is_used_and_zero_means_next_check(tmp_path, monkeypatc
     from datetime import datetime, timedelta
     stub = _stub()
     stub.settings = Settings(youtube_auto_approve_replies=True, youtube_auto_reply_delay_hours=6.0)
-    when = gui._auto_post_time(stub.settings, SimpleNamespace(published_at="2026-10-16T12:00:00Z"), "hi", False)
+    when = gui._auto_post_time(stub.settings, SimpleNamespace(published_at="2026-10-16T12:00:00Z"), "hi", False, False)
     wait = datetime.fromisoformat(when) - datetime.fromisoformat("2026-10-16T12:00:00+00:00")
     assert timedelta(hours=6) <= wait <= timedelta(hours=12)
     stub.settings = Settings(youtube_auto_approve_replies=True, youtube_auto_reply_delay_hours=0.0)
-    assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="2026-10-16T12:00:00Z"), "hi", False) == \
+    assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="2026-10-16T12:00:00Z"), "hi", False, False) == \
         "2026-10-16T12:00:00+00:00"
-    assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="x"), "  ", False) == ""          # blank draft
+    assert gui._auto_post_time(stub.settings, SimpleNamespace(published_at="x"), "  ", False, False) == ""          # blank draft
 
 
 def test_an_auto_posted_reply_is_recorded_in_the_history(tmp_path, monkeypatch):
     from lyricvideo.youtube_comment_state import add_pending_reply, load_posted_replies
     add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="@fan", comment_text="great!", draft_reply="thanks!",
                                    is_error_report=False, parent_id="t1", video_title="Song A",
-                                   post_after="2026-01-01T00:00:00+00:00"))
+                                   post_after="2026-01-01T00:00:00+00:00", needs_owner=False))
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {})
     monkeypatch.setattr(gui, "post_reply", lambda *a: None)
@@ -618,7 +618,7 @@ class _Box:
 def test_an_auto_posted_reply_keeps_its_youtube_id_for_editing(tmp_path, monkeypatch):
     from lyricvideo.youtube_comment_state import add_pending_reply, load_posted_replies
     add_pending_reply(PendingReply(comment_id="r1", video_id="vid-a", author="@fan", comment_text="hi", draft_reply="thanks!",
-                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00"))
+                                   is_error_report=False, post_after="2026-01-01T00:00:00+00:00", needs_owner=False))
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {})
     monkeypatch.setattr(gui, "post_reply", lambda *a: "yt-reply-9")
@@ -708,7 +708,7 @@ def test_a_reply_is_drafted_knowing_whether_its_song_is_ai(tmp_path, monkeypatch
         _comment(f"c-{video_id}", video_id)])
     kinds = {}
     monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": kinds.update(
-        {title: ai_song}) or ("thanks!", False))
+        {title: ai_song}) or ("thanks!", False, False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -728,7 +728,7 @@ def test_a_reply_is_drafted_with_the_videos_live_description_notes_read_only_whe
     monkeypatch.setattr(gui, "_description_notes", lambda client, video_id: reads.append(video_id) or "📌 Correction: Asus2")
     got = []
     monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="":
-                        got.append(description_notes) or ("thanks!", False))
+                        got.append(description_notes) or ("thanks!", False, False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -749,3 +749,31 @@ def test_description_notes_are_read_from_the_live_video_and_a_failed_read_gives_
 
     assert gui._description_notes(SimpleNamespace(videos=lambda: _Videos(False)), "vid-a") == "📌 Correction: the bridge is Bm."
     assert gui._description_notes(SimpleNamespace(videos=lambda: _Videos(True)), "vid-a") == ""
+
+
+def test_a_takedown_copyright_or_credit_request_never_posts_itself(tmp_path, monkeypatch):
+    """Owner, 2026-11-25: "Yes, hold them". Rockin' Jukebox's "Please remove the video" was auto-posted 11-23; such a
+    draft now waits for Approve whatever youtube_auto_approve_replies says."""
+    from datetime import datetime
+    just_now = datetime.now().astimezone().isoformat()
+    comments = [_comment("ok", "vid-a", "love it", published_at=just_now),
+                _comment("takedown", "vid-a", "Please remove the video.", published_at=just_now)]
+    _scheduled(tmp_path, monkeypatch, _auto_stub(), comments,
+               {"love it": ("thanks!", False, False), "Please remove the video.": ("Thanks for reaching out.", False, True)})
+    by_id = {r.comment_id: r for r in load_pending_replies()}
+    assert by_id["ok"].post_after and by_id["ok"].needs_owner is False
+    assert by_id["takedown"].post_after == "" and by_id["takedown"].needs_owner is True
+    assert gui._auto_post_time(_auto_stub().settings, comments[1], "Thanks for reaching out.", False, None) == ""
+
+
+def test_a_due_draft_that_needs_the_owner_or_was_never_asked_is_not_auto_posted(tmp_path, monkeypatch):
+    """A draft queued before this question existed (needs_owner None -- the old app may queue some until it is restarted)
+    or one that needs the owner never goes out by itself, even with its time passed."""
+    from lyricvideo.youtube_comment_state import add_pending_reply
+    for comment_id, needs_owner in (("old", None), ("takedown", True), ("ordinary", False)):
+        add_pending_reply(PendingReply(comment_id=comment_id, video_id="vid-a", author="a", comment_text="q",
+                                       draft_reply=f"re {comment_id}", is_error_report=False,
+                                       post_after="2026-01-01T00:00:00+00:00", needs_owner=needs_owner))
+    posted, summary = _scheduled(tmp_path, monkeypatch, _auto_stub(), [], {})
+    assert posted == [("ordinary", "re ordinary")] and summary["posted"] == 1
+    assert sorted(r.comment_id for r in load_pending_replies()) == ["old", "takedown"]
