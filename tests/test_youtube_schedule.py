@@ -1203,3 +1203,28 @@ def test_schedule_upload_puts_our_own_ai_song_at_the_ai_time_beside_two_real_son
 
     publish_at = datetime.fromisoformat(client._videos.insert_kwargs["body"]["status"]["publishAt"].replace("Z", "+00:00"))
     assert publish_at == _local(10, 12, 30)
+
+
+def test_an_ai_song_made_elsewhere_is_uploaded_with_the_ai_label_on_the_ordinary_schedule(tmp_path):
+    """Owner, 2026-11-25: "Storm in My Heart" is AI (someone else's); its AI label had to be set by hand. It discloses AI
+    like our own songs, but is not one of ours: it keeps the ordinary upload times and gets no band-origin story."""
+    from lyricvideo.ai_generated import mark_ai_made_by_others
+
+    work_dir = _make_song_work_dir(tmp_path, artist="Storm In My Heart")
+    mark_ai_made_by_others(work_dir)
+    settings = SimpleNamespace(
+        youtube_privacy="public", youtube_category_id="10", youtube_made_for_kids=False,
+        youtube_upload_times="09:00,16:00", youtube_ai_upload_times="12:30",
+    )
+    client = _FakeYoutubeClient(video_id="vid123")
+    claude = _FakeAnthropicClient()
+
+    schedule_upload(client, claude, work_dir, settings, now=_local(10, 8).astimezone(timezone.utc))
+
+    status = client._videos.insert_kwargs["body"]["status"]
+    assert status["containsSyntheticMedia"] is True
+    publish_at = datetime.fromisoformat(status["publishAt"].replace("Z", "+00:00"))
+    assert publish_at == _local(10, 9)
+    prompt = claude.messages.prompt_text()
+    assert "This song is AI-generated" in prompt and "performed by" not in prompt.lower()
+    assert "made for this channel" not in prompt

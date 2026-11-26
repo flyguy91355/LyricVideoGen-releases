@@ -17,6 +17,18 @@ def _is_key_note(paragraph: str) -> bool:
     return paragraph.strip().startswith(KEY_NOTE_PREFIXES)
 
 
+def description_correction_notes(description: str | None) -> list[str]:
+    """The notes a viewer reads as corrections to the video: every description paragraph starting with the 📌 marker or
+    the word "Correction" (owner, 2026-11-25: a reply about something the description corrects quotes the note, and
+    never claims a correction that isn't there). Read-only: unlike split_key_note, nothing is lifted out or replaced."""
+    notes = []
+    for paragraph in (description or "").split("\n\n"):
+        text = paragraph.strip()
+        if text.startswith(KEY_NOTE_MARKER) or text.lower().startswith("correction"):
+            notes.append(text)
+    return notes
+
+
 def split_key_note(description: str) -> tuple[str, str]:
     """(the description's key note, everything else). The note is the top-most key-note paragraph (a "📌 Song key:" /
     "📌 Correction" paragraph, wherever it sits); EVERY key-note paragraph is taken out of the rest, so a stale or

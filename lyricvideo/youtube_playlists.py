@@ -19,7 +19,7 @@ from .chord_theory import NOTES_SHARP, is_easy_key, key_name, load_easy_chord_ca
 from .key_decision import load_decision, load_owner_key
 from .key_estimate import parse_key
 from .models import load_song
-from .ai_generated import AI_SONG_FILE
+from .ai_generated import AI_SONG_FILE, ai_song_kind
 from .youtube import (
     add_video_to_playlist, create_playlist, find_own_playlist_by_title, find_playlist_by_id, get_playlist_description,
     is_quota_exceeded_error, remove_video_from_playlist,
@@ -412,7 +412,7 @@ def organize_video(
         already_pending = any(c.video_id == state.video_id for c in load_pending_comments())
         if not already_pending:
             try:
-                comment_text = draft_engagement_comment(anthropic_client, title)
+                comment_text = draft_engagement_comment(anthropic_client, title, ai_song=ai_song_kind(work_dir))
             except Exception as e:
                 print(f"WARNING: could not draft an engagement comment for {work_dir.name}: {type(e).__name__}: {e}",
                       file=sys.stderr)

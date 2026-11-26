@@ -506,7 +506,7 @@ def schedule_upload(
 
 def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, settings, now: datetime | None,
                             remake_bad_pictures: bool = True) -> str:
-    from .ai_generated import is_ai_generated
+    from .ai_generated import AI_OWN, ai_song_kind
     from .banned import SongBanned, is_banned
     if is_banned(work_dir):
         raise SongBanned(f"{Path(work_dir).name} is tagged BANNED ON YOUTUBE, so it is never uploaded.")
@@ -550,8 +550,9 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
     if check_pictures_before_upload(work_dir, song, song_label, settings, remake=remake_bad_pictures):
         return _schedule_upload_locked(youtube_client, anthropic_client, work_dir, settings, now, remake_bad_pictures=False)
     metadata_title = capo_info["original_title"] if capo_info else song.title
-    ai_song = is_ai_generated(work_dir)
-    title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics, original=ai_song)
+    ai_kind = ai_song_kind(work_dir)    # any AI song is labeled AI; only our own (AI_OWN) uses the AI times
+    ai_song = ai_kind == AI_OWN
+    title, description, tags = generate_video_metadata(anthropic_client, metadata_title, artist, full_lyrics, ai_song=ai_kind)
     if capo_info is not None:
         title = planned_title
         # The settled key's own spelling (an older marker may say "D# major" for the same key as "Eb major"). Owner,
@@ -578,7 +579,7 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
             youtube_client, video_path, title, description, tags,
             privacy="private", publish_at=slot,
             category_id=settings.youtube_category_id, made_for_kids=settings.youtube_made_for_kids,
-            synthetic_media=ai_song,
+            synthetic_media=bool(ai_kind),
         )
     else:
         # Unlisted/Private have no "publish later" concept on YouTube -- upload
@@ -587,7 +588,7 @@ def _schedule_upload_locked(youtube_client, anthropic_client, work_dir: Path, se
             youtube_client, video_path, title, description, tags,
             privacy=settings.youtube_privacy, publish_at=None,
             category_id=settings.youtube_category_id, made_for_kids=settings.youtube_made_for_kids,
-            synthetic_media=ai_song,
+            synthetic_media=bool(ai_kind),
         )
 
     try:

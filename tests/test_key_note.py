@@ -156,3 +156,18 @@ def test_strip_song_key_line_tolerates_a_blank_description():
 
     assert strip_song_key_line("") == ""
     assert strip_song_key_line(None) == ""
+
+
+def test_description_correction_notes_are_the_pinned_and_correction_paragraphs_only():
+    from lyricvideo.key_note import description_correction_notes
+
+    description = (
+        "A great song about the sea.\n\n📌 Song key: C minor (not D minor as shown in the video)\n\n"
+        "Correction: the chord at 1:30 is Asus2.\n\n☕ Tips are always appreciated: https://ko-fi.com/x\n\n"
+        "I hope you're enjoying the Play Alongs. Correction notes go above."
+    )
+
+    assert description_correction_notes(description) == [
+        "📌 Song key: C minor (not D minor as shown in the video)", "Correction: the chord at 1:30 is Asus2.",
+    ]
+    assert description_correction_notes("") == [] and description_correction_notes(None) == []

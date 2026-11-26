@@ -68,7 +68,7 @@ def test_a_queued_reply_remembers_which_video_its_comment_is_on(tmp_path, monkey
     _uploaded(tmp_path, "some-song", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, 1) for vid in ids})
     monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("c1", video_id)])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -85,7 +85,7 @@ def test_a_video_whose_comment_count_has_not_changed_costs_no_comment_read(tmp_p
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, counts[vid]) for vid in ids})
     read = []
     monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": read.append(video_id) or [])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())       # first check: reads the one with comments
     LyricVideoGUI._check_youtube_comments_worker(_stub())       # nothing changed: reads nothing
@@ -158,7 +158,7 @@ def test_a_failed_draft_keeps_the_comments_already_queued_and_is_retried_next_ch
                         lambda client, video_id, seen, own_channel="": [c for c in comments if c.comment_id not in seen])
     drafted, fail = [], {"second"}
 
-    def draft(client, text, title, context=""):
+    def draft(client, text, title, context="", ai_song="", description_notes=""):
         drafted.append(text)
         if text in fail:
             raise RuntimeError("overloaded")
@@ -228,7 +228,7 @@ def test_the_channels_own_comments_are_never_drafted_a_reply(tmp_path, monkeypat
         _comment("mine", "vid-a", author_channel_id="UC-me"), _comment("theirs", "vid-a", author_channel_id="UC-fan"),
     ])
     drafted = []
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": drafted.append(text) or ("hi", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": drafted.append(text) or ("hi", False))
 
     LyricVideoGUI._check_youtube_comments_worker(_stub())
 
@@ -411,7 +411,7 @@ def test_a_reply_is_queued_with_its_thread_and_the_conversation_reaches_the_draf
         _comment("r1", "vid-a", "what capo?", parent_id="t1", context='Your reply: "thanks"')])
     got = {}
     monkeypatch.setattr(gui, "draft_comment_reply",
-                        lambda client, text, title, context="": got.update(context=context) or ("capo 2!", False))
+                        lambda client, text, title, context="", ai_song="", description_notes="": got.update(context=context) or ("capo 2!", False))
     LyricVideoGUI._check_youtube_comments_worker(_stub())
     [reply] = load_pending_replies()
     assert asked["own"] == "UC-me" and reply.parent_id == "t1" and "Your reply" in got["context"]
@@ -443,7 +443,7 @@ def test_check_now_reports_what_it_did(tmp_path, monkeypatch):
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, 1)})
     monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [_comment("c", "vid-a")])
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": ("thanks!", False))
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": ("thanks!", False))
     shown = []
     monkeypatch.setattr(gui.messagebox, "showinfo", lambda title, text: shown.append(text))
     LyricVideoGUI._check_youtube_comments_worker(_stub(), manual=True)
@@ -493,7 +493,7 @@ def _scheduled(tmp_path, monkeypatch, settings_stub, comments, drafts):
     _uploaded(tmp_path, "song-a", "vid-a")
     monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {"vid-a": (True, len(comments))})
     monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": comments)
-    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="": drafts[text])
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": drafts[text])
     posted = []
     monkeypatch.setattr(gui, "post_reply", lambda client, parent, text: posted.append((parent, text)))
     summary = gui._scan_youtube_comments(settings_stub)
@@ -692,3 +692,60 @@ def test_a_newly_sent_reply_bumps_the_header_count(monkeypatch):
     stub._update_posted_new_count = lambda: LyricVideoGUI._update_posted_new_count(stub)
     LyricVideoGUI._on_posted_replies_changed(stub)
     assert count.value == "1 new" and invalidated == [True]
+
+
+def test_a_reply_is_drafted_knowing_whether_its_song_is_ai(tmp_path, monkeypatch):
+    """Owner, 2026-11-25: replies on "Storm in My Heart" (an AI song someone else made, titled as Elvis) said it was a
+    real Elvis recording -- the drafter was never told the song is AI. Its EASY CHORD video follows the song."""
+    from lyricvideo.ai_generated import mark_ai_generated, mark_ai_made_by_others
+
+    mark_ai_made_by_others(_uploaded(tmp_path, "storm", "vid-storm"))
+    _uploaded(tmp_path, "storm/easychords", "vid-storm-easy")
+    mark_ai_generated(_uploaded(tmp_path, "lantern", "vid-lantern"))
+    _uploaded(tmp_path, "free-bird", "vid-bird")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, 1) for vid in ids})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [
+        _comment(f"c-{video_id}", video_id)])
+    kinds = {}
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="": kinds.update(
+        {title: ai_song}) or ("thanks!", False))
+
+    LyricVideoGUI._check_youtube_comments_worker(_stub())
+
+    assert kinds == {"Title storm": "other", "Title storm/easychords": "other", "Title lantern": "own",
+                     "Title free-bird": ""}
+
+
+def test_a_reply_is_drafted_with_the_videos_live_description_notes_read_only_when_needed(tmp_path, monkeypatch):
+    """Owner, 2026-11-25: a reply quotes a correction really in the description, and never claims one that isn't. The
+    description is read live (1 unit), once per video that has a comment to draft."""
+    _uploaded(tmp_path, "song-a", "vid-a")
+    _uploaded(tmp_path, "song-b", "vid-b")
+    monkeypatch.setattr(gui, "_video_comment_stats", lambda client, ids: {vid: (True, 2) for vid in ids})
+    monkeypatch.setattr(gui, "list_new_comments", lambda client, video_id, seen, own_channel="": [
+        _comment(f"{video_id}-1", video_id), _comment(f"{video_id}-2", video_id)] if video_id == "vid-a" else [])
+    reads = []
+    monkeypatch.setattr(gui, "_description_notes", lambda client, video_id: reads.append(video_id) or "📌 Correction: Asus2")
+    got = []
+    monkeypatch.setattr(gui, "draft_comment_reply", lambda client, text, title, context="", ai_song="", description_notes="":
+                        got.append(description_notes) or ("thanks!", False))
+
+    LyricVideoGUI._check_youtube_comments_worker(_stub())
+
+    assert reads == ["vid-a"] and got == ["📌 Correction: Asus2", "📌 Correction: Asus2"]
+
+
+def test_description_notes_are_read_from_the_live_video_and_a_failed_read_gives_none():
+    class _Videos:
+        def __init__(self, fail):
+            self.fail = fail
+
+        def list(self, **kwargs):
+            if self.fail:
+                raise RuntimeError("backend error")
+            assert kwargs == {"part": "snippet", "id": "vid-a"}
+            description = "About it.\n\n📌 Correction: the bridge is Bm.\n\n☕ Tips"
+            return SimpleNamespace(execute=lambda: {"items": [{"snippet": {"description": description}}]})
+
+    assert gui._description_notes(SimpleNamespace(videos=lambda: _Videos(False)), "vid-a") == "📌 Correction: the bridge is Bm."
+    assert gui._description_notes(SimpleNamespace(videos=lambda: _Videos(True)), "vid-a") == ""

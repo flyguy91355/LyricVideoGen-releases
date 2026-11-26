@@ -107,7 +107,7 @@ def test_generate_video_metadata_states_the_real_artist_in_the_prompt_when_known
 def test_generate_video_metadata_never_invents_a_history_for_the_channels_own_ai_band():
     client = _FakeAnthropicClient("DESCRIPTION: d\nTAGS: a")
 
-    generate_video_metadata(client, "Lantern in the Window", artist="Copperleaf", full_lyrics="lyrics", original=True)
+    generate_video_metadata(client, "Lantern in the Window", artist="Copperleaf", full_lyrics="lyrics", ai_song="own")
 
     prompt = client.messages._prompt_text()
     assert "original song made for this channel by its band Copperleaf" in prompt
@@ -421,3 +421,104 @@ def test_a_reply_in_a_thread_is_drafted_with_the_conversation():
     reply, err = draft_comment_reply(N(messages=_Msgs()), "what capo?", "Song", context='Your reply: "thanks"')
     assert reply == "capo 2!" and not err
     assert "replied in a comment thread" in seen["prompt"] and 'Your reply: "thanks"' in seen["prompt"]
+
+
+# --- what viewers are told (owner, 2026-11-25) ------------------------------------------------------------------------
+# Reproduced: given only the YouTube title "Storm in my Heart-Elvis Presley - ..." and nothing about AI, the drafter
+# answered "Not Elvis!! Probably just AI." with "This track is a real, lesser-known Elvis recording, not AI-generated"
+# (2 of 2), and answered wrong-chord reports with "I'll get that Asus2 fixed" -- a video on YouTube can't be changed.
+
+_STORM = "Storm in my Heart-Elvis Presley - Storm In My Heart - (Play Along Lyrics & Chords)"
+
+
+def test_a_reply_on_an_ai_song_made_elsewhere_is_told_it_is_ai_and_never_to_deny_it():
+    client = _FakeAnthropicClient("IS_ERROR_REPORT: NO\nREPLY: Yes, it's AI.")
+
+    draft_comment_reply(client, "Not Elvis!!  Probably just AI.", _STORM, ai_song="other")
+
+    prompt = client.messages._prompt_text()
+    assert "This song is AI-generated" in prompt
+    assert "did not sing or record it" in prompt
+    assert "agree plainly that it is" in prompt
+    assert "Never say or suggest it is not AI" in prompt
+
+
+def test_a_reply_on_our_own_ai_song_is_told_it_is_ai_and_to_invent_no_band_history():
+    client = _FakeAnthropicClient("IS_ERROR_REPORT: NO\nREPLY: Thanks!")
+
+    draft_comment_reply(client, "who is this band?", "Quiet Pride - Steel Vanguard - (Play Along Lyrics & Chords)",
+                        ai_song="own")
+
+    prompt = client.messages._prompt_text()
+    assert "made with AI" in prompt and "Never say or suggest it is not AI" in prompt
+    assert "Never invent history" in prompt
+
+
+def test_a_reply_on_an_ordinary_song_says_nothing_about_ai():
+    client = _FakeAnthropicClient("IS_ERROR_REPORT: NO\nREPLY: Thanks!")
+
+    draft_comment_reply(client, "great song", "Free Bird - Lynyrd Skynyrd - (Play Along Lyrics & Chords)")
+
+    assert "AI" not in client.messages._prompt_text()
+
+
+def test_every_reply_is_told_a_video_on_youtube_can_never_be_fixed_or_edited():
+    from lyricvideo.youtube_metadata import VIDEO_CANT_BE_CHANGED
+
+    for context in ("", 'Your reply: "thanks"'):
+        client = _FakeAnthropicClient("IS_ERROR_REPORT: YES\nREPLY: Thanks, noted!")
+        draft_comment_reply(client, "the A should be an Asus2", "New Kid In Town", context=context)
+        prompt = client.messages._prompt_text()
+        assert VIDEO_CANT_BE_CHANGED in prompt
+    rule = VIDEO_CANT_BE_CHANGED
+    assert "Never offer to fix, edit, update, switch, re-upload or take down this video" in rule
+    # Owner, 2026-11-25: what a reply may say instead -- "we'll look into it", a note in the description, and for a wrong
+    # chord or lyric the right one offered as something to try ("maybe try ..."), never as a promised change.
+    assert "look into it" in rule and "note in the video's description" in rule and "maybe try" in rule
+    assert "Never say the description was changed" in rule
+    assert "never that we'll look into getting the video, its title or credits corrected" in rule
+
+
+def test_an_engagement_comment_on_an_ai_song_made_elsewhere_never_calls_it_the_named_artists_song():
+    from lyricvideo.youtube_metadata import VIDEO_CANT_BE_CHANGED
+
+    client = _FakeAnthropicClient("COMMENT: What are you playing along on?")
+
+    draft_engagement_comment(client, "Storm in my Heart-Elvis Presley", ai_song="other")
+
+    prompt = client.messages._prompt_text()
+    assert "This song is AI-generated" in prompt and "never call it their song" in prompt
+    assert "Do not bring up who made or sang the song" in prompt     # it answers no one: no unasked disclaimer
+    assert VIDEO_CANT_BE_CHANGED in prompt
+
+
+def test_the_description_of_an_ai_song_made_elsewhere_never_credits_a_performer():
+    client = _FakeAnthropicClient("DESCRIPTION: A storm of a song.\nTAGS: ai, ballad")
+
+    generate_video_metadata(client, "Storm in my Heart-Elvis Presley", artist="Storm In My Heart", full_lyrics="lyrics",
+                            ai_song="other")
+
+    prompt = client.messages._prompt_text()
+    assert "performed by" not in prompt.lower()
+    assert "This song is AI-generated" in prompt and "Never say or suggest it is not AI" in prompt
+
+
+def test_a_reply_is_shown_the_descriptions_real_correction_note_and_told_to_quote_it():
+    """Owner, 2026-11-25: when a correction really was added to the description, the reply shows it to the commenter."""
+    client = _FakeAnthropicClient("IS_ERROR_REPORT: YES\nREPLY: The description has it.")
+    note = "📌 Correction: the chord at 1:30 is Asus2, not A."
+
+    draft_comment_reply(client, "the A should be an Asus2", "New Kid In Town", description_notes=note)
+
+    prompt = client.messages._prompt_text()
+    assert note in prompt and "quote" in prompt.lower()
+
+
+def test_a_reply_with_no_description_note_is_given_none_to_quote():
+    client = _FakeAnthropicClient("IS_ERROR_REPORT: YES\nREPLY: Maybe try Asus2 there.")
+
+    draft_comment_reply(client, "the A should be an Asus2", "New Kid In Town")
+
+    prompt = client.messages._prompt_text()
+    assert "correction note" not in prompt.split("Facts about this video")[1].split("A video can't")[0]
+    assert "Never say the description was changed" in prompt

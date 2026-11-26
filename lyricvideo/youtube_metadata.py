@@ -3,6 +3,8 @@ docs/superpowers/specs/2026-09-10-youtube-upload-design.md."""
 
 from __future__ import annotations
 
+from .ai_generated import AI_OTHER, AI_OWN
+
 
 class MetadataGenError(Exception):
     pass
@@ -24,6 +26,44 @@ GENRES = [
 MAX_GENRE_PICKS = 3
 ROCK_FAMILY = {"Classic Rock", "Hard Rock", "Soft Rock", "Country Rock", "Southern Rock", "Alternative", "Punk", "Metal"}
 _GENRE_BY_LOWER = {g.lower(): g for g in GENRES}
+
+
+# Owner, 2026-11-25. Reproduced: given only the YouTube title "Storm in my Heart-Elvis Presley - ..." and nothing about AI,
+# the reply drafter answered "Not Elvis!! Probably just AI." with "This track is a real, lesser-known Elvis recording, not
+# AI-generated" (2 of 2), and answered wrong-chord reports with "I'll get that Asus2 fixed". Every prompt that writes text
+# viewers see is now given the facts: whether the song is AI (ai_generated.ai_song_kind) and that a video can't be changed.
+VIDEO_CANT_BE_CHANGED = (
+    "A video can't be changed once it is on YouTube. Never offer to fix, edit, update, switch, re-upload or take down "
+    "this video (its title, credits, chords, lyrics, timing, pictures or sound), and never say any of that will happen. "
+    # Owner, 2026-11-25, what a reply may say instead:
+    "If someone points out a mistake, you may say we'll look into it, or that a correction can go in a note in the "
+    # Live, 2026-11-25: "we'll look into getting that corrected" / "getting the title credits sorted out" slipped through.
+    "video's description -- never that we'll look into getting the video, its title or credits corrected, fixed or "
+    "sorted out. For a wrong chord or lyric, offer the right one as something to try (\"maybe try Asus2 "
+    "there\"), never as a promised change. Never say the description was changed or has a note unless that note is "
+    "quoted here."
+)
+
+
+def _ai_song_facts(ai_song: str) -> str:
+    """What every viewer-facing prompt must know about an AI song (ai_generated.ai_song_kind); "" for any other song."""
+    if ai_song == AI_OWN:
+        made = ("This song is an original the channel made with AI: AI-generated music and vocals under the channel's own "
+                "band name, not a real band. Never invent history, members or albums for the band.")
+    elif ai_song == AI_OTHER:
+        made = ("This song is AI-generated: someone else made its music and vocals with AI; this channel did not make it. "
+                "Any singer or band the title names did not sing or record it, so never call it their song.")
+    else:
+        return ""
+    return (f"{made} The video carries YouTube's AI label. If anyone asks or says it is AI, agree plainly that it is. "
+            "Never say or suggest it is not AI, or that a real singer or band recorded it.\n")
+
+
+def _description_notes_fact(notes: str) -> str:
+    if not notes.strip():
+        return ""
+    return ("The video's description already carries this correction note. If the comment is about what it corrects, "
+            f"quote the note in the reply so they see it:\n{notes.strip()}\n")
 
 
 def _extract_text(response) -> str:
@@ -130,7 +170,7 @@ def build_easy_chord_title(song_title: str, artist: str, capo_fret: int) -> str:
 
 def generate_video_metadata(
     anthropic_client, song_title: str, artist: str, full_lyrics: str, model: str = "claude-sonnet-5", *,
-    original: bool = False,
+    ai_song: str = "",
 ) -> tuple[str, str, list[str]]:
     # The artist is a known, already-resolved fact (identify.py), never
     # something Claude should have to guess -- stated explicitly when known,
@@ -138,9 +178,11 @@ def generate_video_metadata(
     # itself couldn't resolve one.
     known_artist = artist.strip()
     artist_line = f'It is performed by "{known_artist}".\n' if known_artist else ""
-    if original:   # the channel's own AI-made song (ai_generated.py): no real band history exists to describe
+    if ai_song == AI_OWN:   # the channel's own AI-made song (ai_generated.py): no real band history exists to describe
         artist_line = (f'It is an original song made for this channel{f" by its band {known_artist}" if known_artist else ""}. '
                        "Do not invent any history, albums, members or facts about the band.\n")
+    elif ai_song == AI_OTHER:   # someone else's AI song: no performer to credit (its title may name a famous one)
+        artist_line = _ai_song_facts(ai_song) + "Do not invent facts about who made it.\n"
     prompt = (
         f'A song titled "{song_title}" has these lyrics:\n\n{full_lyrics}\n\n'
         f"{artist_line}"
@@ -190,8 +232,11 @@ def generate_video_metadata(
 
 def draft_comment_reply(
     anthropic_client, comment_text: str, song_title: str, model: str = "claude-sonnet-5", context: str = "",
+    ai_song: str = "", description_notes: str = "",
 ) -> tuple[str, bool]:
-    """(reply draft, looks like an error report). Thinking off and retried like generate_video_metadata (issue #7
+    """(reply draft, looks like an error report). `ai_song` is ai_generated.ai_song_kind of the video's song;
+    `description_notes` the correction notes really in its live description (key_note.description_correction_notes),
+    which a reply about what they correct quotes; the prompt always carries VIDEO_CANT_BE_CHANGED. Thinking off and retried like generate_video_metadata (issue #7
     review, F084: with default thinking this returned no text 5 of 6 times for one song); raises MetadataGenError --
     never returns a blank draft -- when every attempt fails, so the caller can skip just this comment."""
     opening = (
@@ -201,6 +246,8 @@ def draft_comment_reply(
     prompt = (
         opening +
         f'"{comment_text}"\n\n'
+        "Facts about this video -- the reply must never contradict them:\n"
+        f"{_ai_song_facts(ai_song)}{_description_notes_fact(description_notes)}{VIDEO_CANT_BE_CHANGED}\n\n"
         "Reply with EXACTLY two lines, each prefixed with its label:\n"
         "IS_ERROR_REPORT: <YES or NO -- is this reporting a mistake in the video, "
         "like wrong chords, sync issues, or wrong lyrics?>\n"
@@ -245,10 +292,18 @@ def classify_genres(
     return picks
 
 
-def draft_engagement_comment(anthropic_client, song_title: str, model: str = "claude-sonnet-5") -> str:
-    """The engagement comment draft; thinking off and retried, raises MetadataGenError rather than returning ""."""
+def draft_engagement_comment(
+    anthropic_client, song_title: str, model: str = "claude-sonnet-5", ai_song: str = "",
+) -> str:
+    """The engagement comment draft, told the same facts as a reply (`ai_song`: ai_generated.ai_song_kind); thinking off
+    and retried, raises MetadataGenError rather than returning ""."""
     prompt = (
-        f'This is a "play along" lyric+chord tutorial video for the song "{song_title}". '
+        f'This is a "play along" lyric+chord tutorial video for the song "{song_title}".\n'
+        "Facts about this video -- the comment must never contradict them:\n"
+        f"{_ai_song_facts(ai_song)}{VIDEO_CANT_BE_CHANGED}\n"
+        # Live, 2026-11-25: told the facts, every Storm draft volunteered "not performed by Elvis Presley" -- an
+        # engagement comment answers no one, so it leaves who made the song alone.
+        f"{'Do not bring up who made or sang the song. ' if ai_song else ''}\n\n"
         "Write a short, friendly comment, as the channel owner, to post on the video, "
         "inviting musicians to engage -- e.g. asking which instrument they're playing "
         "along with (guitar, piano, bass, etc.) or what song/chord progression they'd "

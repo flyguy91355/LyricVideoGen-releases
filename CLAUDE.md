@@ -35,7 +35,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
     / No = regenerate all (each backed up like Redo) / Cancel (Esc, X). An erroring file is logged and skipped. In one
     Batch a folder already given to the SAME known artist's file is shared (two rips are never made or uploaded
     twice); any other artist gets its own folder as above. Existing stems -> `BatchItem.resume_stage="fetch_lyrics"`.
-    `release_memory()` (gc + Linux malloc_trim) after every song, pass or fail (RSS creep). The folder
+    `release_memory()` (gc + Linux malloc_trim) after every song, pass or fail. The folder
     path is never `.strip()`'d (`resolve_existing_folder()`, 9-10); the last folder lives in its own JSON
     (`load_last_batch_folder`/`save_last_batch_folder`) -- not a Settings field: `SettingsPanel.collect()` replaces
     `Settings` wholesale and would reset any field with no widget.
@@ -74,8 +74,8 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    edition vote, `vocal_onset.py` tie-breaks; each `syncedlyrics` provider) until one passes, into
    `lyric_lines.json`/`Song`. lrclib = our copy of its DB dump first (`lrclib_local.py`,
    `~/PlayAlongVideoProductionLyrics/`), else lrclib.net; `majority_words` keeps the words most records
-   share (11-01) before the vote. lrclib.net down (5xx/429/offline, retried), no copy -> `LyricsSourceDown`: only a
-   sidecar (NetEase gave wrong songs, 10-31); Batch stops. An AI song's sidecar gets a copy of each
+   share before the vote. lrclib.net down (5xx/429/offline, retried), no copy -> `LyricsSourceDown`: only a
+   sidecar (NetEase gave wrong songs); Batch stops. An AI song's sidecar gets a copy of each
    whole section MiniMax sang again (`_build_repeat_adder`, `add_sung_repeats`, pile-ups dropped; "sidecar+repeats",
    11-14). Pass = matching what faster-whisper HEARS (medium,
    VAD off): >=70% in-order word coverage, no run of >3 unmatched lines or >12 sung words the lyrics lack (backing
@@ -106,7 +106,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    row; Save Corrections (`owner_whisper.py`) synthesizes heard
    words across its span, read by `corrected_heard_words()`/`_align_lyrics` (`add_corrections()`) -- never the placement itself. Anchors use a hinted listening (`lyric_hotwords()`:
    the owner's text, or a fetched candidate once verified) in
-   `transcript_hinted.json` (`load_hinted_words`); the gate grades by plain `transcript.json` (11-01). `revalidate_hotwords.py` checks for regression. `owner_verified.py` (Mark
+   `transcript_hinted.json` (`load_hinted_words`); the gate grades by plain `transcript.json`. `revalidate_hotwords.py` checks for regression. `owner_verified.py` (Mark
    Verified, or an
    Upload Anyway the daily cap skips) overrides every check until the lyric words or their times change
    (`timing_fingerprint`). A cleared song's real % is in cleared_log's
@@ -115,7 +115,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    Flagged with Render Anyway, never in Pending/Upload. MMS_FA knows only a-z and `'`:
    `_normalize_word_for_alignment` spells numbers out ("31" -> "thirtyone", "10,000" -> "tenthousand"), folds
    accents, reads `&` as "and", else gives the `*` token. Display text is unchanged.
-   `line_onsets.snap_to_vocals` (10-31): a line's first word moves up to 0.6 s EARLIER to the voice's rise out of a dip.
+   `line_onsets.snap_to_vocals`: a line's first word moves up to 0.6 s EARLIER to the voice's rise out of a dip.
 5. **detect_chords** (`detect_chords.py`, `chord_theory.py`) -- `crema` (CNN/CRNN, ISC) on `no_vocals.wav`, collapsed
    to 5 qualities by `_simplify_chord_label()` (every pumpp `3567s` quality mapped; `minmaj7` -> minor
    triad); returns sharp labels and key "". Needs old TF/Keras/sklearn -- **`.venv` is Python 3.11**; see
@@ -123,7 +123,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    `gui._stage_to_resume`: no chords -> detect_chords, chords + video -> render, chords + key decision -> images.
    **Key check** (`key_decision.py`; owner: video and description MUST show the real key):
    `settle_song_key()` sets `chord_track.key` when the chord-based estimate (`key_estimate.py`) AGREES with the home chord
-   (`home_key`: first=last=most played; 11-02) or a Claude second opinion (`key_opinion.py`); on disagreement `key_research.py` (Haiku 4.5, web search <=2,
+   (`home_key`: first=last=most played) or a Claude second opinion (`key_opinion.py`); on disagreement `key_research.py` (Haiku 4.5, web search <=2,
    ~4 cents) settles it only on high confidence + 2 sources (`source` "researched"; a Render Anyway resume of
    an unresearched hold searches too); else the song is HELD before images and Flagged with **Set Key** (`key_owner.json`, wins, survives Redo). A Set Key the saved chords already carry confirms at once
    (`confirm_owner_key`; no remake); otherwise Render Anyway's resume runs `apply_saved_owner_key`
@@ -186,7 +186,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
      `countdown_beat_count`, 4-16 beats) over the song's FIRST FRAME
      (scene at 0 on a real image, `_first_available_image_key()`; chord bar/chart at the first non-N chord) with
      `render.draw_countdown()`. `make_frame(T)` runs on the countdown-extended timeline (`song_t = T - countdown`).
-   - Like/Subscribe (`render.draw_like_subscribe`, 10-4; `like_subscribe_state`): a cursor clicks Subscribe, bell
+   - Like/Subscribe (`render.draw_like_subscribe`, `like_subscribe_state`): a cursor clicks Subscribe, bell
      rings; in the count-in and the last `like_subscribe_lead_seconds` (10).
    - Lyrics wrap at commas, else by word (`_split_line_into_rows`), never shrunk; spacing uses real block heights
      (`_rows_and_block_height`). `_in_a_line()` uses `_plausible_sung_intervals()`: past a line's plausible end "current" advances to the next line as an unsung preview,
@@ -200,7 +200,7 @@ the flagged backlog (below). Specs/plans live in `docs/superpowers/`. History: `
    - `render.draw_support_overlay()`: `Settings.support_overlay_text` (blank = off) in the last
      `support_overlay_lead_seconds` (20) only, upper-right, top at max(110, Key/BPM bottom + 14). The separate
      `support_description_text` is a description TEMPLATE (above / `{description}` / below; `assemble_description`)
-     Order: description, key note, tip/thank-you (9-29).
+     Order: description, key note, tip/thank-you.
      `scripts/update_support_description.py` re-renders into this order (bodies under `READY_CHARS`, 200).
 
 ## EASY CHORD versions
@@ -240,7 +240,7 @@ one (equal odds), Claude's About (`plan_scheduled_song`); `scheduled_songs.json`
 ## Redo an Existing Song
 
 Re-runs a finished song through current code from `"fetch_lyrics"` (lyrics/chords fresh), reusing its stems and
-`song_info.json` (`list_redoable_songs()`/`load_redo_inputs()`, preferring the local audio copy). `load_song()`
+`song_info.json` (`list_redoable_songs()`/`load_redo_inputs()`, local audio copy first). `load_song()`
 tolerates pre-merge files (reads only current `Word` fields; no `"chord_track"` -> empty). "Generate new images"
 (default off) runs `prepare_images_for_fresh_regeneration()`: `images/` moves to `images_prior_<time>/`,
 NOT `images_backup_*` (auto-reused). `backup_song_outputs()` first copies the video + `lyrics_timed.json` into
@@ -296,8 +296,8 @@ its Tk lacks Xft and breaks the GUI font.
 
 ## Update Available Feature
 
-Spec `2026-09-08-update-available-design.md`. `VERSION` is the last release applied to this
-checkout (never hand-edited or bumped per commit). `lyricvideo/update/`: `version.py`, `release_client.py` (httpx)
+Spec `2026-09-08-update-available-design.md`. `VERSION` = last release applied to this
+checkout (never hand-edited). `lyricvideo/update/`: `version.py`, `release_client.py` (httpx)
 against the public, unlisted `flyguy91355/LyricVideoGen-releases`, and `apply.py`
 -- allows `lyricvideo/`, `deep_review/`, `scripts/`, `tests/`, `docs/`, `requirements.txt`, `CLAUDE.md`, a bare
 top-level `*.py`/`*.sh`/`*.bat`; denies (always wins) `.env`, `songs/`, `work/`, `.venv/`. `cut_release.sh` ships that
@@ -314,18 +314,18 @@ The owner runs this checkout; releases keep the banner meaningful.
 
 ## YouTube upload + channel management
 
-Design `2026-09-10-youtube-upload-design.md` (why `publishAt`, not a local queue).
+Design `2026-09-10-youtube-upload-design.md`.
 `youtube_state.py`: each song's `youtube_state.json` (`video_id`, `uploaded_at`, `title`, `engagement_comment_posted`)
 beside its `lyrics_timed.json`; `uploaded_song_dirs(work_root)` / `mark_engagement_comment_posted(work_root, id)`
 include nested `<song>/easychords`. One that exists but can't be read counts as uploaded everywhere (fail closed).
 `youtube.py` wraps the Data API v3 (`upload_video`, `list_new_comments`, `post_reply`, playlists,
-`post_top_level_comment` = `commentThreads().insert`), each with an injected client (faked in tests). `upload_video` retries a dropped connection or 5xx up to 8x on the SAME
+`post_top_level_comment` = `commentThreads().insert`), each with an injected client (faked). `upload_video` retries a dropped connection or 5xx up to 8x on the SAME
 resumable request (`bytes */N` recovers what YouTube stored); 4xx (quota, uploadLimitExceeded, invalidTitle) raise at
 once; `is_quota_exceeded_error` also knows HTTP 403 `quotaExceeded`.
 `youtube_metadata.py`: every Claude call has thinking off and is retried; `generate_video_metadata` (description/tags)
 and `draft_comment_reply`/`draft_engagement_comment` RAISE rather than return blank;
-`classify_genre` returns '' rather than a fragment; replies use labeled lines robust to reordering. The TITLE is never
-Claude's: `build_play_along_title()` `"{title} - {artist} - (Play Along Lyrics & Chords)"` (artist omitted when
+`classify_genres` gives [] not a fragment; labeled lines robust to reordering. The TITLE is never
+Claude's: `build_play_along_title()` `"{title} - {artist} - (Play Along Lyrics & Chords)"` (no artist when
 unknown) / `build_easy_chord_title`, fitted to 100 chars with no '<'/'>' (the suffix stays; artist dropped first, then
 an ellipsis).
 `youtube_schedule.schedule_upload()` is the single upload path (auto and manual). It refuses a missing, unreadable,
@@ -336,48 +336,51 @@ YouTube call; the GUI logs 'must be made again'. It uploads one
 at a time (`_UPLOAD_LOCK`, `upload_in_progress()`); `only_if_not_uploaded=True` raises `AlreadyUploaded` when a
 `youtube_state.json` EXISTS (even empty/cut off); a state write failing after it raises naming the video_id.
 Public -> uploaded Private with a future `publishAt`: `compute_next_publish_slot()` gap-fills the live
-schedule (`reserved_publish_datetimes()`: uploads list + our youtube_state ids: it misses some, 11-01; one claim
+schedule (`reserved_publish_datetimes()`: uploads list + our youtube_state ids: it misses some; one claim
 per video), each slot localized on its date (DST),
 at `Settings.youtube_upload_times` (AI songs: `youtube_ai_upload_times`, own claims by time of day,
 `publish_lane`; blank = shared), capped by `youtube_max_uploads_per_day`; quota/
 `uploadLimitExceeded` cools down `youtube_quota_retry_hours`. Unlisted/Private: at once.
-Thumbnails (`thumbnail*.py`, 10-4): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
+Thumbnails (`thumbnail*.py`): `Settings.generate_thumbnails` -> `thumbnail.jpg` after render: one of the SONG'S OWN pictures (`images/`,
 Sonnet picks the best clean one, else a new one), kept as `thumbnail_bg.png`; full title left of every
-chord diagram; a long artist: 2 full-size lines (11-15); EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
+chord diagram; a long artist: 2 full-size lines; EASY reuses it + green "EASY CHORDS · CAPO n" badge. Set after upload (`set_thumbnail`, 50 units,
 soft-fail; channel must be phone-verified); `scripts/backfill_thumbnails.py` (`--redraw-long-artists`).
-A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere; delete it to undo. `AI_GENERATED.txt`
-(`ai_generated.py`, our own AI songs): upload sets `containsSyntheticMedia`; description invents no band facts; N.C. over music
-filled (`chord_gaps.py`, AI songs only for now).
+A folder with `BANNED_ON_YOUTUBE.txt` (`banned.py`) is skipped everywhere (delete to undo). `AI_GENERATED.txt`
+(`ai_generated.py`, our own AI songs): description invents no band facts; N.C. over music filled (`chord_gaps`).
+`AI_MADE_BY_OTHERS.txt`: someone else's AI song (Storm in My Heart), none of that. Both (`ai_song_kind`) upload with
+`containsSyntheticMedia`; reply/engagement (+ other's description) get `_ai_song_facts` (IS AI, never
+deny it); reply/engagement: `VIDEO_CANT_BE_CHANGED` (no fix/edit/take-down/re-upload vow; may say 'look into it', a
+description note, 'maybe try X'). A reply quotes the live description's real notes (`_description_notes`).
 `scripts/find_truncated_videos.py` (dry run): cut-short mp4s; `--set-aside` -> `*.truncated.mp4` (skipped by name).
 `youtube_auth.py`: `connect()` (browser consent, `client_secret_*.json`) saves `youtube_token.json` (0600,
 0700 folder, refresh serialized); `load_credentials()` is `None` for not connected/expired-without-refresh (never
 raises). Status label + Connect refresh off Tk. Worker threads format an error's
-text BEFORE a deferred `root.after` lambda (`except ... as e` unbinds `e`; 9-14).
+text BEFORE a deferred `root.after` (`except ... as e` unbinds `e`).
 **GUI uploads**: "Upload to YouTube" = a `list_rendered_songs()` list + Upload (the only path that re-sends a song,
 after "create a duplicate?"), and the "Pending YouTube Uploads" checklist (`list_pending_uploads()`: never-uploaded,
 cleared) + Upload Selected; both ignore `youtube_auto_upload`. One upload run at a time (`_UPLOAD_RUN_LOCK`): Upload /
 Upload Selected / Upload Anyway during a run or the tick's auto-retry say 'Upload already running' and are disabled
 (a Batch/tick finish never re-enables them mid-run); the tick just skips. Every pending or auto upload goes
 through `_upload_within_todays_cap` (`_UPLOAD_SLOT_LOCK`: re-check state, cap,
-`schedule_upload(only_if_not_uploaded=True)`, `record_upload`); `AlreadyUploaded` is a skip (in the results).
+`schedule_upload(only_if_not_uploaded=True)`, `record_upload`); `AlreadyUploaded` is a skip.
 `_maybe_upload_to_youtube` gates auto-upload (enabled, connected, never uploaded --
 verified live by `video_exists()`, failing CLOSED, so a deleted video re-uploads; flagged songs skipped) from
 `_run_worker` and each Batch item; failures only warn. With an AI lane, waiting AI songs (`_waiting_ai_songs`) upload
-first (tick order; before a band song's, 11-01). A failed auto-retry waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
+first (tick order). A failed auto-retry waits 6 h (per session). Ticks never overlap (`_TICK_LOCK`).
 **Comments** (`youtube_comment_state.py`): `_scan_youtube_comments` (Check
 Now or the 20-minute tick, never overlapping: `_COMMENT_CHECK_LOCK`) walks `uploaded_song_dirs` (EASY included); one
 `videos.list(part=status,statistics)` per 50 videos; a public video's comments are read only when its commentCount
 changed since its last complete check (`youtube_comment_counts.json`) plus a full read every 24 h; 0 or comments off
-skipped; the channel's own comments skipped; quota break and cooldown kept. Each comment is marked seen
+and the channel's own comments skipped; quota break and cooldown kept. Each comment is marked seen
 (`mark_comment_seen`) right after its draft is queued; a failed draft retries next check (`record_draft_failure`),
-then after `MAX_DRAFT_FAILURES` (3) is queued blank. Nothing posts without Approve; a draft being or already posted is
+then after `MAX_DRAFT_FAILURES` (3) is queued blank. A draft being or already posted is
 claimed (`_claim_posting`; its buttons off via `_DraftQueueView.set_busy`), released on failure; not connected says so
 and refreshes the label; Approve checks `is_video_public()`. An approved engagement comment's thread is marked seen;
 Dismissing one marks `engagement_comment_posted`.
-Replies (10-16): `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
-`parent_id`, drafted with `context`); Check Now shows a result; `youtube_auto_approve_replies` posts ordinary drafts after
-`youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`). Every sent reply goes to Posted Replies (`youtube_posted_replies.json`,
-`record_posted_reply`, with `reply_id`); Save Edit there calls `update_comment` (50 units);
+Replies: `list_new_comments(..., own_channel_id)` also reads new replies in threads the channel answered (posted to
+`parent_id`, drafted with `context`); `youtube_auto_approve_replies` posts ordinary drafts after
+`youtube_auto_reply_delay_hours` (random 1-2x, from the comment's time; `post_after`). Sent replies go to Posted Replies (`youtube_posted_replies.json`,
+`record_posted_reply`, `reply_id`); Save Edit there calls `update_comment` (50 units);
 replies sent since it was last opened (`load_posted_seen_at`) show ● NEW + an 'N new' count.
 **Channel organization** (spec 9-17, 11-05): after every `schedule_upload()` gui calls `youtube_playlists.
 organize_video()` (fails soft; idempotent): All, EASY/3/4, then artist playlists (only 2+ uploaded songs, EASY = same
@@ -406,13 +409,12 @@ markers are flat files (`<song>__easychords.txt`).
 ## Persistence invariants
 
 `models.save_song`/`atomic_write_text` (unique temp, fsync, `os.replace`); cleared_log and redo_log serialize their
-read-modify-write under a lock, and a corrupt `cleared_songs.json`/`redone_songs.json` is renamed `.corrupt-<time>`,
-never silently replaced.
+read-modify-write under a lock, and a corrupt `cleared_songs.json`/`redone_songs.json` is renamed `.corrupt-<time>`.
 
 ## Tests
 
 ```bash
-cd <repo root> && .venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scripts/python.exe
+.venv/bin/python -m pytest tests/ -v      # Windows: .venv/Scripts/python.exe
 ```
 
 `tests/conftest.py` gives each test a throwaway HOME/USERPROFILE, set before any import (not XDG_CACHE_HOME):

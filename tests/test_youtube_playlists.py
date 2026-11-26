@@ -868,3 +868,29 @@ def test_a_sibling_video_gone_from_youtube_never_stops_the_new_upload_being_orga
 
     assert is_video_in_playlist(client, playlist_ids["artist:Pink Floyd"], "vid123")
     assert is_video_in_playlist(client, playlist_ids["genre:Classic Rock"], "vid123")
+
+
+def test_the_engagement_comment_of_an_ai_song_made_elsewhere_is_drafted_knowing_it_is_ai(tmp_path, monkeypatch):
+    """Owner, 2026-11-25: the queued engagement comment on "Storm in My Heart" (an AI song titled as Elvis) asked for
+    "the next Elvis tune" -- the drafter was given only the title."""
+    from lyricvideo.ai_generated import mark_ai_made_by_others
+
+    _playlist_ids, _genres, comments = _patch_state(monkeypatch)
+    work_dir = _make_work_dir(tmp_path, artist="Storm In My Heart", genre="Pop")
+    mark_ai_made_by_others(work_dir)
+    prompts = []
+
+    class _Messages:
+        def create(self, **kwargs):
+            prompts.append(kwargs["messages"][0]["content"])
+            return _FakeAnthropicResponse("COMMENT: What are you playing along on?")
+
+    client = _FakeAnthropicClient()
+    client.messages = _Messages()
+
+    from lyricvideo.youtube_playlists import organize_video
+    organize_video(_FakeYoutubeClient(), client, work_dir)
+
+    [comment] = comments
+    assert comment.draft_text == "What are you playing along on?"
+    assert any("This song is AI-generated" in p and "COMMENT:" in p for p in prompts)

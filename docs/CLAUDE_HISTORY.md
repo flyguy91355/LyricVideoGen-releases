@@ -5388,3 +5388,34 @@ DLLs on PATH (torchcodec) -- an environment requirement, not a code one.
   used only when the new lines leave no run over 12 words and no new run of unheard lines (source "sidecar+repeats").
   Last Light on Maple Street showed why pile-ups are dropped first (`drop_piled_up_words`): the recognizer wrote two
   whole verses again at 171.06 s, every word 0 s long -- copying them in would have shown verses nobody sang.
+
+## 2026-11-25 -- Replies called an AI song a real Elvis recording, and promised fixes
+
+- Owner: replies on "Storm in My Heart" (a Rockin' Jukebox AI song he keeps titled as Elvis; AI label on since 11-15)
+  had been "hardlining" that it really is Elvis, and replies kept promising to fix videos, which YouTube can't do: the
+  only way is to take a video down, fix it and upload it again.
+- Cause, reproduced with the old prompt and real Claude: `draft_comment_reply` was given only the YouTube title
+  ("Storm in my Heart-Elvis Presley - ...") and nothing about AI or what a video can be. "Not Elvis!! Probably just
+  AI." drew "This track is a real, lesser-known Elvis recording, not AI-generated" (2 of 2); "the A should be an Asus2"
+  drew "I'll get that Asus2 fixed"; the Rockin' Jukebox takedown request drew "I'll correct the title/credits right
+  away" (auto-posted 11-23). Engagement drafts asked for "the next Elvis tune". The app had no record that the song is
+  AI: AI_GENERATED.txt means OUR song to five other consumers (AI upload lane, AI review list, certain lyrics in the
+  timing gate, chord gap fill, "original song made for this channel"), so it could not be reused. YouTube does not
+  return `containsSyntheticMedia` on a read (checked live on Storm and on our own Lantern), so the label can't be read
+  back either.
+- Fix: `AI_MADE_BY_OTHERS.txt` (`mark_ai_made_by_others`; written for Storm) and `ai_song_kind` (own/other). Every
+  reply, engagement comment and description prompt is given `_ai_song_facts`; reply and engagement prompts always carry
+  `VIDEO_CANT_BE_CHANGED`. Both kinds upload with the AI label. An engagement comment leaves who made an AI song alone
+  (told the facts, every Storm draft volunteered "not performed by Elvis Presley").
+- Verified live, same comments: every Storm reply says it is AI; no error-report reply promises a change ("Thanks for
+  pointing that out, noted!"); Storm engagement drafts stay on playing along.
+- Then the owner, on rule 2: never offer fixing, re-uploading or editing a video as the fix; a reply may say "we'll look
+  into it" or that a correction can go in a note in the description, and for a wrong chord or lyric offer the right
+  one as something to try ("maybe try ..."). A correction really added to the description is quoted in the reply; one
+  that wasn't added is never claimed. So `VIDEO_CANT_BE_CHANGED` says exactly that, and the comment scan reads the
+  video's live description once per video with a comment to draft (`gui._description_notes`, 1 unit; 📌 or
+  "Correction" paragraphs, `key_note.description_correction_notes`), which the reply quotes. Live: "maybe try Asus2
+  there... we'll look into it"; with a note, the note quoted; first try let "we'll look into getting that corrected"
+  and "getting the title credits sorted out" through, so the rule names them.
+- Posted replies read live (all 83): four still promise a change (Cinnamon Girl, War Pigs, New Kid In Town, the
+  Rockin' Jukebox takedown reply on Storm); none says Storm is Elvis. Left for the owner.

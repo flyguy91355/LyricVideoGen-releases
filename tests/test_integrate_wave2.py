@@ -101,7 +101,7 @@ def test_an_ai_generated_song_is_uploaded_with_the_ai_disclosure_and_an_honest_d
     monkeypatch.setattr(youtube_schedule, "check_video_complete", lambda path, label="": (30.0, 30.0))
     originals, synthetic = [], []
     monkeypatch.setattr(youtube_schedule, "generate_video_metadata",
-                        lambda *a, original=False, **k: (originals.append(original), ("t", "d", ["tag"]))[1])
+                        lambda *a, ai_song="", **k: (originals.append(ai_song == "own"), ("t", "d", ["tag"]))[1])
 
     def fake_upload(*a, synthetic_media=False, **k):
         synthetic.append(synthetic_media)

@@ -103,7 +103,8 @@ from .youtube_upload_count_state import load_uploads_today, record_upload
 import json
 from .batch import holds_other_recording, stored_song_identity, work_dir_for
 from .pipeline import review_concern, waits_to_be_watched
-from .ai_generated import WATCH_FIRST_REASON, is_ai_generated
+from .ai_generated import WATCH_FIRST_REASON, ai_song_kind, is_ai_generated
+from .key_note import description_correction_notes
 from .fetch_lyrics import LyricsSourceDown
 from .youtube_comment_state import MAX_DRAFT_FAILURES, clear_draft_failures, mark_comment_seen, record_draft_failure
 from .youtube_schedule import AlreadyUploaded, BadPictures, IncompleteVideo, PicturesNotChecked, upload_in_progress
@@ -415,6 +416,18 @@ def _video_comment_stats(youtube_client, video_ids: list[str]) -> dict[str, tupl
     return stats
 
 
+def _description_notes(youtube_client, video_id: str) -> str:
+    """The correction notes in the video's live description (key_note.description_correction_notes), blank-line separated;
+    "" when there are none or the description can't be read -- a reply then claims none (owner, 2026-11-25). 1 unit."""
+    try:
+        items = youtube_client.videos().list(part="snippet", id=video_id).execute().get("items", [])
+        description = str(((items[0].get("snippet") or {}).get("description")) or "") if items else ""
+    except Exception as e:
+        print(f"WARNING: could not read the description of {video_id}: {type(e).__name__}: {e}", file=sys.stderr)
+        return ""
+    return "\n\n".join(description_correction_notes(description))
+
+
 def _own_channel_id(youtube_client) -> str:
     """The connected channel's id ("" when it cannot be read) -- to leave the channel's own comments alone."""
     try:
@@ -475,7 +488,7 @@ def _scan_youtube_comments(gui) -> dict:
     anthropic_client = None
     own_channel: str | None = None
     added = False
-    for slug, _work_dir, state in uploaded:
+    for slug, work_dir, state in uploaded:
         public, comment_count = stats.get(state.video_id, (False, None))
         if not public:
             continue  # still scheduled/private (or deleted): YouTube refuses comment reads for it
@@ -499,6 +512,7 @@ def _scan_youtube_comments(gui) -> dict:
                   file=sys.stderr)
             continue
         complete = True
+        notes: str | None = None      # its description's correction notes, read once, only if a comment is drafted
         for comment in comments:
             if comment.comment_id in seen_ids:
                 continue
@@ -513,8 +527,12 @@ def _scan_youtube_comments(gui) -> dict:
             try:
                 if anthropic_client is None:
                     anthropic_client = anthropic.Anthropic()
+                if notes is None:
+                    notes = _description_notes(youtube_client, state.video_id)
                 draft, is_error_report = draft_comment_reply(
                     anthropic_client, comment.text, state.title, context=str(getattr(comment, "context", "") or ""),
+                    ai_song=ai_song_kind(work_dir),     # owner, 2026-11-25: replies called an AI song a real Elvis recording
+                    description_notes=notes,
                 )
             except Exception as e:
                 try:
